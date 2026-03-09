@@ -6,6 +6,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
+import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { eventsApi, notesApi } from '../src/api';
 import { MONTH_NAMES } from '../src/theme';
 
@@ -22,6 +23,20 @@ const C = {
   error: '#C62828',
 };
 
+const isWeb = Platform.OS === 'web';
+
+function formatDate(d: Date): string {
+  return `${MONTH_NAMES[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+}
+
+function formatTime(d: Date): string {
+  const h = d.getHours();
+  const m = d.getMinutes();
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const hour = h % 12 || 12;
+  return `${hour}:${m.toString().padStart(2, '0')} ${ampm}`;
+}
+
 export default function EventEditorScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{
@@ -32,18 +47,34 @@ export default function EventEditorScreen() {
   }>();
 
   const isEditing = !!params.eventId;
-
   const initialDate = params.date ? new Date(params.date) : new Date();
 
   const [title, setTitle] = useState(params.noteTitle || '');
   const [description, setDescription] = useState('');
   const [date, setDate] = useState(initialDate);
-  const [startHour, setStartHour] = useState(9);
-  const [startMinute, setStartMinute] = useState(0);
-  const [endHour, setEndHour] = useState(10);
-  const [endMinute, setEndMinute] = useState(0);
+  const [startTime, setStartTime] = useState(() => {
+    const d = new Date(initialDate);
+    d.setHours(9, 0, 0, 0);
+    return d;
+  });
+  const [endTime, setEndTime] = useState(() => {
+    const d = new Date(initialDate);
+    d.setHours(10, 0, 0, 0);
+    return d;
+  });
   const [loading, setLoading] = useState(isEditing);
   const [saving, setSaving] = useState(false);
+
+  // Native picker visibility
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showStartPicker, setShowStartPicker] = useState(false);
+  const [showEndPicker, setShowEndPicker] = useState(false);
+
+  // Web fallback state
+  const [webStartHour, setWebStartHour] = useState(9);
+  const [webStartMin, setWebStartMin] = useState(0);
+  const [webEndHour, setWebEndHour] = useState(10);
+  const [webEndMin, setWebEndMin] = useState(0);
 
   useEffect(() => {
     if (isEditing && params.eventId) {
@@ -59,15 +90,64 @@ export default function EventEditorScreen() {
       const start = new Date(event.start_time);
       const end = new Date(event.end_time);
       setDate(start);
-      setStartHour(start.getHours());
-      setStartMinute(start.getMinutes());
-      setEndHour(end.getHours());
-      setEndMinute(end.getMinutes());
+      setStartTime(start);
+      setEndTime(end);
+      setWebStartHour(start.getHours());
+      setWebStartMin(start.getMinutes());
+      setWebEndHour(end.getHours());
+      setWebEndMin(end.getMinutes());
     } catch (e) {
       console.error('Failed to load event:', e);
     } finally {
       setLoading(false);
     }
+  };
+
+  const onDateChange = (_event: DateTimePickerEvent, selectedDate?: Date) => {
+    setShowDatePicker(false);
+    if (selectedDate) setDate(selectedDate);
+  };
+
+  const onStartTimeChange = (_event: DateTimePickerEvent, selectedDate?: Date) => {
+    setShowStartPicker(false);
+    if (selectedDate) {
+      setStartTime(selectedDate);
+      setWebStartHour(selectedDate.getHours());
+      setWebStartMin(selectedDate.getMinutes());
+    }
+  };
+
+  const onEndTimeChange = (_event: DateTimePickerEvent, selectedDate?: Date) => {
+    setShowEndPicker(false);
+    if (selectedDate) {
+      setEndTime(selectedDate);
+      setWebEndHour(selectedDate.getHours());
+      setWebEndMin(selectedDate.getMinutes());
+    }
+  };
+
+  // Web fallback helpers
+  const adjustWebDate = (days: number) => {
+    const newDate = new Date(date);
+    newDate.setDate(newDate.getDate() + days);
+    setDate(newDate);
+  };
+
+  const adjustWebTime = (
+    setter: (v: number) => void,
+    current: number,
+    delta: number,
+    max: number,
+  ) => {
+    let v = current + delta;
+    if (v < 0) v = max;
+    if (v > max) v = 0;
+    setter(v);
+  };
+
+  const webFormatHour = (h: number) => {
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    return `${h % 12 || 12} ${ampm}`;
   };
 
   const handleSave = async () => {
@@ -78,24 +158,31 @@ export default function EventEditorScreen() {
 
     setSaving(true);
     try {
-      const startTime = new Date(date);
-      startTime.setHours(startHour, startMinute, 0, 0);
-      const endTime = new Date(date);
-      endTime.setHours(endHour, endMinute, 0, 0);
+      const st = new Date(date);
+      const et = new Date(date);
 
-      if (endTime <= startTime) {
+      if (isWeb) {
+        st.setHours(webStartHour, webStartMin, 0, 0);
+        et.setHours(webEndHour, webEndMin, 0, 0);
+      } else {
+        st.setHours(startTime.getHours(), startTime.getMinutes(), 0, 0);
+        et.setHours(endTime.getHours(), endTime.getMinutes(), 0, 0);
+      }
+
+      if (et <= st) {
         Alert.alert('Invalid Time', 'End time must be after start time.');
         setSaving(false);
         return;
       }
 
-      const linkedNoteIds = params.noteId && params.noteId !== 'new' ? [params.noteId] : [];
+      const linkedNoteIds =
+        params.noteId && params.noteId !== 'new' ? [params.noteId] : [];
 
       const eventData = {
         title: title.trim(),
         description: description.trim(),
-        start_time: startTime.toISOString(),
-        end_time: endTime.toISOString(),
+        start_time: st.toISOString(),
+        end_time: et.toISOString(),
         linked_note_ids: linkedNoteIds,
       };
 
@@ -103,7 +190,6 @@ export default function EventEditorScreen() {
         await eventsApi.update(params.eventId, eventData);
       } else {
         const created = await eventsApi.create(eventData);
-        // Link event to note if applicable
         if (params.noteId && params.noteId !== 'new') {
           try {
             await notesApi.update(params.noteId, { linked_event_id: created.id });
@@ -112,7 +198,6 @@ export default function EventEditorScreen() {
           }
         }
       }
-
       router.back();
     } catch (e) {
       Alert.alert('Error', 'Failed to save event. Please try again.');
@@ -141,33 +226,6 @@ export default function EventEditorScreen() {
     ]);
   };
 
-  const adjustDate = (days: number) => {
-    const newDate = new Date(date);
-    newDate.setDate(newDate.getDate() + days);
-    setDate(newDate);
-  };
-
-  const adjustTime = (
-    setter: (v: number) => void,
-    current: number,
-    delta: number,
-    max: number
-  ) => {
-    let newVal = current + delta;
-    if (newVal < 0) newVal = max;
-    if (newVal > max) newVal = 0;
-    setter(newVal);
-  };
-
-  const formatDisplayDate = (d: Date) =>
-    `${MONTH_NAMES[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
-
-  const formatHour = (h: number) => {
-    const ampm = h >= 12 ? 'PM' : 'AM';
-    const hour = h % 12 || 12;
-    return `${hour} ${ampm}`;
-  };
-
   if (loading) {
     return (
       <SafeAreaView style={s.container}>
@@ -186,15 +244,25 @@ export default function EventEditorScreen() {
       >
         {/* Header */}
         <View style={s.header}>
-          <TouchableOpacity testID="event-back-btn" style={s.headerBtn} onPress={() => router.back()}>
+          <TouchableOpacity
+            testID="event-back-btn"
+            style={s.headerBtn}
+            onPress={() => router.back()}
+          >
             <MaterialIcons name="close" size={28} color={C.text} />
             <Text style={s.headerBtnLabel}>Cancel</Text>
           </TouchableOpacity>
-          <Text style={s.headerTitle}>{isEditing ? 'Edit Event' : 'New Event'}</Text>
+          <Text style={s.headerTitle}>
+            {isEditing ? 'Edit Event' : 'New Event'}
+          </Text>
           <View style={{ width: 80 }} />
         </View>
 
-        <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent} keyboardShouldPersistTaps="handled">
+        <ScrollView
+          style={s.scroll}
+          contentContainerStyle={s.scrollContent}
+          keyboardShouldPersistTaps="handled"
+        >
           {/* Title */}
           <Text style={s.label}>Event Title</Text>
           <TextInput
@@ -206,97 +274,121 @@ export default function EventEditorScreen() {
             onChangeText={setTitle}
           />
 
-          {/* Date */}
+          {/* ---- Date ---- */}
           <Text style={s.label}>Date</Text>
-          <View style={s.dateRow}>
-            <TouchableOpacity testID="date-prev-btn" style={s.adjBtn} onPress={() => adjustDate(-1)}>
-              <MaterialIcons name="chevron-left" size={32} color={C.text} />
-            </TouchableOpacity>
-            <Text style={s.dateText}>{formatDisplayDate(date)}</Text>
-            <TouchableOpacity testID="date-next-btn" style={s.adjBtn} onPress={() => adjustDate(1)}>
-              <MaterialIcons name="chevron-right" size={32} color={C.text} />
-            </TouchableOpacity>
-          </View>
+          {isWeb ? (
+            <View style={s.webRow}>
+              <TouchableOpacity
+                testID="date-prev-btn"
+                style={s.webAdjBtn}
+                onPress={() => adjustWebDate(-1)}
+              >
+                <MaterialIcons name="chevron-left" size={32} color={C.text} />
+              </TouchableOpacity>
+              <Text style={s.webValue}>{formatDate(date)}</Text>
+              <TouchableOpacity
+                testID="date-next-btn"
+                style={s.webAdjBtn}
+                onPress={() => adjustWebDate(1)}
+              >
+                <MaterialIcons name="chevron-right" size={32} color={C.text} />
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <>
+              <TouchableOpacity
+                testID="date-picker-btn"
+                style={s.pickerBtn}
+                onPress={() => setShowDatePicker(true)}
+                activeOpacity={0.7}
+              >
+                <MaterialIcons name="calendar-today" size={24} color={C.secondary} />
+                <Text style={s.pickerBtnText}>{formatDate(date)}</Text>
+                <MaterialIcons name="arrow-drop-down" size={28} color={C.borderSub} />
+              </TouchableOpacity>
+              {showDatePicker && (
+                <DateTimePicker
+                  testID="date-picker"
+                  value={date}
+                  mode="date"
+                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                  onChange={onDateChange}
+                />
+              )}
+            </>
+          )}
 
-          {/* Start Time */}
+          {/* ---- Start Time ---- */}
           <Text style={s.label}>Start Time</Text>
-          <View style={s.timeRow}>
-            <View style={s.timeUnit}>
+          {isWeb ? (
+            <WebTimePicker
+              testPrefix="start"
+              hour={webStartHour}
+              minute={webStartMin}
+              onHourChange={setWebStartHour}
+              onMinuteChange={setWebStartMin}
+              formatHour={webFormatHour}
+            />
+          ) : (
+            <>
               <TouchableOpacity
-                testID="start-hour-up"
-                style={s.timeBtn}
-                onPress={() => adjustTime(setStartHour, startHour, 1, 23)}
+                testID="start-time-btn"
+                style={s.pickerBtn}
+                onPress={() => setShowStartPicker(true)}
+                activeOpacity={0.7}
               >
-                <MaterialIcons name="keyboard-arrow-up" size={28} color={C.text} />
+                <MaterialIcons name="access-time" size={24} color={C.secondary} />
+                <Text style={s.pickerBtnText}>{formatTime(startTime)}</Text>
+                <MaterialIcons name="arrow-drop-down" size={28} color={C.borderSub} />
               </TouchableOpacity>
-              <Text style={s.timeValue}>{formatHour(startHour)}</Text>
-              <TouchableOpacity
-                testID="start-hour-down"
-                style={s.timeBtn}
-                onPress={() => adjustTime(setStartHour, startHour, -1, 23)}
-              >
-                <MaterialIcons name="keyboard-arrow-down" size={28} color={C.text} />
-              </TouchableOpacity>
-            </View>
-            <Text style={s.timeSep}>:</Text>
-            <View style={s.timeUnit}>
-              <TouchableOpacity
-                testID="start-min-up"
-                style={s.timeBtn}
-                onPress={() => adjustTime(setStartMinute, startMinute, 15, 45)}
-              >
-                <MaterialIcons name="keyboard-arrow-up" size={28} color={C.text} />
-              </TouchableOpacity>
-              <Text style={s.timeValue}>{startMinute.toString().padStart(2, '0')}</Text>
-              <TouchableOpacity
-                testID="start-min-down"
-                style={s.timeBtn}
-                onPress={() => adjustTime(setStartMinute, startMinute, -15, 45)}
-              >
-                <MaterialIcons name="keyboard-arrow-down" size={28} color={C.text} />
-              </TouchableOpacity>
-            </View>
-          </View>
+              {showStartPicker && (
+                <DateTimePicker
+                  testID="start-time-picker"
+                  value={startTime}
+                  mode="time"
+                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                  onChange={onStartTimeChange}
+                  minuteInterval={5}
+                />
+              )}
+            </>
+          )}
 
-          {/* End Time */}
+          {/* ---- End Time ---- */}
           <Text style={s.label}>End Time</Text>
-          <View style={s.timeRow}>
-            <View style={s.timeUnit}>
+          {isWeb ? (
+            <WebTimePicker
+              testPrefix="end"
+              hour={webEndHour}
+              minute={webEndMin}
+              onHourChange={setWebEndHour}
+              onMinuteChange={setWebEndMin}
+              formatHour={webFormatHour}
+            />
+          ) : (
+            <>
               <TouchableOpacity
-                testID="end-hour-up"
-                style={s.timeBtn}
-                onPress={() => adjustTime(setEndHour, endHour, 1, 23)}
+                testID="end-time-btn"
+                style={s.pickerBtn}
+                onPress={() => setShowEndPicker(true)}
+                activeOpacity={0.7}
               >
-                <MaterialIcons name="keyboard-arrow-up" size={28} color={C.text} />
+                <MaterialIcons name="access-time" size={24} color={C.secondary} />
+                <Text style={s.pickerBtnText}>{formatTime(endTime)}</Text>
+                <MaterialIcons name="arrow-drop-down" size={28} color={C.borderSub} />
               </TouchableOpacity>
-              <Text style={s.timeValue}>{formatHour(endHour)}</Text>
-              <TouchableOpacity
-                testID="end-hour-down"
-                style={s.timeBtn}
-                onPress={() => adjustTime(setEndHour, endHour, -1, 23)}
-              >
-                <MaterialIcons name="keyboard-arrow-down" size={28} color={C.text} />
-              </TouchableOpacity>
-            </View>
-            <Text style={s.timeSep}>:</Text>
-            <View style={s.timeUnit}>
-              <TouchableOpacity
-                testID="end-min-up"
-                style={s.timeBtn}
-                onPress={() => adjustTime(setEndMinute, endMinute, 15, 45)}
-              >
-                <MaterialIcons name="keyboard-arrow-up" size={28} color={C.text} />
-              </TouchableOpacity>
-              <Text style={s.timeValue}>{endMinute.toString().padStart(2, '0')}</Text>
-              <TouchableOpacity
-                testID="end-min-down"
-                style={s.timeBtn}
-                onPress={() => adjustTime(setEndMinute, endMinute, -15, 45)}
-              >
-                <MaterialIcons name="keyboard-arrow-down" size={28} color={C.text} />
-              </TouchableOpacity>
-            </View>
-          </View>
+              {showEndPicker && (
+                <DateTimePicker
+                  testID="end-time-picker"
+                  value={endTime}
+                  mode="time"
+                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                  onChange={onEndTimeChange}
+                  minuteInterval={5}
+                />
+              )}
+            </>
+          )}
 
           {/* Description */}
           <Text style={s.label}>Description (optional)</Text>
@@ -321,7 +413,7 @@ export default function EventEditorScreen() {
             </View>
           )}
 
-          {/* Actions */}
+          {/* Save */}
           <TouchableOpacity
             testID="save-event-btn"
             style={s.saveBtn}
@@ -359,59 +451,225 @@ export default function EventEditorScreen() {
   );
 }
 
+/* ---- Web-only time picker fallback ---- */
+function WebTimePicker({
+  testPrefix,
+  hour,
+  minute,
+  onHourChange,
+  onMinuteChange,
+  formatHour,
+}: {
+  testPrefix: string;
+  hour: number;
+  minute: number;
+  onHourChange: (h: number) => void;
+  onMinuteChange: (m: number) => void;
+  formatHour: (h: number) => string;
+}) {
+  const adjH = (d: number) => {
+    let v = hour + d;
+    if (v < 0) v = 23;
+    if (v > 23) v = 0;
+    onHourChange(v);
+  };
+  const adjM = (d: number) => {
+    let v = minute + d;
+    if (v < 0) v = 45;
+    if (v > 45) v = 0;
+    onMinuteChange(v);
+  };
+
+  return (
+    <View style={s.webTimeRow}>
+      <View style={s.webTimeUnit}>
+        <TouchableOpacity testID={`${testPrefix}-hour-up`} style={s.webTimeBtn} onPress={() => adjH(1)}>
+          <MaterialIcons name="keyboard-arrow-up" size={28} color={C.text} />
+        </TouchableOpacity>
+        <Text style={s.webTimeVal}>{formatHour(hour)}</Text>
+        <TouchableOpacity testID={`${testPrefix}-hour-down`} style={s.webTimeBtn} onPress={() => adjH(-1)}>
+          <MaterialIcons name="keyboard-arrow-down" size={28} color={C.text} />
+        </TouchableOpacity>
+      </View>
+      <Text style={s.webTimeSep}>:</Text>
+      <View style={s.webTimeUnit}>
+        <TouchableOpacity testID={`${testPrefix}-min-up`} style={s.webTimeBtn} onPress={() => adjM(15)}>
+          <MaterialIcons name="keyboard-arrow-up" size={28} color={C.text} />
+        </TouchableOpacity>
+        <Text style={s.webTimeVal}>{minute.toString().padStart(2, '0')}</Text>
+        <TouchableOpacity testID={`${testPrefix}-min-down`} style={s.webTimeBtn} onPress={() => adjM(-15)}>
+          <MaterialIcons name="keyboard-arrow-down" size={28} color={C.text} />
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: C.bg },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   header: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    paddingHorizontal: 16, paddingVertical: 12,
-    borderBottomWidth: 1, borderBottomColor: C.borderSub + '40',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: C.borderSub + '40',
   },
   headerBtn: { flexDirection: 'row', alignItems: 'center', height: 48 },
-  headerBtnLabel: { fontSize: 18, fontWeight: '600', color: C.text, marginLeft: 4 },
+  headerBtnLabel: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: C.text,
+    marginLeft: 4,
+  },
   headerTitle: { fontSize: 22, fontWeight: '700', color: C.text },
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 24, paddingTop: 24 },
-  label: { fontSize: 18, fontWeight: '600', color: C.textSec, marginBottom: 8, marginTop: 16 },
-  input: {
-    height: 56, borderWidth: 2, borderColor: C.border, borderRadius: 12,
-    paddingHorizontal: 16, fontSize: 20, color: C.text, backgroundColor: C.surface,
+  label: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: C.textSec,
+    marginBottom: 8,
+    marginTop: 20,
   },
-  dateRow: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    backgroundColor: C.surface, borderRadius: 12, borderWidth: 2, borderColor: C.borderSub,
+  input: {
+    height: 56,
+    borderWidth: 2,
+    borderColor: C.border,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    fontSize: 20,
+    color: C.text,
+    backgroundColor: C.surface,
+  },
+
+  /* ---- Native picker button ---- */
+  pickerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: C.surface,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: C.borderSub,
+    paddingHorizontal: 16,
+    height: 60,
+  },
+  pickerBtnText: {
+    flex: 1,
+    fontSize: 22,
+    fontWeight: '600',
+    color: C.text,
+    marginLeft: 12,
+  },
+
+  /* ---- Web fallback date row ---- */
+  webRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: C.surface,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: C.borderSub,
     paddingVertical: 8,
   },
-  adjBtn: { width: 56, height: 56, justifyContent: 'center', alignItems: 'center' },
-  dateText: { fontSize: 22, fontWeight: '600', color: C.text },
-  timeRow: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    backgroundColor: C.surface, borderRadius: 12, borderWidth: 2, borderColor: C.borderSub,
-    paddingVertical: 8, paddingHorizontal: 16,
+  webAdjBtn: {
+    width: 56,
+    height: 56,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  timeUnit: { alignItems: 'center', flex: 1 },
-  timeBtn: { width: 56, height: 44, justifyContent: 'center', alignItems: 'center' },
-  timeValue: { fontSize: 24, fontWeight: '700', color: C.text, paddingVertical: 4 },
-  timeSep: { fontSize: 28, fontWeight: '700', color: C.text, marginHorizontal: 8 },
+  webValue: { fontSize: 22, fontWeight: '600', color: C.text },
+
+  /* ---- Web fallback time picker ---- */
+  webTimeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: C.surface,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: C.borderSub,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+  },
+  webTimeUnit: { alignItems: 'center', flex: 1 },
+  webTimeBtn: {
+    width: 56,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  webTimeVal: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: C.text,
+    paddingVertical: 4,
+  },
+  webTimeSep: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: C.text,
+    marginHorizontal: 8,
+  },
+
   descInput: {
-    minHeight: 100, borderWidth: 2, borderColor: C.border, borderRadius: 12,
-    paddingHorizontal: 16, paddingTop: 12, fontSize: 20, color: C.text,
-    backgroundColor: C.surface, textAlignVertical: 'top',
+    minHeight: 100,
+    borderWidth: 2,
+    borderColor: C.border,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    fontSize: 20,
+    color: C.text,
+    backgroundColor: C.surface,
+    textAlignVertical: 'top',
   },
   linkedNote: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: C.secondary + '15', borderRadius: 8,
-    padding: 12, marginTop: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: C.secondary + '15',
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 16,
   },
-  linkedNoteText: { fontSize: 16, color: C.secondary, marginLeft: 8, flex: 1 },
+  linkedNoteText: {
+    fontSize: 16,
+    color: C.secondary,
+    marginLeft: 8,
+    flex: 1,
+  },
   saveBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    backgroundColor: C.primary, borderRadius: 16, height: 64, marginTop: 24,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: C.primary,
+    borderRadius: 16,
+    height: 64,
+    marginTop: 24,
   },
-  saveBtnText: { fontSize: 20, fontWeight: '600', color: C.primaryFg, marginLeft: 8 },
+  saveBtnText: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: C.primaryFg,
+    marginLeft: 8,
+  },
   deleteBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    borderWidth: 2, borderColor: C.error, borderRadius: 16, height: 64, marginTop: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: C.error,
+    borderRadius: 16,
+    height: 64,
+    marginTop: 12,
   },
-  deleteBtnText: { fontSize: 20, fontWeight: '600', color: C.error, marginLeft: 8 },
+  deleteBtnText: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: C.error,
+    marginLeft: 8,
+  },
 });
