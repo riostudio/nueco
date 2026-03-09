@@ -282,8 +282,6 @@ const s = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: 24, height: 64,
     elevation: 4,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3, shadowRadius: 4,
   },
   fabText: { fontSize: 20, fontWeight: '600', color: C.primaryFg, marginLeft: 8 },
 });

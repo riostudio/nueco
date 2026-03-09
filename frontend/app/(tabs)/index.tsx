@@ -102,7 +102,7 @@ export default function NotesScreen() {
         <TouchableOpacity
           testID={`pin-toggle-${note.id}`}
           onPress={() => handleTogglePin(note.id)}
-          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          style={s.pinBtn}
         >
           <MaterialIcons
             name="push-pin"
@@ -243,6 +243,11 @@ const s = StyleSheet.create({
   },
   pinnedCard: { borderColor: C.primary, backgroundColor: C.surfaceHi },
   cardHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+  pinBtn: {
+    width: 48, height: 48, borderRadius: 24,
+    justifyContent: 'center', alignItems: 'center',
+    backgroundColor: C.bg,
+  },
   cardTitle: { fontSize: 22, fontWeight: '600', color: C.text, flex: 1, marginRight: 8 },
   cardPreview: { fontSize: 18, color: C.textSec, lineHeight: 26, marginBottom: 12 },
   cardFoot: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
@@ -262,8 +267,6 @@ const s = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: 24, height: 64,
     elevation: 4,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3, shadowRadius: 4,
   },
   fabText: { fontSize: 20, fontWeight: '600', color: C.primaryFg, marginLeft: 8 },
 });
