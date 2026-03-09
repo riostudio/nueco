@@ -153,33 +153,37 @@ export default function CalendarScreen() {
         </View>
       )}
 
-      {/* Selected Day Info — tappable to go to Events */}
-      <TouchableOpacity
-        testID="view-events-btn"
-        style={s.selectedInfo}
-        onPress={() => router.navigate('/(tabs)/events')}
-        activeOpacity={0.7}
-      >
-        <Text style={s.selectedDate}>
-          {MONTH_NAMES[selMonth]} {selDay}, {selYear}
-        </Text>
-        <View style={s.selectedBadge}>
-          <MaterialIcons name="event" size={18} color={C.primaryFg} />
-          <Text style={s.badgeText}>
-            {selectedDayEvents.length} {selectedDayEvents.length === 1 ? 'event' : 'events'}
-          </Text>
-        </View>
-      </TouchableOpacity>
+      {/* Selected Day Info — only show when events exist */}
+      {selectedDayEvents.length > 0 && (
+        <>
+          <TouchableOpacity
+            testID="view-events-btn"
+            style={s.selectedInfo}
+            onPress={() => router.navigate('/(tabs)/events')}
+            activeOpacity={0.7}
+          >
+            <Text style={s.selectedDate}>
+              {MONTH_NAMES[selMonth]} {selDay}, {selYear}
+            </Text>
+            <View style={s.selectedBadge}>
+              <MaterialIcons name="event" size={18} color={C.primaryFg} />
+              <Text style={s.badgeText}>
+                {selectedDayEvents.length} {selectedDayEvents.length === 1 ? 'event' : 'events'}
+              </Text>
+            </View>
+          </TouchableOpacity>
 
-      <TouchableOpacity
-        testID="view-events-link"
-        onPress={() => router.navigate('/(tabs)/events')}
-        activeOpacity={0.6}
-      >
-        <Text style={s.hint}>
-          Tap to view and manage events
-        </Text>
-      </TouchableOpacity>
+          <TouchableOpacity
+            testID="view-events-link"
+            onPress={() => router.navigate('/(tabs)/events')}
+            activeOpacity={0.6}
+          >
+            <Text style={s.hint}>
+              Tap to view and manage events
+            </Text>
+          </TouchableOpacity>
+        </>
+      )}
     </SafeAreaView>
   );
 }
