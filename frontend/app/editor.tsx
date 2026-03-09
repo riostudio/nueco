@@ -1,0 +1,565 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  View, Text, StyleSheet, TouchableOpacity, TextInput,
+  ScrollView, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { MaterialIcons } from '@expo/vector-icons';
+import { useRouter, useLocalSearchParams } from 'expo-router';
+import { Audio } from 'expo-av';
+import { notesApi, transcribeApi } from '../src/api';
+import { Tag } from '../src/types';
+import { TAG_COLORS } from '../src/theme';
+
+const C = {
+  primary: '#D84315',
+  primaryFg: '#FFFFFF',
+  secondary: '#1565C0',
+  bg: '#FDFBF7',
+  surface: '#FFFFFF',
+  text: '#121212',
+  textSec: '#37474F',
+  border: '#121212',
+  borderSub: '#78909C',
+  success: '#2E7D32',
+  error: '#C62828',
+};
+
+export default function EditorScreen() {
+  const router = useRouter();
+  const { noteId } = useLocalSearchParams<{ noteId: string }>();
+  const isNew = noteId === 'new';
+
+  const [title, setTitle] = useState('');
+  const [content, setContent] = useState('');
+  const [tags, setTags] = useState<Tag[]>([]);
+  const [isPinned, setIsPinned] = useState(false);
+  const [linkedEventId, setLinkedEventId] = useState<string | null>(null);
+  const [saveStatus, setSaveStatus] = useState('');
+  const [loading, setLoading] = useState(!isNew);
+
+  const [recording, setRecording] = useState<Audio.Recording | null>(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+
+  const [showTagPicker, setShowTagPicker] = useState(false);
+  const [newTagName, setNewTagName] = useState('');
+  const [selectedTagColor, setSelectedTagColor] = useState(TAG_COLORS[0].value);
+
+  const [selection, setSelection] = useState({ start: 0, end: 0 });
+
+  // Refs for auto-save closure safety
+  const noteIdRef = useRef(isNew ? '' : (noteId || ''));
+  const isCreatedRef = useRef(!isNew);
+  const titleRef = useRef(title);
+  const contentRef = useRef(content);
+  const tagsRef = useRef(tags);
+  const isPinnedRef = useRef(isPinned);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => { titleRef.current = title; }, [title]);
+  useEffect(() => { contentRef.current = content; }, [content]);
+  useEffect(() => { tagsRef.current = tags; }, [tags]);
+  useEffect(() => { isPinnedRef.current = isPinned; }, [isPinned]);
+
+  useEffect(() => {
+    if (!isNew && noteId) loadNote(noteId);
+  }, [noteId]);
+
+  const loadNote = async (id: string) => {
+    try {
+      const note = await notesApi.get(id);
+      setTitle(note.title);
+      setContent(note.content);
+      setTags(note.tags);
+      setIsPinned(note.is_pinned);
+      setLinkedEventId(note.linked_event_id);
+      noteIdRef.current = note.id;
+      isCreatedRef.current = true;
+    } catch (e) {
+      console.error('Failed to load note:', e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const triggerAutoSave = useCallback(() => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    setSaveStatus('Unsaved changes');
+    saveTimerRef.current = setTimeout(async () => {
+      setSaveStatus('Saving...');
+      try {
+        if (!isCreatedRef.current) {
+          const created = await notesApi.create({
+            title: titleRef.current,
+            content: contentRef.current,
+            tags: tagsRef.current,
+            is_pinned: isPinnedRef.current,
+          });
+          noteIdRef.current = created.id;
+          isCreatedRef.current = true;
+        } else if (noteIdRef.current) {
+          await notesApi.update(noteIdRef.current, {
+            title: titleRef.current,
+            content: contentRef.current,
+            tags: tagsRef.current,
+            is_pinned: isPinnedRef.current,
+          });
+        }
+        setSaveStatus('All changes saved');
+      } catch (e) {
+        setSaveStatus('Failed to save');
+        console.error('Save error:', e);
+      }
+    }, 2000);
+  }, []);
+
+  const handleBack = useCallback(async () => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    try {
+      if (!isCreatedRef.current && (titleRef.current || contentRef.current)) {
+        await notesApi.create({
+          title: titleRef.current,
+          content: contentRef.current,
+          tags: tagsRef.current,
+          is_pinned: isPinnedRef.current,
+        });
+      } else if (isCreatedRef.current && noteIdRef.current) {
+        await notesApi.update(noteIdRef.current, {
+          title: titleRef.current,
+          content: contentRef.current,
+          tags: tagsRef.current,
+          is_pinned: isPinnedRef.current,
+        });
+      }
+    } catch (e) {
+      console.error('Save on back failed:', e);
+    }
+    router.back();
+  }, [router]);
+
+  const handleTitleChange = (text: string) => {
+    setTitle(text);
+    triggerAutoSave();
+  };
+
+  const handleContentChange = (text: string) => {
+    setContent(text);
+    triggerAutoSave();
+  };
+
+  const insertFormatting = (type: 'bold' | 'italic' | 'bullet') => {
+    const before = content.substring(0, selection.start);
+    const selected = content.substring(selection.start, selection.end);
+    const after = content.substring(selection.end);
+    let newContent = content;
+
+    switch (type) {
+      case 'bold':
+        newContent = before + '**' + (selected || 'bold text') + '**' + after;
+        break;
+      case 'italic':
+        newContent = before + '*' + (selected || 'italic text') + '*' + after;
+        break;
+      case 'bullet':
+        newContent = before + '\n- ' + (selected || '') + after;
+        break;
+    }
+    setContent(newContent);
+    triggerAutoSave();
+  };
+
+  const startRecording = async () => {
+    try {
+      const { granted } = await Audio.requestPermissionsAsync();
+      if (!granted) {
+        Alert.alert('Permission Needed', 'Microphone access is required for voice input.');
+        return;
+      }
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+      const { recording: rec } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      );
+      setRecording(rec);
+      setIsRecording(true);
+    } catch (e) {
+      console.error('Recording start failed:', e);
+      Alert.alert('Error', 'Could not start recording.');
+    }
+  };
+
+  const stopRecording = async () => {
+    if (!recording) return;
+    try {
+      setIsRecording(false);
+      await recording.stopAndUnloadAsync();
+      const uri = recording.getURI();
+      setRecording(null);
+      if (!uri) return;
+
+      setIsTranscribing(true);
+      const result = await transcribeApi.transcribe(uri);
+      const newContent = content + (content ? ' ' : '') + result.text;
+      setContent(newContent);
+      triggerAutoSave();
+    } catch (e) {
+      console.error('Transcription failed:', e);
+      Alert.alert('Error', 'Voice transcription failed. Please try again.');
+    } finally {
+      setIsTranscribing(false);
+    }
+  };
+
+  const addTag = () => {
+    if (!newTagName.trim()) return;
+    if (tags.length >= 3) {
+      Alert.alert('Maximum Tags', 'You can add up to 3 tags per note.');
+      return;
+    }
+    const newTags = [...tags, { name: newTagName.trim(), color: selectedTagColor }];
+    setTags(newTags);
+    setNewTagName('');
+    setShowTagPicker(false);
+    triggerAutoSave();
+  };
+
+  const removeTag = (index: number) => {
+    const newTags = tags.filter((_, i) => i !== index);
+    setTags(newTags);
+    triggerAutoSave();
+  };
+
+  const togglePin = () => {
+    setIsPinned(!isPinned);
+    triggerAutoSave();
+  };
+
+  const handleDelete = () => {
+    Alert.alert('Delete Note', 'Are you sure you want to delete this note?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          if (isCreatedRef.current && noteIdRef.current) {
+            try { await notesApi.delete(noteIdRef.current); } catch (e) { console.error(e); }
+          }
+          router.back();
+        },
+      },
+    ]);
+  };
+
+  if (loading) {
+    return (
+      <SafeAreaView style={s.container}>
+        <View style={s.center}>
+          <ActivityIndicator size="large" color={C.primary} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaView style={s.container}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        {/* Header */}
+        <View style={s.header}>
+          <TouchableOpacity testID="back-btn" style={s.headerBtn} onPress={handleBack}>
+            <MaterialIcons name="arrow-back" size={28} color={C.text} />
+            <Text style={s.headerBtnLabel}>Back</Text>
+          </TouchableOpacity>
+          <View style={s.headerRight}>
+            <TouchableOpacity testID="pin-btn" style={s.headerBtn} onPress={togglePin}>
+              <MaterialIcons
+                name="push-pin"
+                size={24}
+                color={isPinned ? C.primary : C.borderSub}
+              />
+              <Text style={[s.headerBtnLabel, isPinned && { color: C.primary }]}>
+                {isPinned ? 'Pinned' : 'Pin'}
+              </Text>
+            </TouchableOpacity>
+            {isCreatedRef.current && (
+              <TouchableOpacity testID="delete-btn" style={s.headerBtn} onPress={handleDelete}>
+                <MaterialIcons name="delete" size={24} color={C.error} />
+                <Text style={[s.headerBtnLabel, { color: C.error }]}>Delete</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+
+        {/* Save Status */}
+        {saveStatus ? (
+          <View style={s.statusBar}>
+            <MaterialIcons
+              name={
+                saveStatus === 'All changes saved' ? 'check-circle' :
+                saveStatus === 'Saving...' ? 'sync' : 'error'
+              }
+              size={16}
+              color={
+                saveStatus === 'All changes saved' ? C.success :
+                saveStatus === 'Failed to save' ? C.error : C.textSec
+              }
+            />
+            <Text style={[s.statusText, {
+              color: saveStatus === 'All changes saved' ? C.success :
+                saveStatus === 'Failed to save' ? C.error : C.textSec,
+            }]}>
+              {saveStatus}
+            </Text>
+          </View>
+        ) : null}
+
+        <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent} keyboardShouldPersistTaps="handled">
+          {/* Title */}
+          <TextInput
+            testID="note-title-input"
+            style={s.titleInput}
+            placeholder="Note title..."
+            placeholderTextColor={C.borderSub}
+            value={title}
+            onChangeText={handleTitleChange}
+            returnKeyType="next"
+          />
+
+          {/* Tags */}
+          <View style={s.tagsSection}>
+            <View style={s.tagsRow}>
+              {tags.map((tag, i) => (
+                <TouchableOpacity
+                  key={i}
+                  testID={`tag-${i}`}
+                  style={[s.tagChip, { backgroundColor: tag.color + '20', borderColor: tag.color }]}
+                  onPress={() => removeTag(i)}
+                >
+                  <Text style={[s.tagChipText, { color: tag.color }]}>{tag.name}</Text>
+                  <MaterialIcons name="close" size={16} color={tag.color} />
+                </TouchableOpacity>
+              ))}
+              {tags.length < 3 && (
+                <TouchableOpacity
+                  testID="add-tag-btn"
+                  style={s.addTagBtn}
+                  onPress={() => setShowTagPicker(!showTagPicker)}
+                >
+                  <MaterialIcons name="add" size={20} color={C.primary} />
+                  <Text style={s.addTagText}>Add Tag</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {showTagPicker && (
+              <View style={s.tagPicker}>
+                <TextInput
+                  testID="tag-name-input"
+                  style={s.tagInput}
+                  placeholder="Tag name..."
+                  placeholderTextColor={C.borderSub}
+                  value={newTagName}
+                  onChangeText={setNewTagName}
+                />
+                <View style={s.colorRow}>
+                  {TAG_COLORS.map((c) => (
+                    <TouchableOpacity
+                      key={c.value}
+                      testID={`color-${c.name}`}
+                      style={[
+                        s.colorDot,
+                        { backgroundColor: c.value },
+                        selectedTagColor === c.value && s.colorDotSel,
+                      ]}
+                      onPress={() => setSelectedTagColor(c.value)}
+                    />
+                  ))}
+                </View>
+                <TouchableOpacity testID="confirm-tag-btn" style={s.confirmTagBtn} onPress={addTag}>
+                  <Text style={s.confirmTagText}>Add Tag</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+
+          {/* Format Toolbar */}
+          <View style={s.formatBar}>
+            <TouchableOpacity testID="fmt-bold" style={s.fmtBtn} onPress={() => insertFormatting('bold')}>
+              <Text style={s.fmtBold}>B</Text>
+              <Text style={s.fmtLabel}>Bold</Text>
+            </TouchableOpacity>
+            <TouchableOpacity testID="fmt-italic" style={s.fmtBtn} onPress={() => insertFormatting('italic')}>
+              <Text style={s.fmtItalic}>I</Text>
+              <Text style={s.fmtLabel}>Italic</Text>
+            </TouchableOpacity>
+            <TouchableOpacity testID="fmt-bullet" style={s.fmtBtn} onPress={() => insertFormatting('bullet')}>
+              <MaterialIcons name="format-list-bulleted" size={24} color={C.text} />
+              <Text style={s.fmtLabel}>List</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Content */}
+          <TextInput
+            testID="note-content-input"
+            style={s.contentInput}
+            placeholder="Start writing your note..."
+            placeholderTextColor={C.borderSub}
+            value={content}
+            onChangeText={handleContentChange}
+            multiline
+            textAlignVertical="top"
+            onSelectionChange={(e) => setSelection(e.nativeEvent.selection)}
+          />
+
+          {/* Calendar Link */}
+          <TouchableOpacity
+            testID="schedule-event-btn"
+            style={s.calBtn}
+            onPress={() =>
+              router.push({
+                pathname: '/event-editor',
+                params: {
+                  noteId: noteIdRef.current || 'new',
+                  noteTitle: title,
+                },
+              })
+            }
+          >
+            <MaterialIcons name="calendar-today" size={24} color={C.secondary} />
+            <Text style={s.calBtnText}>
+              {linkedEventId ? 'Linked to Calendar Event' : 'Schedule Calendar Event'}
+            </Text>
+            <MaterialIcons name="chevron-right" size={24} color={C.borderSub} />
+          </TouchableOpacity>
+
+          <View style={{ height: 120 }} />
+        </ScrollView>
+
+        {/* Voice Input Bar */}
+        <View style={s.voiceBar}>
+          {isTranscribing ? (
+            <View style={s.transcribing}>
+              <ActivityIndicator size="small" color={C.primary} />
+              <Text style={s.transcribingText}>Converting speech to text...</Text>
+            </View>
+          ) : (
+            <TouchableOpacity
+              testID="voice-input-btn"
+              style={[s.voiceBtn, isRecording && s.voiceBtnRec]}
+              onPress={isRecording ? stopRecording : startRecording}
+              activeOpacity={0.7}
+            >
+              <MaterialIcons
+                name={isRecording ? 'stop' : 'mic'}
+                size={28}
+                color={isRecording ? C.primaryFg : C.primary}
+              />
+              <Text style={[s.voiceBtnText, isRecording && s.voiceBtnTextRec]}>
+                {isRecording ? 'Stop Recording' : 'Voice Input'}
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
+  );
+}
+
+const s = StyleSheet.create({
+  container: { flex: 1, backgroundColor: C.bg },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  header: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: 16, paddingVertical: 8,
+    borderBottomWidth: 1, borderBottomColor: C.borderSub + '40',
+  },
+  headerBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, height: 48 },
+  headerBtnLabel: { fontSize: 18, fontWeight: '600', color: C.text, marginLeft: 4 },
+  headerRight: { flexDirection: 'row', gap: 4 },
+  statusBar: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    paddingVertical: 4, backgroundColor: C.surface,
+  },
+  statusText: { fontSize: 14, marginLeft: 4 },
+  scroll: { flex: 1 },
+  scrollContent: { paddingHorizontal: 24, paddingTop: 16 },
+  titleInput: {
+    fontSize: 28, fontWeight: '700', color: C.text,
+    borderBottomWidth: 2, borderBottomColor: C.borderSub + '60',
+    paddingBottom: 12, marginBottom: 16,
+  },
+  tagsSection: { marginBottom: 16 },
+  tagsRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' },
+  tagChip: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8,
+    borderWidth: 1.5, marginRight: 8, marginBottom: 8,
+  },
+  tagChipText: { fontSize: 16, fontWeight: '600', marginRight: 4 },
+  addTagBtn: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 12, paddingVertical: 6,
+    borderRadius: 8, borderWidth: 1.5, borderColor: C.primary,
+    borderStyle: 'dashed', marginBottom: 8,
+  },
+  addTagText: { fontSize: 16, fontWeight: '600', color: C.primary, marginLeft: 4 },
+  tagPicker: {
+    backgroundColor: C.surface, borderRadius: 12, padding: 16,
+    borderWidth: 2, borderColor: C.borderSub, marginTop: 8,
+  },
+  tagInput: {
+    height: 48, borderWidth: 2, borderColor: C.border, borderRadius: 8,
+    paddingHorizontal: 12, fontSize: 18, color: C.text, marginBottom: 12,
+  },
+  colorRow: { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 12 },
+  colorDot: { width: 40, height: 40, borderRadius: 20 },
+  colorDotSel: { borderWidth: 3, borderColor: C.text },
+  confirmTagBtn: {
+    backgroundColor: C.primary, borderRadius: 12, height: 48,
+    justifyContent: 'center', alignItems: 'center',
+  },
+  confirmTagText: { fontSize: 18, fontWeight: '600', color: C.primaryFg },
+  formatBar: {
+    flexDirection: 'row', backgroundColor: C.surface, borderRadius: 12,
+    borderWidth: 2, borderColor: C.borderSub, marginBottom: 16,
+    overflow: 'hidden',
+  },
+  fmtBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    paddingVertical: 12, gap: 6,
+    borderRightWidth: 1, borderRightColor: C.borderSub + '40',
+  },
+  fmtBold: { fontSize: 20, fontWeight: '900', color: C.text },
+  fmtItalic: { fontSize: 20, fontStyle: 'italic', fontWeight: '600', color: C.text },
+  fmtLabel: { fontSize: 16, color: C.textSec },
+  contentInput: {
+    fontSize: 20, color: C.text, lineHeight: 30, minHeight: 200,
+    textAlignVertical: 'top',
+  },
+  calBtn: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: C.surface, borderRadius: 12, padding: 16,
+    borderWidth: 2, borderColor: C.borderSub, marginTop: 16,
+  },
+  calBtnText: { flex: 1, fontSize: 18, color: C.secondary, marginLeft: 12, fontWeight: '500' },
+  voiceBar: {
+    paddingHorizontal: 24, paddingVertical: 12,
+    borderTopWidth: 1, borderTopColor: C.borderSub + '40',
+    backgroundColor: C.bg,
+  },
+  transcribing: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    height: 56,
+  },
+  transcribingText: { fontSize: 18, color: C.textSec, marginLeft: 12 },
+  voiceBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    height: 56, borderRadius: 28, borderWidth: 2, borderColor: C.primary,
+    backgroundColor: C.surface,
+  },
+  voiceBtnRec: { backgroundColor: C.error, borderColor: C.error },
+  voiceBtnText: { fontSize: 20, fontWeight: '600', color: C.primary, marginLeft: 8 },
+  voiceBtnTextRec: { color: C.primaryFg },
+});
