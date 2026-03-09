@@ -1,7 +1,8 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
-  RefreshControl, ActivityIndicator, Alert,
+  RefreshControl, ActivityIndicator, Alert, Animated,
+  NativeSyntheticEvent, NativeScrollEvent,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -78,6 +79,10 @@ export default function EventsScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<'upcoming' | 'all'>('upcoming');
+  const [fabExpanded, setFabExpanded] = useState(false);
+  const fabWidth = useRef(new Animated.Value(56)).current;
+  const textOpacity = useRef(new Animated.Value(0)).current;
+  const lastScrollY = useRef(0);
 
   const loadEvents = useCallback(async () => {
     try {
@@ -113,6 +118,37 @@ export default function EventsScreen() {
         },
       ]
     );
+  };
+
+  const expandFab = () => {
+    if (fabExpanded) return;
+    setFabExpanded(true);
+    Animated.parallel([
+      Animated.spring(fabWidth, { toValue: 160, useNativeDriver: false, friction: 8 }),
+      Animated.timing(textOpacity, { toValue: 1, duration: 200, useNativeDriver: false }),
+    ]).start();
+  };
+
+  const collapseFab = () => {
+    if (!fabExpanded) return;
+    setFabExpanded(false);
+    Animated.parallel([
+      Animated.spring(fabWidth, { toValue: 56, useNativeDriver: false, friction: 8 }),
+      Animated.timing(textOpacity, { toValue: 0, duration: 150, useNativeDriver: false }),
+    ]).start();
+  };
+
+  const handleScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const currentY = e.nativeEvent.contentOffset.y;
+    const scrollingDown = currentY > lastScrollY.current && currentY > 10;
+    
+    if (scrollingDown) {
+      expandFab();
+    } else if (currentY <= 10) {
+      collapseFab();
+    }
+    
+    lastScrollY.current = currentY;
   };
 
   const filteredEvents = filter === 'upcoming'
@@ -163,6 +199,8 @@ export default function EventsScreen() {
       <ScrollView
         style={s.scroll}
         contentContainerStyle={s.scrollContent}
+        onScroll={handleScroll}
+        scrollEventThrottle={16}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -195,25 +233,16 @@ export default function EventsScreen() {
 
               {group.events.map((event) => (
                 <View key={event.id} testID={`event-card-${event.id}`} style={s.eventCard}>
-                  <View style={s.timeLine}>
+                  <View style={s.eventTimeCol}>
                     <Text style={s.timeStart}>{formatEventTime(event.start_time)}</Text>
-                    <View style={s.timeDivider} />
                     <Text style={s.timeEnd}>{formatEventTime(event.end_time)}</Text>
                   </View>
 
                   <View style={s.eventBody}>
-                    <Text style={s.eventTitle}>{event.title}</Text>
+                    <Text style={s.eventTitle} numberOfLines={1}>{event.title}</Text>
                     {event.description ? (
-                      <Text style={s.eventDesc} numberOfLines={2}>{event.description}</Text>
+                      <Text style={s.eventDesc} numberOfLines={1}>{event.description}</Text>
                     ) : null}
-                    {event.linked_note_ids.length > 0 && (
-                      <View style={s.linkedRow}>
-                        <MaterialIcons name="link" size={14} color={C.secondary} />
-                        <Text style={s.linkedText}>
-                          {event.linked_note_ids.length} linked {event.linked_note_ids.length === 1 ? 'note' : 'notes'}
-                        </Text>
-                      </View>
-                    )}
                   </View>
 
                   <View style={s.actions}>
@@ -222,14 +251,14 @@ export default function EventsScreen() {
                       style={s.actionBtn}
                       onPress={() => router.push({ pathname: '/event-editor', params: { eventId: event.id } })}
                     >
-                      <MaterialIcons name="edit" size={22} color={C.secondary} />
+                      <MaterialIcons name="edit" size={20} color={C.secondary} />
                     </TouchableOpacity>
                     <TouchableOpacity
                       testID={`delete-event-${event.id}`}
                       style={s.actionBtn}
                       onPress={() => handleDelete(event.id, event.title)}
                     >
-                      <MaterialIcons name="delete" size={22} color={C.error} />
+                      <MaterialIcons name="delete" size={20} color={C.error} />
                     </TouchableOpacity>
                   </View>
                 </View>
@@ -240,16 +269,20 @@ export default function EventsScreen() {
         <View style={{ height: 100 }} />
       </ScrollView>
 
-      {/* FAB */}
-      <TouchableOpacity
-        testID="create-event-btn"
-        style={s.fab}
-        onPress={() => router.push({ pathname: '/event-editor', params: { date: new Date().toISOString() } })}
-        activeOpacity={0.8}
-      >
-        <MaterialIcons name="add" size={32} color={C.primaryFg} />
-        <Text style={s.fabText}>New Event</Text>
-      </TouchableOpacity>
+      {/* FAB - Animated */}
+      <Animated.View style={[s.fab, { width: fabWidth }]}>
+        <TouchableOpacity
+          testID="create-event-btn"
+          style={s.fabInner}
+          onPress={() => router.push({ pathname: '/event-editor', params: { date: new Date().toISOString() } })}
+          activeOpacity={0.8}
+        >
+          <MaterialIcons name="add" size={28} color={C.primaryFg} />
+          <Animated.Text style={[s.fabText, { opacity: textOpacity }]}>
+            New Event
+          </Animated.Text>
+        </TouchableOpacity>
+      </Animated.View>
     </SafeAreaView>
   );
 }
@@ -257,59 +290,60 @@ export default function EventsScreen() {
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: C.bg },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  loadText: { fontSize: 20, color: C.textSec, marginTop: 16 },
-  header: { paddingHorizontal: 24, paddingTop: 12, paddingBottom: 8 },
-  headerTitle: { fontSize: 34, fontWeight: '700', color: C.text },
+  loadText: { fontSize: 18, color: C.textSec, marginTop: 12 },
+  header: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 4 },
+  headerTitle: { fontSize: 28, fontWeight: '700', color: C.text },
   filterRow: {
-    flexDirection: 'row', marginHorizontal: 24, marginBottom: 16,
-    backgroundColor: C.surface, borderRadius: 12,
+    flexDirection: 'row', marginHorizontal: 20, marginBottom: 12,
+    backgroundColor: C.surface, borderRadius: 10,
     borderWidth: 2, borderColor: C.border, overflow: 'hidden',
   },
   filterBtn: {
-    flex: 1, paddingVertical: 12, alignItems: 'center', justifyContent: 'center',
+    flex: 1, paddingVertical: 10, alignItems: 'center', justifyContent: 'center',
   },
   filterBtnActive: { backgroundColor: C.primary },
-  filterText: { fontSize: 18, fontWeight: '600', color: C.textSec },
+  filterText: { fontSize: 16, fontWeight: '600', color: C.textSec },
   filterTextActive: { color: C.primaryFg },
   scroll: { flex: 1 },
-  scrollContent: { paddingHorizontal: 24 },
-  empty: { alignItems: 'center', paddingTop: 60 },
-  emptyTitle: { fontSize: 24, fontWeight: '600', color: C.text, marginTop: 16 },
-  emptySub: { fontSize: 18, color: C.textSec, marginTop: 8, textAlign: 'center', paddingHorizontal: 32 },
+  scrollContent: { paddingHorizontal: 20 },
+  empty: { alignItems: 'center', paddingTop: 48 },
+  emptyTitle: { fontSize: 22, fontWeight: '600', color: C.text, marginTop: 12 },
+  emptySub: { fontSize: 16, color: C.textSec, marginTop: 6, textAlign: 'center', paddingHorizontal: 24 },
   dateHeader: {
-    flexDirection: 'row', alignItems: 'center', marginBottom: 10, marginTop: 16,
+    flexDirection: 'row', alignItems: 'center', marginBottom: 6, marginTop: 12,
   },
-  dateHeaderText: { fontSize: 20, fontWeight: '700', color: C.text },
+  dateHeaderText: { fontSize: 16, fontWeight: '700', color: C.text },
   todayBadge: {
-    marginLeft: 10, backgroundColor: C.success, borderRadius: 12,
-    paddingHorizontal: 10, paddingVertical: 3,
+    marginLeft: 8, backgroundColor: C.success, borderRadius: 10,
+    paddingHorizontal: 8, paddingVertical: 2,
   },
-  todayBadgeText: { fontSize: 14, fontWeight: '700', color: C.primaryFg },
+  todayBadgeText: { fontSize: 12, fontWeight: '700', color: C.primaryFg },
   eventCard: {
-    flexDirection: 'row', alignItems: 'flex-start',
-    backgroundColor: C.surface, borderRadius: 12, padding: 16,
-    borderWidth: 2, borderColor: C.borderSub, marginBottom: 12,
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: C.surface, borderRadius: 10, 
+    paddingVertical: 10, paddingHorizontal: 12,
+    borderWidth: 1.5, borderColor: C.borderSub, marginBottom: 8,
   },
-  timeLine: { marginRight: 16, alignItems: 'center', minWidth: 65 },
-  timeStart: { fontSize: 15, fontWeight: '700', color: C.secondary },
-  timeDivider: { width: 2, height: 12, backgroundColor: C.borderSub, marginVertical: 2 },
-  timeEnd: { fontSize: 15, fontWeight: '600', color: C.borderSub },
+  eventTimeCol: { marginRight: 12, alignItems: 'flex-end', minWidth: 58 },
+  timeStart: { fontSize: 13, fontWeight: '700', color: C.secondary },
+  timeEnd: { fontSize: 12, fontWeight: '500', color: C.borderSub, marginTop: 1 },
   eventBody: { flex: 1 },
-  eventTitle: { fontSize: 20, fontWeight: '600', color: C.text },
-  eventDesc: { fontSize: 16, color: C.textSec, marginTop: 4, lineHeight: 22 },
-  linkedRow: { flexDirection: 'row', alignItems: 'center', marginTop: 6 },
-  linkedText: { fontSize: 14, color: C.secondary, marginLeft: 4 },
-  actions: { flexDirection: 'column', gap: 4 },
+  eventTitle: { fontSize: 16, fontWeight: '600', color: C.text },
+  eventDesc: { fontSize: 13, color: C.textSec, marginTop: 2 },
+  actions: { flexDirection: 'row', gap: 2 },
   actionBtn: {
-    width: 44, height: 44, justifyContent: 'center', alignItems: 'center',
+    width: 36, height: 36, justifyContent: 'center', alignItems: 'center',
     borderRadius: 8,
   },
   fab: {
-    position: 'absolute', bottom: 24, right: 24,
-    backgroundColor: C.primary, borderRadius: 36,
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 24, height: 64,
+    position: 'absolute', bottom: 20, right: 20,
+    backgroundColor: C.primary, borderRadius: 28,
+    height: 56, overflow: 'hidden',
     elevation: 4,
   },
-  fabText: { fontSize: 20, fontWeight: '600', color: C.primaryFg, marginLeft: 8 },
+  fabInner: {
+    flex: 1, flexDirection: 'row', alignItems: 'center',
+    justifyContent: 'center', paddingHorizontal: 14,
+  },
+  fabText: { fontSize: 16, fontWeight: '600', color: C.primaryFg, marginLeft: 6 },
 });
