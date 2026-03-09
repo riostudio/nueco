@@ -18,6 +18,10 @@ function CalendarIcon({ color }: { color: string }) {
   return <MaterialIcons name="calendar-today" size={28} color={color} />;
 }
 
+function EventsIcon({ color }: { color: string }) {
+  return <MaterialIcons name="event-note" size={28} color={color} />;
+}
+
 function SettingsIcon({ color }: { color: string }) {
   return <MaterialIcons name="settings" size={28} color={color} />;
 }
@@ -45,6 +49,13 @@ export default function TabLayout() {
         options={{
           title: 'Calendar',
           tabBarIcon: CalendarIcon,
+        }}
+      />
+      <Tabs.Screen
+        name="events"
+        options={{
+          title: 'Events',
+          tabBarIcon: EventsIcon,
         }}
       />
       <Tabs.Screen
