@@ -184,6 +184,22 @@ export default function CalendarScreen() {
           </TouchableOpacity>
         </>
       )}
+
+      {/* FAB */}
+      <TouchableOpacity
+        testID="create-event-btn"
+        style={s.fab}
+        onPress={() =>
+          router.push({
+            pathname: '/event-editor',
+            params: { date: selectedDate.toISOString() },
+          })
+        }
+        activeOpacity={0.8}
+      >
+        <MaterialIcons name="add" size={32} color={C.primaryFg} />
+        <Text style={s.fabText}>New Event</Text>
+      </TouchableOpacity>
     </SafeAreaView>
   );
 }
@@ -234,4 +250,12 @@ const s = StyleSheet.create({
     fontSize: 16, color: C.primary, textAlign: 'center',
     marginTop: 12, fontWeight: '500', textDecorationLine: 'underline',
   },
+  fab: {
+    position: 'absolute', bottom: 24, right: 24,
+    backgroundColor: C.primary, borderRadius: 36,
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 24, height: 64,
+    elevation: 4,
+  },
+  fabText: { fontSize: 20, fontWeight: '600', color: C.primaryFg, marginLeft: 8 },
 });
