@@ -1,0 +1,212 @@
+{
+  "identity": {
+    "name": "MemoPad",
+    "description": "A senior-friendly note-taking assistant designed for clarity, ease, and accessibility.",
+    "persona": "The Caring Assistant",
+    "tone": "Warm, Patient, Clear, respectful, not patronizing.",
+    "theme": "light"
+  },
+  "design_principles": [
+    "Clarity First: If it can be bigger, make it bigger.",
+    "High Contrast: 7:1 ratio minimum (AAA). No subtle grays.",
+    "Explicit Labels: No icon-only buttons (except universally known ones like 'X'). Always add text labels.",
+    "Forgiving UI: Large touch targets (>56px). No hidden gestures.",
+    "Paper Metaphor: It should feel like writing on paper, not using a computer."
+  ],
+  "color_palette": {
+    "primary": "#D84315",
+    "primary_foreground": "#FFFFFF",
+    "secondary": "#1565C0",
+    "secondary_foreground": "#FFFFFF",
+    "background": "#FDFBF7",
+    "surface": "#FFFFFF",
+    "surface_highlight": "#FFF8E1",
+    "text_primary": "#121212",
+    "text_secondary": "#37474F",
+    "border": "#121212",
+    "border_subtle": "#78909C",
+    "success": "#2E7D32",
+    "error": "#C62828",
+    "warning": "#F9A825",
+    "overlay": "rgba(0, 0, 0, 0.7)"
+  },
+  "typography": {
+    "font_family_heading": "System",
+    "font_family_body": "System",
+    "scale": {
+      "h1": {
+        "fontSize": 34,
+        "lineHeight": 42,
+        "fontWeight": "700",
+        "letterSpacing": 0.25
+      },
+      "h2": {
+        "fontSize": 28,
+        "lineHeight": 36,
+        "fontWeight": "700",
+        "letterSpacing": 0
+      },
+      "h3": {
+        "fontSize": 24,
+        "lineHeight": 32,
+        "fontWeight": "600",
+        "letterSpacing": 0.15
+      },
+      "body_large": {
+        "fontSize": 22,
+        "lineHeight": 32,
+        "fontWeight": "400",
+        "letterSpacing": 0.5
+      },
+      "body_regular": {
+        "fontSize": 20,
+        "lineHeight": 30,
+        "fontWeight": "400",
+        "letterSpacing": 0.25
+      },
+      "button_text": {
+        "fontSize": 20,
+        "lineHeight": 28,
+        "fontWeight": "600",
+        "letterSpacing": 1.25,
+        "textTransform": "uppercase"
+      },
+      "caption": {
+        "fontSize": 18,
+        "lineHeight": 26,
+        "fontWeight": "500",
+        "letterSpacing": 0.4
+      }
+    }
+  },
+  "spacing": {
+    "xs": 8,
+    "sm": 16,
+    "md": 24,
+    "lg": 32,
+    "xl": 48,
+    "xxl": 64,
+    "touch_target_min": 56
+  },
+  "layout": {
+    "border_radius_sm": 8,
+    "border_radius_md": 12,
+    "border_radius_lg": 16,
+    "border_width_thin": 1,
+    "border_width_thick": 2
+  },
+  "components": {
+    "Button": {
+      "height": 64,
+      "borderRadius": 16,
+      "paddingHorizontal": 32,
+      "backgroundColor": "primary",
+      "textColor": "primary_foreground",
+      "elevation": 0,
+      "borderWidth": 0
+    },
+    "SecondaryButton": {
+      "height": 64,
+      "borderRadius": 16,
+      "paddingHorizontal": 32,
+      "backgroundColor": "surface",
+      "textColor": "primary",
+      "borderWidth": 2,
+      "borderColor": "primary"
+    },
+    "Card": {
+      "backgroundColor": "surface",
+      "borderRadius": 12,
+      "padding": 24,
+      "borderWidth": 2,
+      "borderColor": "border_subtle",
+      "marginBottom": 16
+    },
+    "Input": {
+      "height": 64,
+      "borderRadius": 12,
+      "borderWidth": 2,
+      "borderColor": "text_primary",
+      "backgroundColor": "surface",
+      "paddingHorizontal": 16,
+      "fontSize": 20,
+      "color": "text_primary"
+    },
+    "FAB": {
+      "width": 72,
+      "height": 72,
+      "borderRadius": 36,
+      "backgroundColor": "primary",
+      "iconSize": 32,
+      "elevation": 4,
+      "shadowColor": "#000",
+      "shadowOffset": { "width": 0, "height": 4 },
+      "shadowOpacity": 0.3,
+      "shadowRadius": 4
+    }
+  },
+  "assets": {
+    "icons": {
+      "library": "@expo/vector-icons",
+      "set": "MaterialIcons",
+      "mappings": {
+        "add": "add",
+        "edit": "edit",
+        "delete": "delete",
+        "save": "save",
+        "calendar": "calendar-today",
+        "settings": "settings",
+        "search": "search",
+        "mic": "mic",
+        "mic_off": "mic-off",
+        "close": "close",
+        "check": "check",
+        "arrow_back": "arrow-back",
+        "pin": "push-pin",
+        "unpin": "push-pin"
+      }
+    },
+    "images": [
+      {
+        "category": "welcome",
+        "description": "Senior man smiling using tablet - builds trust",
+        "url": "https://images.unsplash.com/photo-1758691030817-a6271a533c42?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1NzZ8MHwxfHNlYXJjaHwzfHxzZW5pb3IlMjBoYXBweSUyMHVzaW5nJTIwdGFibGV0JTIwc2ltcGxpc3RpY3xlbnwwfHx8fDE3NzMwNjAxODV8MA&ixlib=rb-4.1.0&q=85",
+        "usage": "Use on About screen or Empty State (Create your first note)"
+      }
+    ]
+  },
+  "accessibility": {
+    "wcag_level": "AAA",
+    "min_contrast_ratio": 7,
+    "touch_target_size": 56,
+    "font_scale_support": true,
+    "reduced_motion": true
+  },
+  "tech_stack": {
+    "framework": "React Native Expo",
+    "styling": "StyleSheet.create",
+    "navigation": "expo-router",
+    "icons": "@expo/vector-icons",
+    "storage": "AsyncStorage (implied for local MVP) or MongoDB (as requested)",
+    "webview": "react-native-webview"
+  },
+  "universal_guidelines": [
+    "DO NOT use Tailwind classes (className). Use style={styles.container}.",
+    "DO NOT use HTML tags (div, span). Use View, Text, TouchableOpacity.",
+    "ALWAYS wrap text in <Text> components.",
+    "Ensure all touchable areas are at least 56x56 logical pixels.",
+    "Avoid subtle gradients. Use solid, high-contrast colors.",
+    "Use ScrollView for all screens to ensure content is accessible on small devices with large fonts.",
+    "Add testID to all interactive elements for testing."
+  ],
+  "instructions_to_main_agent": [
+    "1. Setup the Theme Context to manage the High Contrast colors.",
+    "2. Create the reusable components (BigButton, NoteCard, Header) first.",
+    "3. Implement Navigation using Expo Router (tabs layout).",
+    "4. Build the Home Screen (Notes List) with the specific 'Card' style.",
+    "5. Build the Editor Screen using TextInput (or WebView for rich text if needed, but simple TextInput is safer for MVP accessibility). RECOMMENDATION: Use a simple multiline TextInput for the Body to ensure screen reader compatibility, rather than a complex WebView editor.",
+    "6. Implement Voice Input using expo-speech-recognition or similar if available, or mock it for MVP.",
+    "7. Implement Calendar View using a library like 'react-native-calendars' (check if installed) or build a simple Grid View.",
+    "8. Ensure all text sizes use the defined Typography scale."
+  ]
+}
