@@ -277,7 +277,7 @@ export default function EventsScreen() {
           onPress={() => router.push({ pathname: '/event-editor', params: { date: new Date().toISOString() } })}
           activeOpacity={0.8}
         >
-          <MaterialIcons name="add" size={28} color={C.primaryFg} />
+          <MaterialIcons name="add" size={32} color={C.primaryFg} />
           <Animated.Text style={[s.fabText, { opacity: textOpacity }]}>
             New Event
           </Animated.Text>
@@ -343,7 +343,7 @@ const s = StyleSheet.create({
   },
   fabInner: {
     flex: 1, flexDirection: 'row', alignItems: 'center',
-    justifyContent: 'center', paddingHorizontal: 14,
+    justifyContent: 'center',
   },
-  fabText: { fontSize: 16, fontWeight: '600', color: C.primaryFg, marginLeft: 6 },
+  fabText: { fontSize: 16, fontWeight: '600', color: C.primaryFg, marginLeft: 8 },
 });
