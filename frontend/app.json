@@ -44,7 +44,13 @@
         }
       ],
       "expo-audio",
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": "Save events to your calendar"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

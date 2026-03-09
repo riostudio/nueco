@@ -9,6 +9,15 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { eventsApi, notesApi } from '../src/api';
 import { MONTH_NAMES } from '../src/theme';
 
+let ExpoCalendar: typeof import('expo-calendar') | null = null;
+if (Platform.OS !== 'web') {
+  try {
+    ExpoCalendar = require('expo-calendar');
+  } catch (e) {
+    // Not available
+  }
+}
+
 const C = {
   primary: '#D84315',
   primaryFg: '#FFFFFF',
@@ -170,6 +179,7 @@ export default function EventEditorScreen() {
   });
   const [loading, setLoading] = useState(isEditing);
   const [saving, setSaving] = useState(false);
+  const [addToDeviceCal, setAddToDeviceCal] = useState(true);
 
   // Android-only: pickers need show/hide toggle
   const [showAndroidDate, setShowAndroidDate] = useState(false);
@@ -243,6 +253,12 @@ export default function EventEditorScreen() {
           }
         }
       }
+
+      // Write to device calendar if toggled on
+      if (addToDeviceCal && !isWeb) {
+        await writeToDeviceCalendar(title.trim(), description.trim(), st, et);
+      }
+
       router.back();
     } catch (e) {
       Alert.alert('Error', 'Failed to save event. Please try again.');
@@ -269,6 +285,77 @@ export default function EventEditorScreen() {
         },
       },
     ]);
+  };
+
+  const writeToDeviceCalendar = async (
+    eventTitle: string,
+    eventDesc: string,
+    startDate: Date,
+    endDate: Date,
+  ) => {
+    if (!ExpoCalendar || isWeb) return;
+    try {
+      const { status } = await ExpoCalendar.requestCalendarPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert(
+          'Calendar Permission',
+          'Calendar access is needed to add this event to your device calendar. You can enable it in Settings.',
+        );
+        return;
+      }
+
+      const calendars = await ExpoCalendar.getCalendarsAsync(
+        ExpoCalendar.EntityTypes.EVENT,
+      );
+
+      // Find a writable calendar
+      let targetCalId: string | undefined;
+
+      if (Platform.OS === 'ios') {
+        // Prefer default calendar on iOS
+        try {
+          const defaultCal = await ExpoCalendar.getDefaultCalendarAsync();
+          targetCalId = defaultCal.id;
+        } catch {
+          const writable = calendars.find(
+            (c) => c.allowsModifications && c.source?.type === 'local',
+          );
+          targetCalId = writable?.id || calendars[0]?.id;
+        }
+      } else {
+        // Android: find a writable calendar (prefer Google, then local)
+        const googleCal = calendars.find(
+          (c) =>
+            c.allowsModifications &&
+            c.source?.name?.toLowerCase().includes('google'),
+        );
+        const writableCal = calendars.find((c) => c.allowsModifications);
+        targetCalId = googleCal?.id || writableCal?.id || calendars[0]?.id;
+      }
+
+      if (!targetCalId) {
+        Alert.alert('No Calendar', 'No writable calendar found on your device.');
+        return;
+      }
+
+      await ExpoCalendar.createEventAsync(targetCalId, {
+        title: eventTitle,
+        notes: eventDesc,
+        startDate,
+        endDate,
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      });
+
+      Alert.alert(
+        'Added to Calendar',
+        Platform.OS === 'ios'
+          ? 'Event added to Apple Calendar'
+          : 'Event added to Google Calendar',
+      );
+    } catch (e) {
+      console.error('Device calendar write error:', e);
+      Alert.alert('Calendar Error', 'Could not add event to device calendar.');
+    }
   };
 
   if (loading) {
