@@ -4,7 +4,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useFocusEffect } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { eventsApi } from '../../src/api';
 import { CalendarEvent } from '../../src/types';
 import { MONTH_NAMES, DAY_NAMES } from '../../src/theme';
@@ -22,6 +22,7 @@ const C = {
 };
 
 export default function CalendarScreen() {
+  const router = useRouter();
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [events, setEvents] = useState<CalendarEvent[]>([]);
@@ -152,8 +153,13 @@ export default function CalendarScreen() {
         </View>
       )}
 
-      {/* Selected Day Info */}
-      <View style={s.selectedInfo}>
+      {/* Selected Day Info — tappable to go to Events */}
+      <TouchableOpacity
+        testID="view-events-btn"
+        style={s.selectedInfo}
+        onPress={() => router.navigate('/(tabs)/events')}
+        activeOpacity={0.7}
+      >
         <Text style={s.selectedDate}>
           {MONTH_NAMES[selMonth]} {selDay}, {selYear}
         </Text>
@@ -163,11 +169,17 @@ export default function CalendarScreen() {
             {selectedDayEvents.length} {selectedDayEvents.length === 1 ? 'event' : 'events'}
           </Text>
         </View>
-      </View>
+      </TouchableOpacity>
 
-      <Text style={s.hint}>
-        View and manage events in the Events tab
-      </Text>
+      <TouchableOpacity
+        testID="view-events-link"
+        onPress={() => router.navigate('/(tabs)/events')}
+        activeOpacity={0.6}
+      >
+        <Text style={s.hint}>
+          Tap to view and manage events
+        </Text>
+      </TouchableOpacity>
     </SafeAreaView>
   );
 }
@@ -215,7 +227,7 @@ const s = StyleSheet.create({
   },
   badgeText: { fontSize: 16, fontWeight: '600', color: C.primaryFg, marginLeft: 6 },
   hint: {
-    fontSize: 16, color: C.borderSub, textAlign: 'center',
-    marginTop: 12, fontStyle: 'italic',
+    fontSize: 16, color: C.primary, textAlign: 'center',
+    marginTop: 12, fontWeight: '500', textDecorationLine: 'underline',
   },
 });
