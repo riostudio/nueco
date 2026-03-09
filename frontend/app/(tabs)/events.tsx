@@ -273,11 +273,13 @@ export default function EventsScreen() {
       <Animated.View style={[s.fab, { width: fabWidth }]}>
         <TouchableOpacity
           testID="create-event-btn"
-          style={s.fabInner}
+          style={s.fabTouchable}
           onPress={() => router.push({ pathname: '/event-editor', params: { date: new Date().toISOString() } })}
           activeOpacity={0.8}
         >
-          <MaterialIcons name="add" size={32} color={C.primaryFg} />
+          <View style={s.fabIconContainer}>
+            <MaterialIcons name="add" size={32} color={C.primaryFg} />
+          </View>
           <Animated.Text style={[s.fabText, { opacity: textOpacity }]}>
             New Event
           </Animated.Text>
@@ -341,9 +343,12 @@ const s = StyleSheet.create({
     height: 56, overflow: 'hidden',
     elevation: 4,
   },
-  fabInner: {
+  fabTouchable: {
     flex: 1, flexDirection: 'row', alignItems: 'center',
-    justifyContent: 'center',
   },
-  fabText: { fontSize: 16, fontWeight: '600', color: C.primaryFg, marginLeft: 8 },
+  fabIconContainer: {
+    width: 56, height: 56, 
+    justifyContent: 'center', alignItems: 'center',
+  },
+  fabText: { fontSize: 16, fontWeight: '600', color: C.primaryFg, marginRight: 16 },
 });
