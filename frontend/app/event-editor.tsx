@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, createElement } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   ScrollView, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
@@ -6,7 +6,6 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { eventsApi, notesApi } from '../src/api';
 import { MONTH_NAMES } from '../src/theme';
 
@@ -25,16 +24,123 @@ const C = {
 
 const isWeb = Platform.OS === 'web';
 
-function formatDate(d: Date): string {
+function pad2(n: number): string {
+  return n.toString().padStart(2, '0');
+}
+
+function toDateString(d: Date): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function toTimeString(d: Date): string {
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+function formatDisplayDate(d: Date): string {
   return `${MONTH_NAMES[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
 }
 
-function formatTime(d: Date): string {
+function formatDisplayTime(d: Date): string {
   const h = d.getHours();
   const m = d.getMinutes();
   const ampm = h >= 12 ? 'PM' : 'AM';
   const hour = h % 12 || 12;
-  return `${hour}:${m.toString().padStart(2, '0')} ${ampm}`;
+  return `${hour}:${pad2(m)} ${ampm}`;
+}
+
+/* ---- Native HTML inputs for web (triggers OS pickers on mobile browsers) ---- */
+
+function NativeDateInput({
+  value,
+  onChange,
+  testID,
+}: {
+  value: Date;
+  onChange: (d: Date) => void;
+  testID: string;
+}) {
+  if (!isWeb) return null;
+
+  return createElement('input', {
+    type: 'date',
+    value: toDateString(value),
+    'data-testid': testID,
+    onChange: (e: any) => {
+      const parts = e.target.value.split('-');
+      if (parts.length === 3) {
+        onChange(new Date(+parts[0], +parts[1] - 1, +parts[2]));
+      }
+    },
+    style: {
+      width: '100%',
+      height: 60,
+      fontSize: 22,
+      fontWeight: '600',
+      padding: '0 16px',
+      border: '2px solid #78909C',
+      borderRadius: 12,
+      backgroundColor: '#FFFFFF',
+      color: '#121212',
+      fontFamily: 'inherit',
+      boxSizing: 'border-box',
+      WebkitAppearance: 'none',
+      appearance: 'none',
+    },
+  });
+}
+
+function NativeTimeInput({
+  value,
+  onChange,
+  testID,
+}: {
+  value: Date;
+  onChange: (d: Date) => void;
+  testID: string;
+}) {
+  if (!isWeb) return null;
+
+  return createElement('input', {
+    type: 'time',
+    value: toTimeString(value),
+    'data-testid': testID,
+    step: 300, // 5 minute intervals
+    onChange: (e: any) => {
+      const parts = e.target.value.split(':');
+      if (parts.length >= 2) {
+        const newDate = new Date(value);
+        newDate.setHours(+parts[0], +parts[1], 0, 0);
+        onChange(newDate);
+      }
+    },
+    style: {
+      width: '100%',
+      height: 60,
+      fontSize: 22,
+      fontWeight: '600',
+      padding: '0 16px',
+      border: '2px solid #78909C',
+      borderRadius: 12,
+      backgroundColor: '#FFFFFF',
+      color: '#121212',
+      fontFamily: 'inherit',
+      boxSizing: 'border-box',
+      WebkitAppearance: 'none',
+      appearance: 'none',
+    },
+  });
+}
+
+/* ---- Native DateTimePicker for Expo Go (iOS/Android) ---- */
+
+let DateTimePicker: any = null;
+if (!isWeb) {
+  try {
+    DateTimePicker =
+      require('@react-native-community/datetimepicker').default;
+  } catch (e) {
+    // Fallback silently if not available
+  }
 }
 
 export default function EventEditorScreen() {
@@ -65,16 +171,10 @@ export default function EventEditorScreen() {
   const [loading, setLoading] = useState(isEditing);
   const [saving, setSaving] = useState(false);
 
-  // Native picker visibility
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const [showStartPicker, setShowStartPicker] = useState(false);
-  const [showEndPicker, setShowEndPicker] = useState(false);
-
-  // Web fallback state
-  const [webStartHour, setWebStartHour] = useState(9);
-  const [webStartMin, setWebStartMin] = useState(0);
-  const [webEndHour, setWebEndHour] = useState(10);
-  const [webEndMin, setWebEndMin] = useState(0);
+  // Android-only: pickers need show/hide toggle
+  const [showAndroidDate, setShowAndroidDate] = useState(false);
+  const [showAndroidStart, setShowAndroidStart] = useState(false);
+  const [showAndroidEnd, setShowAndroidEnd] = useState(false);
 
   useEffect(() => {
     if (isEditing && params.eventId) {
@@ -92,62 +192,11 @@ export default function EventEditorScreen() {
       setDate(start);
       setStartTime(start);
       setEndTime(end);
-      setWebStartHour(start.getHours());
-      setWebStartMin(start.getMinutes());
-      setWebEndHour(end.getHours());
-      setWebEndMin(end.getMinutes());
     } catch (e) {
       console.error('Failed to load event:', e);
     } finally {
       setLoading(false);
     }
-  };
-
-  const onDateChange = (_event: DateTimePickerEvent, selectedDate?: Date) => {
-    setShowDatePicker(false);
-    if (selectedDate) setDate(selectedDate);
-  };
-
-  const onStartTimeChange = (_event: DateTimePickerEvent, selectedDate?: Date) => {
-    setShowStartPicker(false);
-    if (selectedDate) {
-      setStartTime(selectedDate);
-      setWebStartHour(selectedDate.getHours());
-      setWebStartMin(selectedDate.getMinutes());
-    }
-  };
-
-  const onEndTimeChange = (_event: DateTimePickerEvent, selectedDate?: Date) => {
-    setShowEndPicker(false);
-    if (selectedDate) {
-      setEndTime(selectedDate);
-      setWebEndHour(selectedDate.getHours());
-      setWebEndMin(selectedDate.getMinutes());
-    }
-  };
-
-  // Web fallback helpers
-  const adjustWebDate = (days: number) => {
-    const newDate = new Date(date);
-    newDate.setDate(newDate.getDate() + days);
-    setDate(newDate);
-  };
-
-  const adjustWebTime = (
-    setter: (v: number) => void,
-    current: number,
-    delta: number,
-    max: number,
-  ) => {
-    let v = current + delta;
-    if (v < 0) v = max;
-    if (v > max) v = 0;
-    setter(v);
-  };
-
-  const webFormatHour = (h: number) => {
-    const ampm = h >= 12 ? 'PM' : 'AM';
-    return `${h % 12 || 12} ${ampm}`;
   };
 
   const handleSave = async () => {
@@ -159,15 +208,9 @@ export default function EventEditorScreen() {
     setSaving(true);
     try {
       const st = new Date(date);
+      st.setHours(startTime.getHours(), startTime.getMinutes(), 0, 0);
       const et = new Date(date);
-
-      if (isWeb) {
-        st.setHours(webStartHour, webStartMin, 0, 0);
-        et.setHours(webEndHour, webEndMin, 0, 0);
-      } else {
-        st.setHours(startTime.getHours(), startTime.getMinutes(), 0, 0);
-        et.setHours(endTime.getHours(), endTime.getMinutes(), 0, 0);
-      }
+      et.setHours(endTime.getHours(), endTime.getMinutes(), 0, 0);
 
       if (et <= st) {
         Alert.alert('Invalid Time', 'End time must be after start time.');
@@ -192,7 +235,9 @@ export default function EventEditorScreen() {
         const created = await eventsApi.create(eventData);
         if (params.noteId && params.noteId !== 'new') {
           try {
-            await notesApi.update(params.noteId, { linked_event_id: created.id });
+            await notesApi.update(params.noteId, {
+              linked_event_id: created.id,
+            });
           } catch (e) {
             console.error('Failed to link event to note:', e);
           }
@@ -236,6 +281,9 @@ export default function EventEditorScreen() {
     );
   }
 
+  const isIOS = Platform.OS === 'ios';
+  const isAndroid = Platform.OS === 'android';
+
   return (
     <SafeAreaView style={s.container}>
       <KeyboardAvoidingView
@@ -274,117 +322,186 @@ export default function EventEditorScreen() {
             onChangeText={setTitle}
           />
 
-          {/* ---- Date ---- */}
+          {/* ======== DATE ======== */}
           <Text style={s.label}>Date</Text>
-          {isWeb ? (
-            <View style={s.webRow}>
-              <TouchableOpacity
-                testID="date-prev-btn"
-                style={s.webAdjBtn}
-                onPress={() => adjustWebDate(-1)}
-              >
-                <MaterialIcons name="chevron-left" size={32} color={C.text} />
-              </TouchableOpacity>
-              <Text style={s.webValue}>{formatDate(date)}</Text>
-              <TouchableOpacity
-                testID="date-next-btn"
-                style={s.webAdjBtn}
-                onPress={() => adjustWebDate(1)}
-              >
-                <MaterialIcons name="chevron-right" size={32} color={C.text} />
-              </TouchableOpacity>
+
+          {isWeb && (
+            <NativeDateInput
+              testID="native-date-input"
+              value={date}
+              onChange={setDate}
+            />
+          )}
+
+          {isIOS && DateTimePicker && (
+            <View style={s.pickerContainer}>
+              <DateTimePicker
+                testID="ios-date-picker"
+                value={date}
+                mode="date"
+                display="spinner"
+                onChange={(_e: any, d?: Date) => d && setDate(d)}
+                style={{ height: 150 }}
+                textColor={C.text}
+              />
             </View>
-          ) : (
+          )}
+
+          {isAndroid && (
             <>
               <TouchableOpacity
-                testID="date-picker-btn"
+                testID="android-date-btn"
                 style={s.pickerBtn}
-                onPress={() => setShowDatePicker(true)}
-                activeOpacity={0.7}
+                onPress={() => setShowAndroidDate(true)}
               >
-                <MaterialIcons name="calendar-today" size={24} color={C.secondary} />
-                <Text style={s.pickerBtnText}>{formatDate(date)}</Text>
-                <MaterialIcons name="arrow-drop-down" size={28} color={C.borderSub} />
+                <MaterialIcons
+                  name="calendar-today"
+                  size={24}
+                  color={C.secondary}
+                />
+                <Text style={s.pickerBtnText}>{formatDisplayDate(date)}</Text>
+                <MaterialIcons
+                  name="arrow-drop-down"
+                  size={28}
+                  color={C.borderSub}
+                />
               </TouchableOpacity>
-              {showDatePicker && (
+              {showAndroidDate && DateTimePicker && (
                 <DateTimePicker
-                  testID="date-picker"
+                  testID="android-date-picker"
                   value={date}
                   mode="date"
-                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                  onChange={onDateChange}
+                  display="default"
+                  onChange={(_e: any, d?: Date) => {
+                    setShowAndroidDate(false);
+                    if (d) setDate(d);
+                  }}
                 />
               )}
             </>
           )}
 
-          {/* ---- Start Time ---- */}
+          {/* ======== START TIME ======== */}
           <Text style={s.label}>Start Time</Text>
-          {isWeb ? (
-            <WebTimePicker
-              testPrefix="start"
-              hour={webStartHour}
-              minute={webStartMin}
-              onHourChange={setWebStartHour}
-              onMinuteChange={setWebStartMin}
-              formatHour={webFormatHour}
+
+          {isWeb && (
+            <NativeTimeInput
+              testID="native-start-time"
+              value={startTime}
+              onChange={setStartTime}
             />
-          ) : (
+          )}
+
+          {isIOS && DateTimePicker && (
+            <View style={s.pickerContainer}>
+              <DateTimePicker
+                testID="ios-start-picker"
+                value={startTime}
+                mode="time"
+                display="spinner"
+                onChange={(_e: any, d?: Date) => d && setStartTime(d)}
+                minuteInterval={5}
+                style={{ height: 150 }}
+                textColor={C.text}
+              />
+            </View>
+          )}
+
+          {isAndroid && (
             <>
               <TouchableOpacity
-                testID="start-time-btn"
+                testID="android-start-btn"
                 style={s.pickerBtn}
-                onPress={() => setShowStartPicker(true)}
-                activeOpacity={0.7}
+                onPress={() => setShowAndroidStart(true)}
               >
-                <MaterialIcons name="access-time" size={24} color={C.secondary} />
-                <Text style={s.pickerBtnText}>{formatTime(startTime)}</Text>
-                <MaterialIcons name="arrow-drop-down" size={28} color={C.borderSub} />
+                <MaterialIcons
+                  name="access-time"
+                  size={24}
+                  color={C.secondary}
+                />
+                <Text style={s.pickerBtnText}>
+                  {formatDisplayTime(startTime)}
+                </Text>
+                <MaterialIcons
+                  name="arrow-drop-down"
+                  size={28}
+                  color={C.borderSub}
+                />
               </TouchableOpacity>
-              {showStartPicker && (
+              {showAndroidStart && DateTimePicker && (
                 <DateTimePicker
-                  testID="start-time-picker"
+                  testID="android-start-picker"
                   value={startTime}
                   mode="time"
-                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                  onChange={onStartTimeChange}
+                  display="default"
                   minuteInterval={5}
+                  onChange={(_e: any, d?: Date) => {
+                    setShowAndroidStart(false);
+                    if (d) setStartTime(d);
+                  }}
                 />
               )}
             </>
           )}
 
-          {/* ---- End Time ---- */}
+          {/* ======== END TIME ======== */}
           <Text style={s.label}>End Time</Text>
-          {isWeb ? (
-            <WebTimePicker
-              testPrefix="end"
-              hour={webEndHour}
-              minute={webEndMin}
-              onHourChange={setWebEndHour}
-              onMinuteChange={setWebEndMin}
-              formatHour={webFormatHour}
+
+          {isWeb && (
+            <NativeTimeInput
+              testID="native-end-time"
+              value={endTime}
+              onChange={setEndTime}
             />
-          ) : (
+          )}
+
+          {isIOS && DateTimePicker && (
+            <View style={s.pickerContainer}>
+              <DateTimePicker
+                testID="ios-end-picker"
+                value={endTime}
+                mode="time"
+                display="spinner"
+                onChange={(_e: any, d?: Date) => d && setEndTime(d)}
+                minuteInterval={5}
+                style={{ height: 150 }}
+                textColor={C.text}
+              />
+            </View>
+          )}
+
+          {isAndroid && (
             <>
               <TouchableOpacity
-                testID="end-time-btn"
+                testID="android-end-btn"
                 style={s.pickerBtn}
-                onPress={() => setShowEndPicker(true)}
-                activeOpacity={0.7}
+                onPress={() => setShowAndroidEnd(true)}
               >
-                <MaterialIcons name="access-time" size={24} color={C.secondary} />
-                <Text style={s.pickerBtnText}>{formatTime(endTime)}</Text>
-                <MaterialIcons name="arrow-drop-down" size={28} color={C.borderSub} />
+                <MaterialIcons
+                  name="access-time"
+                  size={24}
+                  color={C.secondary}
+                />
+                <Text style={s.pickerBtnText}>
+                  {formatDisplayTime(endTime)}
+                </Text>
+                <MaterialIcons
+                  name="arrow-drop-down"
+                  size={28}
+                  color={C.borderSub}
+                />
               </TouchableOpacity>
-              {showEndPicker && (
+              {showAndroidEnd && DateTimePicker && (
                 <DateTimePicker
-                  testID="end-time-picker"
+                  testID="android-end-picker"
                   value={endTime}
                   mode="time"
-                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                  onChange={onEndTimeChange}
+                  display="default"
                   minuteInterval={5}
+                  onChange={(_e: any, d?: Date) => {
+                    setShowAndroidEnd(false);
+                    if (d) setEndTime(d);
+                  }}
                 />
               )}
             </>
@@ -451,60 +568,6 @@ export default function EventEditorScreen() {
   );
 }
 
-/* ---- Web-only time picker fallback ---- */
-function WebTimePicker({
-  testPrefix,
-  hour,
-  minute,
-  onHourChange,
-  onMinuteChange,
-  formatHour,
-}: {
-  testPrefix: string;
-  hour: number;
-  minute: number;
-  onHourChange: (h: number) => void;
-  onMinuteChange: (m: number) => void;
-  formatHour: (h: number) => string;
-}) {
-  const adjH = (d: number) => {
-    let v = hour + d;
-    if (v < 0) v = 23;
-    if (v > 23) v = 0;
-    onHourChange(v);
-  };
-  const adjM = (d: number) => {
-    let v = minute + d;
-    if (v < 0) v = 45;
-    if (v > 45) v = 0;
-    onMinuteChange(v);
-  };
-
-  return (
-    <View style={s.webTimeRow}>
-      <View style={s.webTimeUnit}>
-        <TouchableOpacity testID={`${testPrefix}-hour-up`} style={s.webTimeBtn} onPress={() => adjH(1)}>
-          <MaterialIcons name="keyboard-arrow-up" size={28} color={C.text} />
-        </TouchableOpacity>
-        <Text style={s.webTimeVal}>{formatHour(hour)}</Text>
-        <TouchableOpacity testID={`${testPrefix}-hour-down`} style={s.webTimeBtn} onPress={() => adjH(-1)}>
-          <MaterialIcons name="keyboard-arrow-down" size={28} color={C.text} />
-        </TouchableOpacity>
-      </View>
-      <Text style={s.webTimeSep}>:</Text>
-      <View style={s.webTimeUnit}>
-        <TouchableOpacity testID={`${testPrefix}-min-up`} style={s.webTimeBtn} onPress={() => adjM(15)}>
-          <MaterialIcons name="keyboard-arrow-up" size={28} color={C.text} />
-        </TouchableOpacity>
-        <Text style={s.webTimeVal}>{minute.toString().padStart(2, '0')}</Text>
-        <TouchableOpacity testID={`${testPrefix}-min-down`} style={s.webTimeBtn} onPress={() => adjM(-15)}>
-          <MaterialIcons name="keyboard-arrow-down" size={28} color={C.text} />
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-}
-
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: C.bg },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
@@ -545,7 +608,16 @@ const s = StyleSheet.create({
     backgroundColor: C.surface,
   },
 
-  /* ---- Native picker button ---- */
+  /* Native picker inline container (iOS) */
+  pickerContainer: {
+    backgroundColor: C.surface,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: C.borderSub,
+    overflow: 'hidden',
+  },
+
+  /* Android button to open native dialog */
   pickerBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -562,57 +634,6 @@ const s = StyleSheet.create({
     fontWeight: '600',
     color: C.text,
     marginLeft: 12,
-  },
-
-  /* ---- Web fallback date row ---- */
-  webRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: C.surface,
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: C.borderSub,
-    paddingVertical: 8,
-  },
-  webAdjBtn: {
-    width: 56,
-    height: 56,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  webValue: { fontSize: 22, fontWeight: '600', color: C.text },
-
-  /* ---- Web fallback time picker ---- */
-  webTimeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: C.surface,
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: C.borderSub,
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-  },
-  webTimeUnit: { alignItems: 'center', flex: 1 },
-  webTimeBtn: {
-    width: 56,
-    height: 44,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  webTimeVal: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: C.text,
-    paddingVertical: 4,
-  },
-  webTimeSep: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: C.text,
-    marginHorizontal: 8,
   },
 
   descInput: {
