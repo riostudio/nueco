@@ -2,6 +2,7 @@ import React, { useState, useEffect, createElement } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   ScrollView, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
+  Switch,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -607,6 +608,35 @@ export default function EventEditorScreen() {
             textAlignVertical="top"
           />
 
+          {/* Add to Device Calendar Toggle - Only show on native platforms */}
+          {!isWeb && (
+            <View style={s.calendarToggle}>
+              <View style={s.calendarToggleLeft}>
+                <MaterialIcons 
+                  name={Platform.OS === 'ios' ? 'event' : 'event-available'} 
+                  size={28} 
+                  color={C.secondary} 
+                />
+                <View style={s.calendarToggleTextContainer}>
+                  <Text style={s.calendarToggleTitle}>
+                    {Platform.OS === 'ios' ? 'Add to Apple Calendar' : 'Add to Google Calendar'}
+                  </Text>
+                  <Text style={s.calendarToggleSubtitle}>
+                    Sync this event to your device calendar
+                  </Text>
+                </View>
+              </View>
+              <Switch
+                testID="device-calendar-toggle"
+                value={addToDeviceCal}
+                onValueChange={setAddToDeviceCal}
+                trackColor={{ false: C.borderSub, true: C.secondary + '80' }}
+                thumbColor={addToDeviceCal ? C.secondary : '#f4f3f4'}
+                ios_backgroundColor={C.borderSub}
+              />
+            </View>
+          )}
+
           {/* Linked Note Indicator */}
           {params.noteId && params.noteId !== 'new' && (
             <View style={s.linkedNote}>
@@ -779,5 +809,35 @@ const s = StyleSheet.create({
     fontWeight: '600',
     color: C.error,
     marginLeft: 8,
+  },
+  calendarToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: C.surface,
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: C.secondary + '40',
+    padding: 16,
+    marginTop: 24,
+  },
+  calendarToggleLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  calendarToggleTextContainer: {
+    marginLeft: 12,
+    flex: 1,
+  },
+  calendarToggleTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: C.text,
+  },
+  calendarToggleSubtitle: {
+    fontSize: 14,
+    color: C.textSec,
+    marginTop: 2,
   },
 });
