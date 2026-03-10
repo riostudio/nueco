@@ -5,25 +5,25 @@ import React from 'react';
 
 const C = {
   primary: '#D84315',
-  textSecondary: '#37474F',
+  inactiveTab: '#757575', // Accessible grey (WCAG AA compliant)
   surface: '#FFFFFF',
   border: '#121212',
 };
 
 function NotesIcon({ color }: { color: string }) {
-  return <MaterialIcons name="description" size={28} color={color} />;
+  return <MaterialIcons name="description" size={22} color={color} />;
 }
 
 function CalendarIcon({ color }: { color: string }) {
-  return <MaterialIcons name="calendar-today" size={28} color={color} />;
+  return <MaterialIcons name="calendar-today" size={22} color={color} />;
 }
 
 function EventsIcon({ color }: { color: string }) {
-  return <MaterialIcons name="event-note" size={28} color={color} />;
+  return <MaterialIcons name="event-note" size={22} color={color} />;
 }
 
 function SettingsIcon({ color }: { color: string }) {
-  return <MaterialIcons name="settings" size={28} color={color} />;
+  return <MaterialIcons name="settings" size={22} color={color} />;
 }
 
 export default function TabLayout() {
@@ -33,7 +33,7 @@ export default function TabLayout() {
         headerShown: false,
         tabBarStyle: styles.tabBar,
         tabBarActiveTintColor: C.primary,
-        tabBarInactiveTintColor: C.textSecondary,
+        tabBarInactiveTintColor: C.inactiveTab,
         tabBarLabelStyle: styles.tabLabel,
       }}
     >
@@ -71,15 +71,15 @@ export default function TabLayout() {
 
 const styles = StyleSheet.create({
   tabBar: {
-    height: 88,
-    paddingTop: 8,
-    paddingBottom: 20,
+    height: 80,
+    paddingTop: 6,
+    paddingBottom: 16,
     backgroundColor: C.surface,
-    borderTopWidth: 2,
-    borderTopColor: C.border,
+    borderTopWidth: 1,
+    borderTopColor: '#E0E0E0',
   },
   tabLabel: {
-    fontSize: 16,
+    fontSize: 12,
     fontWeight: '600',
     marginTop: 2,
   },
