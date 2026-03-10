@@ -46,6 +46,7 @@ export default function EditorScreen() {
   const [showTagPicker, setShowTagPicker] = useState(false);
   const [newTagName, setNewTagName] = useState('');
   const [selectedTagColor, setSelectedTagColor] = useState(TAG_COLORS[0].value);
+  const [isContentFocused, setIsContentFocused] = useState(false);
 
   const [selection, setSelection] = useState({ start: 0, end: 0 });
 
@@ -380,22 +381,6 @@ export default function EditorScreen() {
             )}
           </View>
 
-          {/* Format Toolbar */}
-          <View style={s.formatBar}>
-            <TouchableOpacity testID="fmt-bold" style={s.fmtBtn} onPress={() => insertFormatting('bold')}>
-              <Text style={s.fmtBold}>B</Text>
-              <Text style={s.fmtLabel}>Bold</Text>
-            </TouchableOpacity>
-            <TouchableOpacity testID="fmt-italic" style={s.fmtBtn} onPress={() => insertFormatting('italic')}>
-              <Text style={s.fmtItalic}>I</Text>
-              <Text style={s.fmtLabel}>Italic</Text>
-            </TouchableOpacity>
-            <TouchableOpacity testID="fmt-bullet" style={s.fmtBtn} onPress={() => insertFormatting('bullet')}>
-              <MaterialIcons name="format-list-bulleted" size={24} color={C.text} />
-              <Text style={s.fmtLabel}>List</Text>
-            </TouchableOpacity>
-          </View>
-
           {/* Content */}
           <TextInput
             testID="note-content-input"
@@ -407,6 +392,8 @@ export default function EditorScreen() {
             multiline
             textAlignVertical="top"
             onSelectionChange={(e) => setSelection(e.nativeEvent.selection)}
+            onFocus={() => setIsContentFocused(true)}
+            onBlur={() => setIsContentFocused(false)}
           />
 
           {/* Calendar Link */}
@@ -433,30 +420,51 @@ export default function EditorScreen() {
           <View style={{ height: 120 }} />
         </ScrollView>
 
-        {/* Voice Input Bar */}
-        <View style={s.voiceBar}>
-          {isTranscribing ? (
-            <View style={s.transcribing}>
-              <ActivityIndicator size="small" color={C.primary} />
-              <Text style={s.transcribingText}>Converting speech to text...</Text>
+        {/* Voice Input Bar + Format Toolbar */}
+        <View style={s.bottomBar}>
+          {/* Format Toolbar - only shows when content input is focused */}
+          {isContentFocused && (
+            <View style={s.formatBar}>
+              <TouchableOpacity testID="fmt-bold" style={s.fmtBtn} onPress={() => insertFormatting('bold')}>
+                <Text style={s.fmtBold}>B</Text>
+                <Text style={s.fmtLabel}>Bold</Text>
+              </TouchableOpacity>
+              <TouchableOpacity testID="fmt-italic" style={s.fmtBtn} onPress={() => insertFormatting('italic')}>
+                <Text style={s.fmtItalic}>I</Text>
+                <Text style={s.fmtLabel}>Italic</Text>
+              </TouchableOpacity>
+              <TouchableOpacity testID="fmt-bullet" style={s.fmtBtn} onPress={() => insertFormatting('bullet')}>
+                <MaterialIcons name="format-list-bulleted" size={22} color={C.text} />
+                <Text style={s.fmtLabel}>List</Text>
+              </TouchableOpacity>
             </View>
-          ) : (
-            <TouchableOpacity
-              testID="voice-input-btn"
-              style={[s.voiceBtn, isRecording && s.voiceBtnRec]}
-              onPress={isRecording ? stopRecording : startRecording}
-              activeOpacity={0.7}
-            >
-              <MaterialIcons
-                name={isRecording ? 'stop' : 'mic'}
-                size={28}
-                color={isRecording ? C.primaryFg : C.primary}
-              />
-              <Text style={[s.voiceBtnText, isRecording && s.voiceBtnTextRec]}>
-                {isRecording ? 'Stop Recording' : 'Voice Input'}
-              </Text>
-            </TouchableOpacity>
           )}
+          
+          {/* Voice Input */}
+          <View style={s.voiceBar}>
+            {isTranscribing ? (
+              <View style={s.transcribing}>
+                <ActivityIndicator size="small" color={C.primary} />
+                <Text style={s.transcribingText}>Converting speech to text...</Text>
+              </View>
+            ) : (
+              <TouchableOpacity
+                testID="voice-input-btn"
+                style={[s.voiceBtn, isRecording && s.voiceBtnRec]}
+                onPress={isRecording ? stopRecording : startRecording}
+                activeOpacity={0.7}
+              >
+                <MaterialIcons
+                  name={isRecording ? 'stop' : 'mic'}
+                  size={28}
+                  color={isRecording ? C.primaryFg : C.primary}
+                />
+                <Text style={[s.voiceBtnText, isRecording && s.voiceBtnTextRec]}>
+                  {isRecording ? 'Stop Recording' : 'Voice Input'}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -517,19 +525,6 @@ const s = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center',
   },
   confirmTagText: { fontSize: 18, fontWeight: '600', color: C.primaryFg },
-  formatBar: {
-    flexDirection: 'row', backgroundColor: C.surface, borderRadius: 12,
-    borderWidth: 2, borderColor: C.borderSub, marginBottom: 16,
-    overflow: 'hidden',
-  },
-  fmtBtn: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    paddingVertical: 12, gap: 6,
-    borderRightWidth: 1, borderRightColor: C.borderSub + '40',
-  },
-  fmtBold: { fontSize: 20, fontWeight: '900', color: C.text },
-  fmtItalic: { fontSize: 20, fontStyle: 'italic', fontWeight: '600', color: C.text },
-  fmtLabel: { fontSize: 16, color: C.textSec },
   contentInput: {
     fontSize: 20, color: C.text, lineHeight: 30, minHeight: 200,
     textAlignVertical: 'top',
@@ -540,9 +535,24 @@ const s = StyleSheet.create({
     borderWidth: 2, borderColor: C.borderSub, marginTop: 16,
   },
   calBtnText: { flex: 1, fontSize: 18, color: C.secondary, marginLeft: 12, fontWeight: '500' },
+  bottomBar: {
+    borderTopWidth: 1, borderTopColor: C.borderSub + '40',
+    backgroundColor: C.bg,
+  },
+  formatBar: {
+    flexDirection: 'row', backgroundColor: C.surface,
+    borderBottomWidth: 1, borderBottomColor: C.borderSub + '40',
+  },
+  fmtBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    paddingVertical: 10, gap: 4,
+    borderRightWidth: 1, borderRightColor: C.borderSub + '20',
+  },
+  fmtBold: { fontSize: 18, fontWeight: '900', color: C.text },
+  fmtItalic: { fontSize: 18, fontStyle: 'italic', fontWeight: '600', color: C.text },
+  fmtLabel: { fontSize: 14, color: C.textSec },
   voiceBar: {
     paddingHorizontal: 24, paddingVertical: 12,
-    borderTopWidth: 1, borderTopColor: C.borderSub + '40',
     backgroundColor: C.bg,
   },
   transcribing: {
