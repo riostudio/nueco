@@ -49,7 +49,6 @@ export default function EditorScreen() {
   const [newTagName, setNewTagName] = useState('');
   const [selectedTagColor, setSelectedTagColor] = useState(TAG_COLORS[0].value);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
-  const [isPreviewMode, setIsPreviewMode] = useState(false);
 
   const [selection, setSelection] = useState({ start: 0, end: 0 });
   const contentInputRef = useRef<TextInput>(null);
@@ -395,61 +394,31 @@ export default function EditorScreen() {
             )}
           </View>
 
-          {/* Content with Edit/Preview Toggle */}
-          <View style={s.contentHeader}>
-            <TouchableOpacity
-              style={[s.modeTab, !isPreviewMode && s.modeTabActive]}
-              onPress={() => setIsPreviewMode(false)}
-            >
-              <MaterialIcons name="edit" size={18} color={!isPreviewMode ? C.primaryFg : C.textSec} />
-              <Text style={[s.modeTabText, !isPreviewMode && s.modeTabTextActive]}>Edit</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[s.modeTab, isPreviewMode && s.modeTabActive]}
-              onPress={() => setIsPreviewMode(true)}
-            >
-              <MaterialIcons name="visibility" size={18} color={isPreviewMode ? C.primaryFg : C.textSec} />
-              <Text style={[s.modeTabText, isPreviewMode && s.modeTabTextActive]}>Preview</Text>
-            </TouchableOpacity>
-          </View>
-
-          {isPreviewMode ? (
-            <View style={s.previewContainer}>
-              {content ? (
+          {/* Content - Visible Input with Live Markdown Preview */}
+          <View style={s.contentContainer}>
+            <TextInput
+              ref={contentInputRef}
+              testID="note-content-input"
+              style={s.contentInput}
+              placeholder="Tap here to start writing..."
+              placeholderTextColor={C.borderSub}
+              value={content}
+              onChangeText={handleContentChange}
+              multiline
+              textAlignVertical="top"
+              onSelectionChange={(e) => setSelection(e.nativeEvent.selection)}
+            />
+            
+            {/* Live Formatted Preview - shown below input when there's formatted content */}
+            {content && (content.includes('**') || content.includes('*') || content.includes('- ')) && (
+              <View style={s.previewSection}>
+                <Text style={s.previewLabel}>Formatted Preview:</Text>
                 <Markdown style={markdownStyles}>
                   {content}
                 </Markdown>
-              ) : (
-                <Text style={s.previewPlaceholder}>Nothing to preview yet...</Text>
-              )}
-            </View>
-          ) : (
-            <>
-              {/* Text Input */}
-              <TextInput
-                ref={contentInputRef}
-                testID="note-content-input"
-                style={s.contentInput}
-                placeholder="Start writing your note..."
-                placeholderTextColor={C.borderSub}
-                value={content}
-                onChangeText={handleContentChange}
-                multiline
-                textAlignVertical="top"
-                onSelectionChange={(e) => setSelection(e.nativeEvent.selection)}
-              />
-              
-              {/* Live Preview - shows formatted text below editor */}
-              {content && content.includes('*') && (
-                <View style={s.livePreview}>
-                  <Text style={s.livePreviewLabel}>Preview:</Text>
-                  <Markdown style={markdownStyles}>
-                    {content}
-                  </Markdown>
-                </View>
-              )}
-            </>
-          )}
+              </View>
+            )}
+          </View>
 
           {/* Calendar Link */}
           <TouchableOpacity
@@ -582,9 +551,22 @@ const s = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center',
   },
   confirmTagText: { fontSize: 18, fontWeight: '600', color: C.primaryFg },
+  contentContainer: {
+    flex: 1,
+    marginBottom: 16,
+  },
   contentInput: {
-    fontSize: 20, color: C.text, lineHeight: 30, minHeight: 200,
-    textAlignVertical: 'top',
+    fontSize: 18, color: C.text, lineHeight: 28, minHeight: 120,
+    textAlignVertical: 'top', backgroundColor: C.surface,
+    borderRadius: 12, padding: 16, borderWidth: 2, borderColor: C.borderSub,
+  },
+  previewSection: {
+    marginTop: 12, padding: 12, backgroundColor: C.surface,
+    borderRadius: 10, borderWidth: 1, borderColor: C.secondary + '40',
+  },
+  previewLabel: {
+    fontSize: 12, fontWeight: '700', color: C.secondary, marginBottom: 8,
+    textTransform: 'uppercase', letterSpacing: 1,
   },
   calBtn: {
     flexDirection: 'row', alignItems: 'center',
@@ -625,30 +607,6 @@ const s = StyleSheet.create({
   voiceBtnRec: { backgroundColor: C.error, borderColor: C.error },
   voiceBtnText: { fontSize: 20, fontWeight: '600', color: C.primary, marginLeft: 8 },
   voiceBtnTextRec: { color: C.primaryFg },
-  contentHeader: {
-    flexDirection: 'row', marginBottom: 12, backgroundColor: C.surface,
-    borderRadius: 10, overflow: 'hidden', borderWidth: 1.5, borderColor: C.borderSub,
-  },
-  modeTab: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    paddingVertical: 10, gap: 6,
-  },
-  modeTabActive: { backgroundColor: C.primary },
-  modeTabText: { fontSize: 16, fontWeight: '600', color: C.textSec },
-  modeTabTextActive: { color: C.primaryFg },
-  previewContainer: {
-    backgroundColor: C.surface, borderRadius: 12, padding: 16,
-    borderWidth: 2, borderColor: C.borderSub, minHeight: 200,
-  },
-  previewPlaceholder: { fontSize: 18, color: C.borderSub, fontStyle: 'italic' },
-  livePreview: {
-    marginTop: 16, padding: 12, backgroundColor: C.surface,
-    borderRadius: 10, borderWidth: 1, borderColor: C.secondary + '40',
-  },
-  livePreviewLabel: {
-    fontSize: 12, fontWeight: '700', color: C.secondary, marginBottom: 8,
-    textTransform: 'uppercase', letterSpacing: 1,
-  },
 });
 
 // Markdown styles for rendering formatted text
