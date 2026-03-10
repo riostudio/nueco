@@ -172,16 +172,6 @@ export default function CalendarScreen() {
               </Text>
             </View>
           </TouchableOpacity>
-
-          <TouchableOpacity
-            testID="view-events-link"
-            onPress={() => router.navigate('/(tabs)/events')}
-            activeOpacity={0.6}
-          >
-            <Text style={s.eventCount}>
-              {dayEventCount} event{dayEventCount !== 1 ? 's' : ''}
-            </Text>
-          </TouchableOpacity>
         </>
       )}
 
