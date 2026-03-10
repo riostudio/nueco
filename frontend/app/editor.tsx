@@ -646,13 +646,11 @@ const s = StyleSheet.create({
   },
   hiddenInput: {
     position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+    top: -9999,
+    left: -9999,
+    width: 1,
+    height: 1,
     opacity: 0,
-    fontSize: 18,
-    padding: 16,
   },
   formattedBox: {
     minHeight: 150,
@@ -661,6 +659,7 @@ const s = StyleSheet.create({
     padding: 16,
     borderWidth: 2,
     borderColor: C.borderSub,
+    zIndex: 1,
   },
   placeholderText: {
     fontSize: 18,
