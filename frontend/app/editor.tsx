@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   ScrollView, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
-  Keyboard,
+  Keyboard, Share,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -198,6 +198,44 @@ export default function EditorScreen() {
     setIsItalicActive(!isItalicActive);
   };
 
+  // Convert markdown to plain text for sharing
+  const convertMarkdownToPlainText = (markdown: string): string => {
+    return markdown
+      .replace(/\*\*\*(.*?)\*\*\*/g, '$1')  // Bold+Italic
+      .replace(/\*\*(.*?)\*\*/g, '$1')       // Bold
+      .replace(/\*(.*?)\*/g, '$1')           // Italic
+      .replace(/^- /gm, '• ')                // Bullet points
+      .replace(/^#{1,6}\s/gm, '');           // Headers
+  };
+
+  const handleShare = async () => {
+    if (!title && !content) {
+      Alert.alert('Nothing to Share', 'Please add a title or content to your note first.');
+      return;
+    }
+
+    const plainContent = convertMarkdownToPlainText(content);
+    const shareText = title 
+      ? `${title}\n\n${plainContent}`
+      : plainContent;
+
+    try {
+      const result = await Share.share({
+        message: shareText,
+        title: title || 'My Note',
+      });
+
+      if (result.action === Share.sharedAction) {
+        if (result.activityType) {
+          console.log('Shared via:', result.activityType);
+        }
+      }
+    } catch (error) {
+      console.error('Share error:', error);
+      Alert.alert('Share Failed', 'Unable to share the note. Please try again.');
+    }
+  };
+
   const insertFormatting = (type: 'bold' | 'italic' | 'bullet') => {
     const before = content.substring(0, selection.start);
     const selected = content.substring(selection.start, selection.end);
@@ -327,6 +365,10 @@ export default function EditorScreen() {
               <Text style={[s.headerBtnLabel, isPinned && { color: C.primary }]}>
                 {isPinned ? 'Pinned' : 'Pin'}
               </Text>
+            </TouchableOpacity>
+            <TouchableOpacity testID="share-btn" style={s.headerBtn} onPress={handleShare}>
+              <MaterialIcons name="share" size={24} color={C.secondary} />
+              <Text style={[s.headerBtnLabel, { color: C.secondary }]}>Share</Text>
             </TouchableOpacity>
             {isCreatedRef.current && (
               <TouchableOpacity testID="delete-btn" style={s.headerBtn} onPress={handleDelete}>
