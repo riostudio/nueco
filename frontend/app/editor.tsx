@@ -2,11 +2,13 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   ScrollView, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
+  Keyboard,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAudioRecorder, AudioModule, RecordingPresets, useAudioRecorderState } from 'expo-audio';
+import Markdown from 'react-native-markdown-display';
 import { notesApi, transcribeApi } from '../src/api';
 import { Tag } from '../src/types';
 import { TAG_COLORS } from '../src/theme';
@@ -46,9 +48,21 @@ export default function EditorScreen() {
   const [showTagPicker, setShowTagPicker] = useState(false);
   const [newTagName, setNewTagName] = useState('');
   const [selectedTagColor, setSelectedTagColor] = useState(TAG_COLORS[0].value);
-  const [isContentFocused, setIsContentFocused] = useState(false);
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const [isPreviewMode, setIsPreviewMode] = useState(false);
 
   const [selection, setSelection] = useState({ start: 0, end: 0 });
+  const contentInputRef = useRef<TextInput>(null);
+
+  // Keyboard listener for showing format toolbar
+  useEffect(() => {
+    const showSub = Keyboard.addListener('keyboardDidShow', () => setIsKeyboardVisible(true));
+    const hideSub = Keyboard.addListener('keyboardDidHide', () => setIsKeyboardVisible(false));
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
   // Refs for auto-save closure safety
   const noteIdRef = useRef(isNew ? '' : (noteId || ''));
@@ -381,20 +395,61 @@ export default function EditorScreen() {
             )}
           </View>
 
-          {/* Content */}
-          <TextInput
-            testID="note-content-input"
-            style={s.contentInput}
-            placeholder="Start writing your note..."
-            placeholderTextColor={C.borderSub}
-            value={content}
-            onChangeText={handleContentChange}
-            multiline
-            textAlignVertical="top"
-            onSelectionChange={(e) => setSelection(e.nativeEvent.selection)}
-            onFocus={() => setIsContentFocused(true)}
-            onBlur={() => setIsContentFocused(false)}
-          />
+          {/* Content with Edit/Preview Toggle */}
+          <View style={s.contentHeader}>
+            <TouchableOpacity
+              style={[s.modeTab, !isPreviewMode && s.modeTabActive]}
+              onPress={() => setIsPreviewMode(false)}
+            >
+              <MaterialIcons name="edit" size={18} color={!isPreviewMode ? C.primaryFg : C.textSec} />
+              <Text style={[s.modeTabText, !isPreviewMode && s.modeTabTextActive]}>Edit</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[s.modeTab, isPreviewMode && s.modeTabActive]}
+              onPress={() => setIsPreviewMode(true)}
+            >
+              <MaterialIcons name="visibility" size={18} color={isPreviewMode ? C.primaryFg : C.textSec} />
+              <Text style={[s.modeTabText, isPreviewMode && s.modeTabTextActive]}>Preview</Text>
+            </TouchableOpacity>
+          </View>
+
+          {isPreviewMode ? (
+            <View style={s.previewContainer}>
+              {content ? (
+                <Markdown style={markdownStyles}>
+                  {content}
+                </Markdown>
+              ) : (
+                <Text style={s.previewPlaceholder}>Nothing to preview yet...</Text>
+              )}
+            </View>
+          ) : (
+            <>
+              {/* Text Input */}
+              <TextInput
+                ref={contentInputRef}
+                testID="note-content-input"
+                style={s.contentInput}
+                placeholder="Start writing your note..."
+                placeholderTextColor={C.borderSub}
+                value={content}
+                onChangeText={handleContentChange}
+                multiline
+                textAlignVertical="top"
+                onSelectionChange={(e) => setSelection(e.nativeEvent.selection)}
+              />
+              
+              {/* Live Preview - shows formatted text below editor */}
+              {content && content.includes('*') && (
+                <View style={s.livePreview}>
+                  <Text style={s.livePreviewLabel}>Preview:</Text>
+                  <Markdown style={markdownStyles}>
+                    {content}
+                  </Markdown>
+                </View>
+              )}
+            </>
+          )}
 
           {/* Calendar Link */}
           <TouchableOpacity
@@ -422,8 +477,8 @@ export default function EditorScreen() {
 
         {/* Voice Input Bar + Format Toolbar */}
         <View style={s.bottomBar}>
-          {/* Format Toolbar - only shows when content input is focused */}
-          {isContentFocused && (
+          {/* Format Toolbar - shows when keyboard is visible */}
+          {isKeyboardVisible && (
             <View style={s.formatBar}>
               <TouchableOpacity testID="fmt-bold" style={s.fmtBtn} onPress={() => insertFormatting('bold')}>
                 <Text style={s.fmtBold}>B</Text>
@@ -440,31 +495,33 @@ export default function EditorScreen() {
             </View>
           )}
           
-          {/* Voice Input */}
-          <View style={s.voiceBar}>
-            {isTranscribing ? (
-              <View style={s.transcribing}>
-                <ActivityIndicator size="small" color={C.primary} />
-                <Text style={s.transcribingText}>Converting speech to text...</Text>
-              </View>
-            ) : (
-              <TouchableOpacity
-                testID="voice-input-btn"
-                style={[s.voiceBtn, isRecording && s.voiceBtnRec]}
-                onPress={isRecording ? stopRecording : startRecording}
-                activeOpacity={0.7}
-              >
-                <MaterialIcons
-                  name={isRecording ? 'stop' : 'mic'}
-                  size={28}
-                  color={isRecording ? C.primaryFg : C.primary}
-                />
-                <Text style={[s.voiceBtnText, isRecording && s.voiceBtnTextRec]}>
-                  {isRecording ? 'Stop Recording' : 'Voice Input'}
-                </Text>
-              </TouchableOpacity>
-            )}
-          </View>
+          {/* Voice Input - hide when keyboard is visible */}
+          {!isKeyboardVisible && (
+            <View style={s.voiceBar}>
+              {isTranscribing ? (
+                <View style={s.transcribing}>
+                  <ActivityIndicator size="small" color={C.primary} />
+                  <Text style={s.transcribingText}>Converting speech to text...</Text>
+                </View>
+              ) : (
+                <TouchableOpacity
+                  testID="voice-input-btn"
+                  style={[s.voiceBtn, isRecording && s.voiceBtnRec]}
+                  onPress={isRecording ? stopRecording : startRecording}
+                  activeOpacity={0.7}
+                >
+                  <MaterialIcons
+                    name={isRecording ? 'stop' : 'mic'}
+                    size={28}
+                    color={isRecording ? C.primaryFg : C.primary}
+                  />
+                  <Text style={[s.voiceBtnText, isRecording && s.voiceBtnTextRec]}>
+                    {isRecording ? 'Stop Recording' : 'Voice Input'}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -568,4 +625,51 @@ const s = StyleSheet.create({
   voiceBtnRec: { backgroundColor: C.error, borderColor: C.error },
   voiceBtnText: { fontSize: 20, fontWeight: '600', color: C.primary, marginLeft: 8 },
   voiceBtnTextRec: { color: C.primaryFg },
+  contentHeader: {
+    flexDirection: 'row', marginBottom: 12, backgroundColor: C.surface,
+    borderRadius: 10, overflow: 'hidden', borderWidth: 1.5, borderColor: C.borderSub,
+  },
+  modeTab: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    paddingVertical: 10, gap: 6,
+  },
+  modeTabActive: { backgroundColor: C.primary },
+  modeTabText: { fontSize: 16, fontWeight: '600', color: C.textSec },
+  modeTabTextActive: { color: C.primaryFg },
+  previewContainer: {
+    backgroundColor: C.surface, borderRadius: 12, padding: 16,
+    borderWidth: 2, borderColor: C.borderSub, minHeight: 200,
+  },
+  previewPlaceholder: { fontSize: 18, color: C.borderSub, fontStyle: 'italic' },
+  livePreview: {
+    marginTop: 16, padding: 12, backgroundColor: C.surface,
+    borderRadius: 10, borderWidth: 1, borderColor: C.secondary + '40',
+  },
+  livePreviewLabel: {
+    fontSize: 12, fontWeight: '700', color: C.secondary, marginBottom: 8,
+    textTransform: 'uppercase', letterSpacing: 1,
+  },
+});
+
+// Markdown styles for rendering formatted text
+const markdownStyles = StyleSheet.create({
+  body: { fontSize: 18, color: C.text, lineHeight: 28 },
+  heading1: { fontSize: 28, fontWeight: '700', color: C.text, marginVertical: 8 },
+  heading2: { fontSize: 24, fontWeight: '700', color: C.text, marginVertical: 6 },
+  heading3: { fontSize: 20, fontWeight: '600', color: C.text, marginVertical: 4 },
+  strong: { fontWeight: '700' },
+  em: { fontStyle: 'italic' },
+  bullet_list: { marginVertical: 8 },
+  ordered_list: { marginVertical: 8 },
+  list_item: { flexDirection: 'row', marginVertical: 4 },
+  bullet_list_icon: { fontSize: 18, color: C.primary, marginRight: 8 },
+  code_inline: { 
+    backgroundColor: C.borderSub + '30', paddingHorizontal: 6, 
+    borderRadius: 4, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  fence: {
+    backgroundColor: C.borderSub + '20', padding: 12, borderRadius: 8,
+    marginVertical: 8,
+  },
+  link: { color: C.secondary, textDecorationLine: 'underline' },
 });
