@@ -471,30 +471,36 @@ export default function EditorScreen() {
             )}
           </View>
 
-          {/* Content - Visible Input with Live Markdown Preview */}
+          {/* Content - WYSIWYG Style: Hidden input with visible formatted output */}
           <View style={s.contentContainer}>
+            {/* Invisible TextInput that captures keyboard input */}
             <TextInput
               ref={contentInputRef}
               testID="note-content-input"
-              style={s.contentInput}
-              placeholder="Tap here to start writing..."
-              placeholderTextColor={C.borderSub}
+              style={s.hiddenInput}
               value={content}
               onChangeText={handleContentChange}
               multiline
               textAlignVertical="top"
               onSelectionChange={(e) => setSelection(e.nativeEvent.selection)}
+              autoCorrect={true}
+              autoCapitalize="sentences"
             />
             
-            {/* Live Formatted Preview - shown below input when there's formatted content */}
-            {content && (content.includes('**') || content.includes('*') || content.includes('- ')) && (
-              <View style={s.previewSection}>
-                <Text style={s.previewLabel}>Formatted Preview:</Text>
+            {/* Visible formatted content - tap to edit */}
+            <TouchableOpacity 
+              style={s.formattedBox}
+              onPress={() => contentInputRef.current?.focus()}
+              activeOpacity={1}
+            >
+              {content ? (
                 <Markdown style={markdownStyles}>
                   {content}
                 </Markdown>
-              </View>
-            )}
+              ) : (
+                <Text style={s.placeholderText}>Tap here to start writing...</Text>
+              )}
+            </TouchableOpacity>
           </View>
 
           {/* Calendar Link */}
@@ -639,19 +645,30 @@ const s = StyleSheet.create({
   contentContainer: {
     flex: 1,
     marginBottom: 16,
+    position: 'relative',
   },
-  contentInput: {
-    fontSize: 18, color: C.text, lineHeight: 28, minHeight: 120,
-    textAlignVertical: 'top', backgroundColor: C.surface,
-    borderRadius: 12, padding: 16, borderWidth: 2, borderColor: C.borderSub,
+  hiddenInput: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    opacity: 0,
+    fontSize: 18,
+    padding: 16,
   },
-  previewSection: {
-    marginTop: 12, padding: 12, backgroundColor: C.surface,
-    borderRadius: 10, borderWidth: 1, borderColor: C.secondary + '40',
+  formattedBox: {
+    minHeight: 150,
+    backgroundColor: C.surface,
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 2,
+    borderColor: C.borderSub,
   },
-  previewLabel: {
-    fontSize: 12, fontWeight: '700', color: C.secondary, marginBottom: 8,
-    textTransform: 'uppercase', letterSpacing: 1,
+  placeholderText: {
+    fontSize: 18,
+    color: C.borderSub,
+    fontStyle: 'italic',
   },
   calBtn: {
     flexDirection: 'row', alignItems: 'center',
