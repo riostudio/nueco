@@ -162,40 +162,58 @@ export default function EditorScreen() {
   };
 
   const handleContentChange = (newText: string) => {
-    const oldLength = lastContentLength.current;
-    const newLength = newText.length;
-    
-    // Check if user is typing new characters (not deleting)
-    if (newLength > oldLength && (isBoldActive || isItalicActive)) {
-      const addedText = newText.substring(oldLength);
-      const baseText = newText.substring(0, oldLength);
-      
-      let formattedAddition = addedText;
-      if (isBoldActive && isItalicActive) {
-        formattedAddition = `***${addedText}***`;
-      } else if (isBoldActive) {
-        formattedAddition = `**${addedText}**`;
-      } else if (isItalicActive) {
-        formattedAddition = `*${addedText}*`;
-      }
-      
-      const finalText = baseText + formattedAddition;
-      setContent(finalText);
-      lastContentLength.current = finalText.length;
-    } else {
-      setContent(newText);
-      lastContentLength.current = newText.length;
-    }
-    
+    setContent(newText);
+    lastContentLength.current = newText.length;
     triggerAutoSave();
   };
 
   const toggleBold = () => {
-    setIsBoldActive(!isBoldActive);
+    const newBoldState = !isBoldActive;
+    setIsBoldActive(newBoldState);
+    
+    // Insert markdown markers at cursor position
+    if (newBoldState) {
+      // Starting bold - insert opening **
+      const newContent = content + '**';
+      setContent(newContent);
+      lastContentLength.current = newContent.length;
+    } else {
+      // Ending bold - insert closing **
+      const newContent = content + '**';
+      setContent(newContent);
+      lastContentLength.current = newContent.length;
+    }
+    
+    // Focus the input
+    contentInputRef.current?.focus();
   };
 
   const toggleItalic = () => {
-    setIsItalicActive(!isItalicActive);
+    const newItalicState = !isItalicActive;
+    setIsItalicActive(newItalicState);
+    
+    // Insert markdown markers at cursor position
+    if (newItalicState) {
+      // Starting italic - insert opening *
+      const newContent = content + '*';
+      setContent(newContent);
+      lastContentLength.current = newContent.length;
+    } else {
+      // Ending italic - insert closing *
+      const newContent = content + '*';
+      setContent(newContent);
+      lastContentLength.current = newContent.length;
+    }
+    
+    // Focus the input
+    contentInputRef.current?.focus();
+  };
+
+  const insertBullet = () => {
+    const newContent = content + '\n- ';
+    setContent(newContent);
+    lastContentLength.current = newContent.length;
+    contentInputRef.current?.focus();
   };
 
   // Convert markdown to plain text for sharing
@@ -234,27 +252,6 @@ export default function EditorScreen() {
       console.error('Share error:', error);
       Alert.alert('Share Failed', 'Unable to share the note. Please try again.');
     }
-  };
-
-  const insertFormatting = (type: 'bold' | 'italic' | 'bullet') => {
-    const before = content.substring(0, selection.start);
-    const selected = content.substring(selection.start, selection.end);
-    const after = content.substring(selection.end);
-    let newContent = content;
-
-    switch (type) {
-      case 'bold':
-        newContent = before + '**' + (selected || 'bold text') + '**' + after;
-        break;
-      case 'italic':
-        newContent = before + '*' + (selected || 'italic text') + '*' + after;
-        break;
-      case 'bullet':
-        newContent = before + '\n- ' + (selected || '') + after;
-        break;
-    }
-    setContent(newContent);
-    triggerAutoSave();
   };
 
   const startRecording = async () => {
@@ -548,7 +545,7 @@ export default function EditorScreen() {
                 <Text style={[s.fmtItalic, isItalicActive && s.fmtTextActive]}>I</Text>
                 <Text style={[s.fmtLabel, isItalicActive && s.fmtLabelActive]}>Italic</Text>
               </TouchableOpacity>
-              <TouchableOpacity testID="fmt-bullet" style={s.fmtBtn} onPress={() => insertFormatting('bullet')}>
+              <TouchableOpacity testID="fmt-bullet" style={s.fmtBtn} onPress={insertBullet}>
                 <MaterialIcons name="format-list-bulleted" size={22} color={C.text} />
                 <Text style={s.fmtLabel}>List</Text>
               </TouchableOpacity>
