@@ -49,9 +49,12 @@ export default function EditorScreen() {
   const [newTagName, setNewTagName] = useState('');
   const [selectedTagColor, setSelectedTagColor] = useState(TAG_COLORS[0].value);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const [isBoldActive, setIsBoldActive] = useState(false);
+  const [isItalicActive, setIsItalicActive] = useState(false);
 
   const [selection, setSelection] = useState({ start: 0, end: 0 });
   const contentInputRef = useRef<TextInput>(null);
+  const lastContentLength = useRef(0);
 
   // Keyboard listener for showing format toolbar
   useEffect(() => {
@@ -158,9 +161,41 @@ export default function EditorScreen() {
     triggerAutoSave();
   };
 
-  const handleContentChange = (text: string) => {
-    setContent(text);
+  const handleContentChange = (newText: string) => {
+    const oldLength = lastContentLength.current;
+    const newLength = newText.length;
+    
+    // Check if user is typing new characters (not deleting)
+    if (newLength > oldLength && (isBoldActive || isItalicActive)) {
+      const addedText = newText.substring(oldLength);
+      const baseText = newText.substring(0, oldLength);
+      
+      let formattedAddition = addedText;
+      if (isBoldActive && isItalicActive) {
+        formattedAddition = `***${addedText}***`;
+      } else if (isBoldActive) {
+        formattedAddition = `**${addedText}**`;
+      } else if (isItalicActive) {
+        formattedAddition = `*${addedText}*`;
+      }
+      
+      const finalText = baseText + formattedAddition;
+      setContent(finalText);
+      lastContentLength.current = finalText.length;
+    } else {
+      setContent(newText);
+      lastContentLength.current = newText.length;
+    }
+    
     triggerAutoSave();
+  };
+
+  const toggleBold = () => {
+    setIsBoldActive(!isBoldActive);
+  };
+
+  const toggleItalic = () => {
+    setIsItalicActive(!isItalicActive);
   };
 
   const insertFormatting = (type: 'bold' | 'italic' | 'bullet') => {
@@ -449,13 +484,21 @@ export default function EditorScreen() {
           {/* Format Toolbar - shows when keyboard is visible */}
           {isKeyboardVisible && (
             <View style={s.formatBar}>
-              <TouchableOpacity testID="fmt-bold" style={s.fmtBtn} onPress={() => insertFormatting('bold')}>
-                <Text style={s.fmtBold}>B</Text>
-                <Text style={s.fmtLabel}>Bold</Text>
+              <TouchableOpacity 
+                testID="fmt-bold" 
+                style={[s.fmtBtn, isBoldActive && s.fmtBtnActive]} 
+                onPress={toggleBold}
+              >
+                <Text style={[s.fmtBold, isBoldActive && s.fmtTextActive]}>B</Text>
+                <Text style={[s.fmtLabel, isBoldActive && s.fmtLabelActive]}>Bold</Text>
               </TouchableOpacity>
-              <TouchableOpacity testID="fmt-italic" style={s.fmtBtn} onPress={() => insertFormatting('italic')}>
-                <Text style={s.fmtItalic}>I</Text>
-                <Text style={s.fmtLabel}>Italic</Text>
+              <TouchableOpacity 
+                testID="fmt-italic" 
+                style={[s.fmtBtn, isItalicActive && s.fmtBtnActive]} 
+                onPress={toggleItalic}
+              >
+                <Text style={[s.fmtItalic, isItalicActive && s.fmtTextActive]}>I</Text>
+                <Text style={[s.fmtLabel, isItalicActive && s.fmtLabelActive]}>Italic</Text>
               </TouchableOpacity>
               <TouchableOpacity testID="fmt-bullet" style={s.fmtBtn} onPress={() => insertFormatting('bullet')}>
                 <MaterialIcons name="format-list-bulleted" size={22} color={C.text} />
@@ -587,9 +630,14 @@ const s = StyleSheet.create({
     paddingVertical: 10, gap: 4,
     borderRightWidth: 1, borderRightColor: C.borderSub + '20',
   },
+  fmtBtnActive: {
+    backgroundColor: C.primary,
+  },
   fmtBold: { fontSize: 18, fontWeight: '900', color: C.text },
   fmtItalic: { fontSize: 18, fontStyle: 'italic', fontWeight: '600', color: C.text },
   fmtLabel: { fontSize: 14, color: C.textSec },
+  fmtTextActive: { color: C.primaryFg },
+  fmtLabelActive: { color: C.primaryFg },
   voiceBar: {
     paddingHorizontal: 24, paddingVertical: 12,
     backgroundColor: C.bg,
