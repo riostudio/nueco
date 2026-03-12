@@ -8,7 +8,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAudioRecorder, AudioModule, RecordingPresets, useAudioRecorderState } from 'expo-audio';
-import Markdown from 'react-native-markdown-display';
 import { notesApi, transcribeApi } from '../src/api';
 import { Tag } from '../src/types';
 import { TAG_COLORS } from '../src/theme';
@@ -167,63 +166,32 @@ export default function EditorScreen() {
     triggerAutoSave();
   };
 
+  // Toggle format button state (visual indicator only)
+  // Note: True WYSIWYG requires a rich text editor library
+  // For now, format buttons show intent but don't insert markdown
   const toggleBold = () => {
-    const newBoldState = !isBoldActive;
-    setIsBoldActive(newBoldState);
-    
-    // Insert markdown markers at cursor position
-    if (newBoldState) {
-      // Starting bold - insert opening **
-      const newContent = content + '**';
-      setContent(newContent);
-      lastContentLength.current = newContent.length;
-    } else {
-      // Ending bold - insert closing **
-      const newContent = content + '**';
-      setContent(newContent);
-      lastContentLength.current = newContent.length;
-    }
-    
-    // Focus the input
+    setIsBoldActive(!isBoldActive);
     contentInputRef.current?.focus();
   };
 
   const toggleItalic = () => {
-    const newItalicState = !isItalicActive;
-    setIsItalicActive(newItalicState);
-    
-    // Insert markdown markers at cursor position
-    if (newItalicState) {
-      // Starting italic - insert opening *
-      const newContent = content + '*';
-      setContent(newContent);
-      lastContentLength.current = newContent.length;
-    } else {
-      // Ending italic - insert closing *
-      const newContent = content + '*';
-      setContent(newContent);
-      lastContentLength.current = newContent.length;
-    }
-    
-    // Focus the input
+    setIsItalicActive(!isItalicActive);
     contentInputRef.current?.focus();
   };
 
   const insertBullet = () => {
-    const newContent = content + '\n- ';
+    // Insert a bullet point character directly
+    const bulletChar = '\u2022 '; // bullet character
+    const newContent = content + (content.endsWith('\n') || content === '' ? '' : '\n') + bulletChar;
     setContent(newContent);
     lastContentLength.current = newContent.length;
+    triggerAutoSave();
     contentInputRef.current?.focus();
   };
 
-  // Convert markdown to plain text for sharing
-  const convertMarkdownToPlainText = (markdown: string): string => {
-    return markdown
-      .replace(/\*\*\*(.*?)\*\*\*/g, '$1')  // Bold+Italic
-      .replace(/\*\*(.*?)\*\*/g, '$1')       // Bold
-      .replace(/\*(.*?)\*/g, '$1')           // Italic
-      .replace(/^- /gm, '• ')                // Bullet points
-      .replace(/^#{1,6}\s/gm, '');           // Headers
+  // Convert content to plain text for sharing (remove bullet chars)
+  const convertToPlainText = (text: string): string => {
+    return text.replace(/\u2022 /g, '- '); // Convert bullet chars back to dashes
   };
 
   const handleShare = async () => {
@@ -232,7 +200,7 @@ export default function EditorScreen() {
       return;
     }
 
-    const plainContent = convertMarkdownToPlainText(content);
+    const plainContent = convertToPlainText(content);
     const shareText = title 
       ? `${title}\n\n${plainContent}`
       : plainContent;
@@ -468,36 +436,22 @@ export default function EditorScreen() {
             )}
           </View>
 
-          {/* Content - WYSIWYG Style: Hidden input with visible formatted output */}
+          {/* Content - Simple plain text input */}
           <View style={s.contentContainer}>
-            {/* Invisible TextInput that captures keyboard input */}
             <TextInput
               ref={contentInputRef}
               testID="note-content-input"
-              style={s.hiddenInput}
+              style={s.contentInput}
               value={content}
               onChangeText={handleContentChange}
               multiline
               textAlignVertical="top"
+              placeholder="Tap here to start writing..."
+              placeholderTextColor={C.borderSub}
               onSelectionChange={(e) => setSelection(e.nativeEvent.selection)}
               autoCorrect={true}
               autoCapitalize="sentences"
             />
-            
-            {/* Visible formatted content - tap to edit */}
-            <TouchableOpacity 
-              style={s.formattedBox}
-              onPress={() => contentInputRef.current?.focus()}
-              activeOpacity={1}
-            >
-              {content ? (
-                <Markdown style={markdownStyles}>
-                  {content}
-                </Markdown>
-              ) : (
-                <Text style={s.placeholderText}>Tap here to start writing...</Text>
-              )}
-            </TouchableOpacity>
           </View>
 
           {/* Calendar Link */}
@@ -642,29 +596,17 @@ const s = StyleSheet.create({
   contentContainer: {
     flex: 1,
     marginBottom: 16,
-    position: 'relative',
   },
-  hiddenInput: {
-    position: 'absolute',
-    top: -9999,
-    left: -9999,
-    width: 1,
-    height: 1,
-    opacity: 0,
-  },
-  formattedBox: {
+  contentInput: {
     minHeight: 150,
     backgroundColor: C.surface,
     borderRadius: 12,
     padding: 16,
     borderWidth: 2,
     borderColor: C.borderSub,
-    zIndex: 1,
-  },
-  placeholderText: {
     fontSize: 18,
-    color: C.borderSub,
-    fontStyle: 'italic',
+    color: C.text,
+    lineHeight: 28,
   },
   calBtn: {
     flexDirection: 'row', alignItems: 'center',
@@ -710,27 +652,4 @@ const s = StyleSheet.create({
   voiceBtnRec: { backgroundColor: C.error, borderColor: C.error },
   voiceBtnText: { fontSize: 20, fontWeight: '600', color: C.primary, marginLeft: 8 },
   voiceBtnTextRec: { color: C.primaryFg },
-});
-
-// Markdown styles for rendering formatted text
-const markdownStyles = StyleSheet.create({
-  body: { fontSize: 18, color: C.text, lineHeight: 28 },
-  heading1: { fontSize: 28, fontWeight: '700', color: C.text, marginVertical: 8 },
-  heading2: { fontSize: 24, fontWeight: '700', color: C.text, marginVertical: 6 },
-  heading3: { fontSize: 20, fontWeight: '600', color: C.text, marginVertical: 4 },
-  strong: { fontWeight: '700' },
-  em: { fontStyle: 'italic' },
-  bullet_list: { marginVertical: 8 },
-  ordered_list: { marginVertical: 8 },
-  list_item: { flexDirection: 'row', marginVertical: 4 },
-  bullet_list_icon: { fontSize: 18, color: C.primary, marginRight: 8 },
-  code_inline: { 
-    backgroundColor: C.borderSub + '30', paddingHorizontal: 6, 
-    borderRadius: 4, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-  },
-  fence: {
-    backgroundColor: C.borderSub + '20', padding: 12, borderRadius: 8,
-    marginVertical: 8,
-  },
-  link: { color: C.secondary, textDecorationLine: 'underline' },
 });
