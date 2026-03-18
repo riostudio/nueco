@@ -1,24 +1,26 @@
 import { useEffect, useState } from 'react';
 import { Redirect } from 'expo-router';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
-import { authStorage } from '../src/auth';
+import { notesApi } from '../src/api';
 
 export default function Index() {
   const [isLoading, setIsLoading] = useState(true);
-  const [isFirstLaunch, setIsFirstLaunch] = useState(false);
+  const [hasNotes, setHasNotes] = useState(false);
 
   useEffect(() => {
-    const checkFirstLaunch = async () => {
+    const checkForNotes = async () => {
       try {
-        const hasNotes = await authStorage.isFirstNoteSaved();
-        setIsFirstLaunch(!hasNotes);
+        // Check if there are any notes in the database
+        const notes = await notesApi.getAll();
+        setHasNotes(notes.length > 0);
       } catch (error) {
-        console.error('Error checking first launch:', error);
+        console.error('Error checking notes:', error);
+        setHasNotes(false);
       } finally {
         setIsLoading(false);
       }
     };
-    checkFirstLaunch();
+    checkForNotes();
   }, []);
 
   if (isLoading) {
@@ -29,9 +31,9 @@ export default function Index() {
     );
   }
 
-  // On first launch, go directly to editor
+  // If no notes exist, go directly to editor for first-time experience
   // Otherwise, go to tabs (notes list)
-  if (isFirstLaunch) {
+  if (!hasNotes) {
     return <Redirect href="/editor" />;
   }
 

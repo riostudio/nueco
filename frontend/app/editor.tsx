@@ -86,6 +86,9 @@ export default function EditorScreen() {
   const tagsRef = useRef(tags);
   const isPinnedRef = useRef(isPinned);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  
+  // State to track if note exists (for UI rendering like delete button)
+  const [noteExists, setNoteExists] = useState(!isNew);
 
   useEffect(() => { titleRef.current = title; }, [title]);
   useEffect(() => { contentRef.current = content; }, [content]);
@@ -106,6 +109,7 @@ export default function EditorScreen() {
       setLinkedEventId(note.linked_event_id);
       noteIdRef.current = note.id;
       isCreatedRef.current = true;
+      setNoteExists(true);
     } catch (e) {
       console.error('Failed to load note:', e);
     } finally {
@@ -129,6 +133,7 @@ export default function EditorScreen() {
           });
           noteIdRef.current = created.id;
           isCreatedRef.current = true;
+          setNoteExists(true);
         } else if (noteIdRef.current) {
           await notesApi.update(noteIdRef.current, {
             title: titleRef.current,
@@ -361,7 +366,7 @@ export default function EditorScreen() {
               <MaterialIcons name="share" size={24} color={C.secondary} />
               <Text style={[s.headerBtnLabel, { color: C.secondary }]}>Share</Text>
             </TouchableOpacity>
-            {isCreatedRef.current && (
+            {noteExists && (
               <TouchableOpacity testID="delete-btn" style={s.headerBtn} onPress={handleDelete}>
                 <MaterialIcons name="delete" size={24} color={C.error} />
                 <Text style={[s.headerBtnLabel, { color: C.error }]}>Delete</Text>
