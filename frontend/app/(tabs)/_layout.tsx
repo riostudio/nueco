@@ -1,13 +1,16 @@
 import { Tabs } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
-import { StyleSheet } from 'react-native';
+import { StyleSheet, View, Text } from 'react-native';
 import React from 'react';
+import { UserAvatar, useAuth } from '../../src/auth';
 
 const C = {
   primary: '#D84315',
   inactiveTab: '#757575', // Accessible grey (WCAG AA compliant)
   surface: '#FFFFFF',
   border: '#121212',
+  bg: '#FDFBF7',
+  text: '#121212',
 };
 
 function NotesIcon({ color }: { color: string }) {
@@ -26,11 +29,23 @@ function SettingsIcon({ color }: { color: string }) {
   return <MaterialIcons name="settings" size={22} color={color} />;
 }
 
+function HeaderRight() {
+  const { user } = useAuth();
+  return (
+    <View style={styles.headerRight}>
+      <UserAvatar user={user} size={36} />
+    </View>
+  );
+}
+
 export default function TabLayout() {
   return (
     <Tabs
       screenOptions={{
-        headerShown: false,
+        headerShown: true,
+        headerStyle: styles.header,
+        headerTitleStyle: styles.headerTitle,
+        headerRight: () => <HeaderRight />,
         tabBarStyle: styles.tabBar,
         tabBarActiveTintColor: C.primary,
         tabBarInactiveTintColor: C.inactiveTab,
@@ -70,6 +85,19 @@ export default function TabLayout() {
 }
 
 const styles = StyleSheet.create({
+  header: {
+    backgroundColor: C.bg,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: C.text,
+  },
+  headerRight: {
+    marginRight: 16,
+  },
   tabBar: {
     height: 80,
     paddingTop: 6,
