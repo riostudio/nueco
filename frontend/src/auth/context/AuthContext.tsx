@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
-import { authStorage } from './storage/authStorage';
-import { authApi } from './api/authApi';
-import { User } from './types/auth.types';
+import { authStorage } from '../storage/authStorage';
+import { authApi } from '../api/authApi';
+import { User } from '../types/auth.types';
 import * as Crypto from 'expo-crypto';
 import * as Device from 'expo-device';
 
