@@ -11,6 +11,13 @@ import { useAudioRecorder, AudioModule, RecordingPresets, useAudioRecorderState 
 import { notesApi, transcribeApi } from '../src/api';
 import { Tag } from '../src/types';
 import { TAG_COLORS } from '../src/theme';
+import { 
+  authStorage, 
+  useLinkAccount, 
+  LinkAccountBottomSheet, 
+  EmailVerificationBanner,
+  User 
+} from '../src/auth';
 
 const C = {
   primary: '#D84315',
@@ -54,6 +61,26 @@ export default function EditorScreen() {
   const [selection, setSelection] = useState({ start: 0, end: 0 });
   const contentInputRef = useRef<TextInput>(null);
   const lastContentLength = useRef(0);
+
+  // Auth state
+  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [showLinkSheet, setShowLinkSheet] = useState(false);
+  const { linkAccount } = useLinkAccount();
+
+  // Load auth user on mount
+  useEffect(() => {
+    const loadAuthUser = async () => {
+      try {
+        const storedUser = await authStorage.getUser();
+        if (storedUser) {
+          setAuthUser(JSON.parse(storedUser));
+        }
+      } catch (error) {
+        console.error('Failed to load auth user:', error);
+      }
+    };
+    loadAuthUser();
+  }, []);
 
   // Keyboard listener for showing format toolbar
   useEffect(() => {
@@ -106,6 +133,7 @@ export default function EditorScreen() {
     saveTimerRef.current = setTimeout(async () => {
       setSaveStatus('Saving...');
       try {
+        const wasNew = !isCreatedRef.current;
         if (!isCreatedRef.current) {
           const created = await notesApi.create({
             title: titleRef.current,
@@ -124,6 +152,18 @@ export default function EditorScreen() {
           });
         }
         setSaveStatus('All changes saved');
+        
+        // Show link account sheet after first note save
+        if (wasNew) {
+          const isFirstNote = !(await authStorage.isFirstNoteSaved());
+          if (isFirstNote) {
+            await authStorage.setFirstNoteSaved();
+            const modalDismissed = await authStorage.isModalDismissed();
+            if (!modalDismissed) {
+              setShowLinkSheet(true);
+            }
+          }
+        }
       } catch (e) {
         setSaveStatus('Failed to save');
         console.error('Save error:', e);
@@ -341,8 +381,31 @@ export default function EditorScreen() {
                 <Text style={[s.headerBtnLabel, { color: C.error }]}>Delete</Text>
               </TouchableOpacity>
             )}
+            {/* Settings icon - only visible for local auth users with password */}
+            {authUser?.auth_provider === 'local' && authUser?.email && (
+              <TouchableOpacity
+                testID="settings-btn"
+                style={s.headerBtn}
+                onPress={() => router.push('/change-password')}
+              >
+                <MaterialIcons name="settings" size={24} color={C.textSec} />
+              </TouchableOpacity>
+            )}
           </View>
         </View>
+
+        {/* Email Verification Banner */}
+        <EmailVerificationBanner
+          user={authUser}
+          onResend={async () => {
+            if (authUser?.email) {
+              const result = await linkAccount(authUser.email);
+              if (result.success) {
+                Alert.alert('Success', 'Verification email sent!');
+              }
+            }
+          }}
+        />
 
         {/* Save Status */}
         {saveStatus ? (
@@ -535,6 +598,19 @@ export default function EditorScreen() {
           )}
         </View>
       </KeyboardAvoidingView>
+      
+      {/* Link Account Bottom Sheet */}
+      <LinkAccountBottomSheet
+        isVisible={showLinkSheet}
+        onDismiss={() => setShowLinkSheet(false)}
+        onSuccess={async () => {
+          // Reload user after linking
+          const storedUser = await authStorage.getUser();
+          if (storedUser) {
+            setAuthUser(JSON.parse(storedUser));
+          }
+        }}
+      />
     </SafeAreaView>
   );
 }

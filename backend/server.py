@@ -281,6 +281,10 @@ async def health_check():
     return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
+# Include auth router
+from auth.router import router as auth_router
+api_router.include_router(auth_router)
+
 app.include_router(api_router)
 
 app.add_middleware(

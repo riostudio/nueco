@@ -348,6 +348,160 @@ def test_voice_transcription():
     
     return True
 
+def test_auth_apis():
+    """Test Authentication APIs"""
+    print("\n=== Testing Authentication APIs ===")
+    
+    # Test device registration
+    print("\n--- POST /api/auth/device (Device Registration) ---")
+    device_data = {
+        "device_id": "test-device-001",
+        "device_model": "iPhone 15 Pro",
+        "os_version": "17.2.1"
+    }
+    
+    try:
+        response = requests.post(f"{BASE_URL}/api/auth/device", json=device_data)
+        print(f"Status Code: {response.status_code}")
+        
+        if response.status_code == 200:
+            data = response.json()
+            print(f"Response: {json.dumps(data, indent=2)}")
+            
+            if data.get("success") and "user" in data:
+                user = data["user"]
+                print(f"Device registered: {user.get('device_id')}")
+                print(f"Device model: {user.get('device_model')}")
+                print("✅ Device registration PASSED")
+                device_registered = True
+            else:
+                print("❌ Device registration FAILED - Invalid response format")
+                return False
+        else:
+            print(f"❌ Device registration FAILED - Status: {response.status_code}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Device registration FAILED - Error: {str(e)}")
+        return False
+    
+    # Test account linking  
+    print("\n--- POST /api/auth/link (Link Account) ---")
+    link_data = {
+        "device_id": "test-device-001",
+        "email": "john.doe@memopad.com",
+        "password": "SecurePass123!"
+    }
+    
+    try:
+        response = requests.post(f"{BASE_URL}/api/auth/link", json=link_data)
+        print(f"Status Code: {response.status_code}")
+        
+        if response.status_code == 200:
+            data = response.json()
+            print(f"Response: {json.dumps(data, indent=2)}")
+            
+            if data.get("success") and "user" in data:
+                user = data["user"]
+                print(f"Email linked: {user.get('email')}")
+                print(f"Email verified: {user.get('email_verified')}")
+                print("✅ Account linking PASSED")
+            else:
+                print("❌ Account linking FAILED - Invalid response format")
+                return False
+        else:
+            print(f"❌ Account linking FAILED - Status: {response.status_code}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Account linking FAILED - Error: {str(e)}")
+        return False
+    
+    # Test password change (success case)
+    print("\n--- POST /api/auth/change-password (Success Case) ---")
+    password_change_data = {
+        "device_id": "test-device-001",
+        "current_password": "SecurePass123!",
+        "new_password": "NewSecurePass456!"
+    }
+    
+    try:
+        response = requests.post(f"{BASE_URL}/api/auth/change-password", json=password_change_data)
+        print(f"Status Code: {response.status_code}")
+        
+        if response.status_code == 200:
+            data = response.json()
+            print(f"Response: {json.dumps(data, indent=2)}")
+            
+            if data.get("success") and "message" in data:
+                print(f"Message: {data.get('message')}")
+                print("✅ Password change PASSED")
+            else:
+                print("❌ Password change FAILED - Invalid response format")
+                return False
+        else:
+            print(f"❌ Password change FAILED - Status: {response.status_code}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Password change FAILED - Error: {str(e)}")
+        return False
+    
+    # Test error cases
+    print("\n--- Error Case Tests ---")
+    
+    # Test password change with wrong current password
+    print("\n--- POST /api/auth/change-password (Wrong Password) ---")
+    wrong_password_data = {
+        "device_id": "test-device-001",
+        "current_password": "WrongPassword123!",
+        "new_password": "AnotherNewPass789!"
+    }
+    
+    try:
+        response = requests.post(f"{BASE_URL}/api/auth/change-password", json=wrong_password_data)
+        print(f"Status Code: {response.status_code}")
+        
+        if response.status_code == 401:
+            data = response.json()
+            print(f"Error response: {json.dumps(data, indent=2)}")
+            print("✅ Wrong password correctly rejected")
+        else:
+            print(f"❌ Expected 401 for wrong password, got {response.status_code}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Wrong password test FAILED - Error: {str(e)}")
+        return False
+    
+    # Test linking to non-existent device
+    print("\n--- POST /api/auth/link (Non-existent Device) ---")
+    bad_link_data = {
+        "device_id": "non-existent-device-999",
+        "email": "test@example.com",
+        "password": "password123"
+    }
+    
+    try:
+        response = requests.post(f"{BASE_URL}/api/auth/link", json=bad_link_data)
+        print(f"Status Code: {response.status_code}")
+        
+        if response.status_code == 404:
+            data = response.json()
+            print(f"Error response: {json.dumps(data, indent=2)}")
+            print("✅ Non-existent device correctly rejected")
+        else:
+            print(f"❌ Expected 404 for non-existent device, got {response.status_code}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Non-existent device test FAILED - Error: {str(e)}")
+        return False
+    
+    print("\n--- Authentication API Tests Complete ---")
+    print("✅ All authentication endpoints working correctly")
+    return True
+
 def run_all_tests():
     """Run all backend API tests"""
     print("Starting MemoPad Backend API Tests")
@@ -355,6 +509,7 @@ def run_all_tests():
     
     results = {
         "Health Check": test_health_api(),
+        "Authentication APIs": test_auth_apis(),
         "Notes CRUD": test_notes_crud(),
         "Events CRUD": test_events_crud(),
         "Voice Transcription": test_voice_transcription()
