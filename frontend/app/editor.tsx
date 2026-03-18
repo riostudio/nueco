@@ -16,7 +16,8 @@ import {
   useLinkAccount, 
   LinkAccountBottomSheet, 
   EmailVerificationBanner,
-  User 
+  UserAvatar,
+  useAuth,
 } from '../src/auth';
 
 const C = {
@@ -62,25 +63,10 @@ export default function EditorScreen() {
   const contentInputRef = useRef<TextInput>(null);
   const lastContentLength = useRef(0);
 
-  // Auth state
-  const [authUser, setAuthUser] = useState<User | null>(null);
+  // Auth state from context
+  const { user: authUser, refreshUser } = useAuth();
   const [showLinkSheet, setShowLinkSheet] = useState(false);
   const { linkAccount } = useLinkAccount();
-
-  // Load auth user on mount
-  useEffect(() => {
-    const loadAuthUser = async () => {
-      try {
-        const storedUser = await authStorage.getUser();
-        if (storedUser) {
-          setAuthUser(JSON.parse(storedUser));
-        }
-      } catch (error) {
-        console.error('Failed to load auth user:', error);
-      }
-    };
-    loadAuthUser();
-  }, []);
 
   // Keyboard listener for showing format toolbar
   useEffect(() => {
@@ -381,16 +367,8 @@ export default function EditorScreen() {
                 <Text style={[s.headerBtnLabel, { color: C.error }]}>Delete</Text>
               </TouchableOpacity>
             )}
-            {/* Settings icon - only visible for local auth users with password */}
-            {authUser?.auth_provider === 'local' && authUser?.email && (
-              <TouchableOpacity
-                testID="settings-btn"
-                style={s.headerBtn}
-                onPress={() => router.push('/change-password')}
-              >
-                <MaterialIcons name="settings" size={24} color={C.textSec} />
-              </TouchableOpacity>
-            )}
+            {/* User Avatar - shows first letter of email when verified */}
+            <UserAvatar user={authUser} size={36} />
           </View>
         </View>
 
@@ -605,10 +583,7 @@ export default function EditorScreen() {
         onDismiss={() => setShowLinkSheet(false)}
         onSuccess={async () => {
           // Reload user after linking
-          const storedUser = await authStorage.getUser();
-          if (storedUser) {
-            setAuthUser(JSON.parse(storedUser));
-          }
+          await refreshUser();
         }}
       />
     </SafeAreaView>
