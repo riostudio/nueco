@@ -96,15 +96,17 @@ class AuthService:
         )
         return True, 'success'
     
-    async def verify_email(self, token: str) -> tuple[bool, str]:
-        """Verify email with token. Returns (success, message)"""
+    async def verify_email(self, token: str) -> tuple[bool, str, str]:
+        """Verify email with token. Returns (success, status, user_email)"""
         user = await self.collection.find_one({'verification_token': token})
         if not user:
-            return False, 'invalid_token'
+            return False, 'invalid_token', ''
         
         expiry = user.get('verification_token_expiry', 0)
         if expiry < time.time():
-            return False, 'expired_token'
+            return False, 'expired_token', ''
+        
+        user_email = user.get('email', '')
         
         await self.collection.update_one(
             {'verification_token': token},
@@ -113,4 +115,4 @@ class AuthService:
                 '$unset': {'verification_token': '', 'verification_token_expiry': ''}
             }
         )
-        return True, 'success'
+        return True, 'success', user_email

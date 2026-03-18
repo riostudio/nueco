@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import { AppState, AppStateStatus } from 'react-native';
 import { authStorage } from '../storage/authStorage';
 import { authApi } from '../api/authApi';
 import { User } from '../types/auth.types';
@@ -20,6 +21,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(false);
   const [isFirstLaunch, setIsFirstLaunch] = useState(false);
 
+  const fetchUserFromServer = useCallback(async () => {
+    try {
+      const deviceId = await authStorage.getDeviceId();
+      if (!deviceId) return;
+
+      const deviceModel = Device.modelName || 'Unknown';
+      const osVersion = Device.osVersion || 'Unknown';
+
+      const response = await authApi.registerDevice({
+        device_id: deviceId,
+        device_model: deviceModel,
+        os_version: osVersion,
+      });
+
+      if (response.success) {
+        setUser(response.user);
+        await authStorage.setUser(response.user);
+      }
+    } catch (error) {
+      console.error('Fetch user error:', error);
+    }
+  }, []);
+
   const initAuth = useCallback(async () => {
     try {
       // Check if this is first launch (no device ID)
@@ -39,41 +63,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       // Register device in background - don't block on this
-      const deviceModel = Device.modelName || 'Unknown';
-      const osVersion = Device.osVersion || 'Unknown';
-
-      // Fire and forget - don't await
-      authApi.registerDevice({
-        device_id: deviceId,
-        device_model: deviceModel,
-        os_version: osVersion,
-      }).then((response) => {
-        if (response.success) {
-          setUser(response.user);
-          authStorage.setUser(response.user);
-        }
-      }).catch((error) => {
-        console.error('Device registration error:', error);
-      });
+      fetchUserFromServer();
     } catch (error) {
       console.error('Auth init error:', error);
     }
-  }, []);
+  }, [fetchUserFromServer]);
 
   useEffect(() => {
     initAuth();
   }, [initAuth]);
 
-  const refreshUser = useCallback(async () => {
-    try {
-      const storedUser = await authStorage.getUser();
-      if (storedUser) {
-        setUser(JSON.parse(storedUser));
+  // Refresh user when app comes to foreground (after email verification)
+  useEffect(() => {
+    const handleAppStateChange = (nextAppState: AppStateStatus) => {
+      if (nextAppState === 'active') {
+        // App came to foreground, refresh user data
+        fetchUserFromServer();
       }
-    } catch (error) {
-      console.error('Refresh user error:', error);
-    }
-  }, []);
+    };
+
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+    return () => subscription.remove();
+  }, [fetchUserFromServer]);
+
+  const refreshUser = useCallback(async () => {
+    await fetchUserFromServer();
+  }, [fetchUserFromServer]);
 
   const clearAllData = useCallback(async () => {
     try {
