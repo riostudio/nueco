@@ -83,7 +83,10 @@ async def verify_email(token: str, db: AsyncIOMotorDatabase = Depends(get_db)):
     # Get first letter of email for display
     first_letter = user_email[0].upper() if user_email else "?"
     
-    # Return success page with auto-redirect
+    # Redirect to notes list view (tabs)
+    notes_list_url = f"{app_url}/(tabs)"
+    
+    # Return success page with auto-redirect to notes list
     return f"""
     <!DOCTYPE html>
     <html>
@@ -91,7 +94,7 @@ async def verify_email(token: str, db: AsyncIOMotorDatabase = Depends(get_db)):
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>Email Verified - MemoPad</title>
-        <meta http-equiv="refresh" content="3;url={app_url}">
+        <meta http-equiv="refresh" content="3;url={notes_list_url}">
         <style>
             body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: #FDFBF7; }}
             .container {{ text-align: center; padding: 40px; max-width: 400px; }}
@@ -107,8 +110,8 @@ async def verify_email(token: str, db: AsyncIOMotorDatabase = Depends(get_db)):
             <div class="avatar">{first_letter}</div>
             <h1>Email Verified!</h1>
             <p>Your email has been successfully verified. You can now access all features of MemoPad.</p>
-            <p class="redirect">Redirecting to MemoPad in 3 seconds...</p>
-            <p><a href="{app_url}">Click here if not redirected</a></p>
+            <p class="redirect">Redirecting to your notes in 3 seconds...</p>
+            <p><a href="{notes_list_url}">Click here if not redirected</a></p>
         </div>
     </body>
     </html>
