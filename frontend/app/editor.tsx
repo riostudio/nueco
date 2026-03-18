@@ -347,7 +347,7 @@ export default function EditorScreen() {
       >
         {/* Header */}
         <View style={s.header}>
-          <Text style={s.headerTitle}>{isNew ? 'New Note' : 'Edit Note'}</Text>
+          <View />
           <View style={s.headerRight}>
             <TouchableOpacity testID="pin-btn" style={s.headerBtn} onPress={togglePin}>
               <MaterialIcons
