@@ -17,7 +17,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
   const [isFirstLaunch, setIsFirstLaunch] = useState(false);
 
   const initAuth = useCallback(async () => {
@@ -38,24 +38,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(JSON.parse(storedUser));
       }
 
-      // Register device in background
+      // Register device in background - don't block on this
       const deviceModel = Device.modelName || 'Unknown';
       const osVersion = Device.osVersion || 'Unknown';
 
-      const response = await authApi.registerDevice({
+      // Fire and forget - don't await
+      authApi.registerDevice({
         device_id: deviceId,
         device_model: deviceModel,
         os_version: osVersion,
+      }).then((response) => {
+        if (response.success) {
+          setUser(response.user);
+          authStorage.setUser(response.user);
+        }
+      }).catch((error) => {
+        console.error('Device registration error:', error);
       });
-
-      if (response.success) {
-        setUser(response.user);
-        await authStorage.setUser(response.user);
-      }
     } catch (error) {
       console.error('Auth init error:', error);
-    } finally {
-      setIsLoading(false);
     }
   }, []);
 

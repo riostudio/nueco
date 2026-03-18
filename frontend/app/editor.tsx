@@ -37,7 +37,7 @@ const C = {
 export default function EditorScreen() {
   const router = useRouter();
   const { noteId } = useLocalSearchParams<{ noteId: string }>();
-  const isNew = noteId === 'new';
+  const isNew = !noteId || noteId === 'new';
 
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
