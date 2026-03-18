@@ -396,26 +396,6 @@ export default function EditorScreen() {
             <Text style={[s.headerBtnLabel, { color: C.primary }]}>Save</Text>
           </TouchableOpacity>
           <View style={s.headerRight}>
-            <TouchableOpacity testID="pin-btn" style={s.headerBtn} onPress={togglePin}>
-              <MaterialIcons
-                name="push-pin"
-                size={24}
-                color={isPinned ? C.primary : C.borderSub}
-              />
-              <Text style={[s.headerBtnLabel, isPinned && { color: C.primary }]}>
-                {isPinned ? 'Pinned' : 'Pin'}
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity testID="share-btn" style={s.headerBtn} onPress={handleShare}>
-              <MaterialIcons name="share" size={24} color={C.secondary} />
-              <Text style={[s.headerBtnLabel, { color: C.secondary }]}>Share</Text>
-            </TouchableOpacity>
-            {noteExists && (
-              <TouchableOpacity testID="delete-btn" style={s.headerBtn} onPress={handleDelete}>
-                <MaterialIcons name="delete" size={24} color={C.error} />
-                <Text style={[s.headerBtnLabel, { color: C.error }]}>Delete</Text>
-              </TouchableOpacity>
-            )}
             {/* User Avatar - shows first letter of email when verified */}
             <UserAvatar user={authUser} size={36} />
           </View>
@@ -596,6 +576,32 @@ export default function EditorScreen() {
             </View>
           )}
           
+          {/* Action Buttons - Pin, Share, Delete - shows when keyboard is hidden */}
+          {!isKeyboardVisible && (
+            <View style={s.actionBar}>
+              <TouchableOpacity testID="pin-btn" style={s.actionBtn} onPress={togglePin}>
+                <MaterialIcons
+                  name="push-pin"
+                  size={24}
+                  color={isPinned ? C.primary : C.borderSub}
+                />
+                <Text style={[s.actionBtnLabel, isPinned && { color: C.primary }]}>
+                  {isPinned ? 'Pinned' : 'Pin'}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity testID="share-btn" style={s.actionBtn} onPress={handleShare}>
+                <MaterialIcons name="share" size={24} color={C.secondary} />
+                <Text style={[s.actionBtnLabel, { color: C.secondary }]}>Share</Text>
+              </TouchableOpacity>
+              {noteExists && (
+                <TouchableOpacity testID="delete-btn" style={s.actionBtn} onPress={handleDelete}>
+                  <MaterialIcons name="delete" size={24} color={C.error} />
+                  <Text style={[s.actionBtnLabel, { color: C.error }]}>Delete</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
+          
           {/* Voice Input - hide when keyboard is visible */}
           {!isKeyboardVisible && (
             <View style={s.voiceBar}>
@@ -743,6 +749,28 @@ const s = StyleSheet.create({
   voiceBar: {
     paddingHorizontal: 24, paddingVertical: 12,
     backgroundColor: C.bg,
+  },
+  actionBar: {
+    flexDirection: 'row', 
+    justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    gap: 24,
+    backgroundColor: C.bg,
+    borderBottomWidth: 1,
+    borderBottomColor: C.borderSub + '40',
+  },
+  actionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    gap: 6,
+  },
+  actionBtnLabel: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: C.textSec,
   },
   transcribing: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
