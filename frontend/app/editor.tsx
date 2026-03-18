@@ -313,6 +313,50 @@ export default function EditorScreen() {
     triggerAutoSave();
   };
 
+  // Save note and show sign-up prompt
+  const handleSaveAndBack = async () => {
+    // Check if there's content to save
+    if (!title.trim() && !content.trim()) {
+      router.replace('/(tabs)');
+      return;
+    }
+
+    setSaveStatus('Saving...');
+    try {
+      if (!isCreatedRef.current) {
+        const created = await notesApi.create({
+          title: titleRef.current,
+          content: contentRef.current,
+          tags: tagsRef.current,
+          is_pinned: isPinnedRef.current,
+        });
+        noteIdRef.current = created.id;
+        isCreatedRef.current = true;
+        setNoteExists(true);
+      } else if (noteIdRef.current) {
+        await notesApi.update(noteIdRef.current, {
+          title: titleRef.current,
+          content: contentRef.current,
+          tags: tagsRef.current,
+          is_pinned: isPinnedRef.current,
+        });
+      }
+      setSaveStatus('All changes saved');
+      
+      // Show link account sheet for sign-up
+      const modalDismissed = await authStorage.isModalDismissed();
+      if (!modalDismissed) {
+        setShowLinkSheet(true);
+      } else {
+        router.replace('/(tabs)');
+      }
+    } catch (e) {
+      setSaveStatus('Failed to save');
+      console.error('Save error:', e);
+      Alert.alert('Error', 'Failed to save note. Please try again.');
+    }
+  };
+
   const handleDelete = () => {
     Alert.alert('Delete Note', 'Are you sure you want to delete this note?', [
       { text: 'Cancel', style: 'cancel' },
@@ -347,7 +391,10 @@ export default function EditorScreen() {
       >
         {/* Header */}
         <View style={s.header}>
-          <View />
+          <TouchableOpacity testID="save-back-btn" style={s.headerBtn} onPress={handleSaveAndBack}>
+            <MaterialIcons name="check" size={28} color={C.primary} />
+            <Text style={[s.headerBtnLabel, { color: C.primary }]}>Save</Text>
+          </TouchableOpacity>
           <View style={s.headerRight}>
             <TouchableOpacity testID="pin-btn" style={s.headerBtn} onPress={togglePin}>
               <MaterialIcons
@@ -582,10 +629,14 @@ export default function EditorScreen() {
       {/* Link Account Bottom Sheet */}
       <LinkAccountBottomSheet
         isVisible={showLinkSheet}
-        onDismiss={() => setShowLinkSheet(false)}
+        onDismiss={() => {
+          setShowLinkSheet(false);
+          router.replace('/(tabs)');
+        }}
         onSuccess={async () => {
           // Reload user after linking
           await refreshUser();
+          router.replace('/(tabs)');
         }}
       />
     </SafeAreaView>
