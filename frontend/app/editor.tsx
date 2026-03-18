@@ -347,10 +347,7 @@ export default function EditorScreen() {
       >
         {/* Header */}
         <View style={s.header}>
-          <TouchableOpacity testID="back-btn" style={s.headerBtn} onPress={handleBack}>
-            <MaterialIcons name="arrow-back" size={28} color={C.text} />
-            <Text style={s.headerBtnLabel}>Back</Text>
-          </TouchableOpacity>
+          <Text style={s.headerTitle}>{isNew ? 'New Note' : 'Edit Note'}</Text>
           <View style={s.headerRight}>
             <TouchableOpacity testID="pin-btn" style={s.headerBtn} onPress={togglePin}>
               <MaterialIcons
@@ -603,6 +600,7 @@ const s = StyleSheet.create({
     paddingHorizontal: 16, paddingVertical: 8,
     borderBottomWidth: 1, borderBottomColor: C.borderSub + '40',
   },
+  headerTitle: { fontSize: 20, fontWeight: '700', color: C.text },
   headerBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, height: 48 },
   headerBtnLabel: { fontSize: 18, fontWeight: '600', color: C.text, marginLeft: 4 },
   headerRight: { flexDirection: 'row', gap: 4 },
