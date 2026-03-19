@@ -52,34 +52,42 @@ export const transcribeApi = {
     
     // Determine file extension from URI
     const extension = fileUri.split('.').pop()?.toLowerCase() || 'm4a';
-    const mimeType = extension === 'caf' ? 'audio/x-caf' : 
-                     extension === 'wav' ? 'audio/wav' :
-                     extension === 'webm' ? 'audio/webm' : 'audio/m4a';
     
-    console.log('File extension:', extension, 'MIME type:', mimeType);
+    console.log('File extension:', extension);
+    console.log('BASE_URL:', BASE_URL);
 
     try {
-      // Use FileSystem.uploadAsync for reliable file upload
-      const response = await FileSystem.uploadAsync(
-        `${BASE_URL}/api/transcribe`,
-        fileUri,
-        {
-          uploadType: FileSystem.FileSystemUploadType.MULTIPART,
-          fieldName: 'file',
-          mimeType: mimeType,
-          parameters: {},
-          headers: {},
-        }
-      );
+      // Read file as base64
+      const base64 = await FileSystem.readAsStringAsync(fileUri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      
+      console.log('File read successfully, base64 length:', base64.length);
+      
+      // Send base64 to backend for processing
+      const uploadUrl = `${BASE_URL}/api/transcribe-base64`;
+      console.log('Uploading to:', uploadUrl);
+      
+      const response = await fetch(uploadUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          audio_base64: base64,
+          file_extension: extension,
+        }),
+      });
       
       console.log('Upload response status:', response.status);
-      console.log('Upload response body:', response.body);
       
-      if (response.status !== 200) {
-        throw new Error(`Transcription failed: ${response.status} - ${response.body}`);
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Transcription error response:', errorText);
+        throw new Error(`Transcription failed: ${response.status} - ${errorText}`);
       }
       
-      const result = JSON.parse(response.body);
+      const result = await response.json();
       console.log('Transcription result:', result);
       return result;
     } catch (error) {

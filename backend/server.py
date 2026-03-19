@@ -235,6 +235,70 @@ async def delete_event(event_id: str):
 
 # ---- Transcription Endpoint ----
 
+class TranscribeBase64Request(BaseModel):
+    audio_base64: str
+    file_extension: str = "m4a"
+
+@api_router.post("/transcribe-base64")
+async def transcribe_audio_base64(request: TranscribeBase64Request):
+    """Transcribe audio from base64 encoded data"""
+    try:
+        import base64
+        from emergentintegrations.llm.openai import OpenAISpeechToText
+
+        logger.info(f"Received base64 transcription request. Extension: {request.file_extension}, Base64 length: {len(request.audio_base64)}")
+        
+        api_key = os.getenv("EMERGENT_LLM_KEY")
+        if not api_key:
+            raise HTTPException(
+                status_code=500, detail="Transcription service not configured"
+            )
+
+        stt = OpenAISpeechToText(api_key=api_key)
+        
+        # Decode base64 to bytes
+        try:
+            audio_bytes = base64.b64decode(request.audio_base64)
+            logger.info(f"Decoded {len(audio_bytes)} bytes from base64")
+        except Exception as e:
+            logger.error(f"Failed to decode base64: {e}")
+            raise HTTPException(status_code=400, detail="Invalid base64 audio data")
+        
+        # Determine file extension
+        extension = request.file_extension.lower()
+        if not extension.startswith('.'):
+            extension = f'.{extension}'
+        
+        # Map unsupported formats
+        if extension == '.caf':
+            extension = '.m4a'
+        
+        logger.info(f"Processing audio with extension: {extension}")
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as tmp:
+            tmp.write(audio_bytes)
+            tmp_path = tmp.name
+
+        try:
+            with open(tmp_path, "rb") as audio_file:
+                response = await stt.transcribe(
+                    file=audio_file,
+                    model="whisper-1",
+                    response_format="json",
+                    language="en",
+                )
+            logger.info(f"Transcription successful: {response.text[:100] if response.text else 'empty'}...")
+            return {"text": response.text}
+        finally:
+            os.unlink(tmp_path)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Transcription error: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Transcription failed: {str(e)}"
+        )
+
 @api_router.post("/transcribe")
 async def transcribe_audio(file: UploadFile = File(...)):
     try:
