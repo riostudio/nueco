@@ -351,6 +351,78 @@ async def transcribe_audio(file: UploadFile = File(...)):
         )
 
 
+# ---- Text Processing Endpoint (Organize/Summarize) ----
+
+class TextProcessRequest(BaseModel):
+    text: str
+    action: str  # "organize" or "summarize"
+
+@api_router.post("/process-text")
+async def process_text(request: TextProcessRequest):
+    """Process text using AI - organize or summarize"""
+    try:
+        from emergentintegrations.llm.openai import OpenAILLM
+        
+        api_key = os.getenv("EMERGENT_LLM_KEY")
+        if not api_key:
+            raise HTTPException(
+                status_code=500, detail="AI service not configured"
+            )
+        
+        llm = OpenAILLM(api_key=api_key)
+        
+        if request.action == "organize":
+            prompt = f"""Please organize and structure the following text to make it easier to read. 
+Add appropriate formatting like:
+- Clear paragraphs
+- Bullet points where appropriate
+- Headers if needed
+- Fix any grammar or punctuation issues
+
+Keep the original meaning intact. Here's the text:
+
+{request.text}
+
+Return only the organized text, no explanations."""
+        
+        elif request.action == "summarize":
+            prompt = f"""Please summarize the following text concisely while keeping the key points.
+Make it clear and easy to read.
+
+Here's the text:
+
+{request.text}
+
+Return only the summary, no explanations."""
+        
+        else:
+            raise HTTPException(status_code=400, detail="Invalid action. Use 'organize' or 'summarize'")
+        
+        logger.info(f"Processing text with action: {request.action}, text length: {len(request.text)}")
+        
+        response = await llm.chat_completion(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant that processes text to make it clearer and more readable."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3,
+        )
+        
+        processed_text = response.choices[0].message.content.strip()
+        logger.info(f"Text processing successful, result length: {len(processed_text)}")
+        
+        return {"text": processed_text}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Text processing error: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Text processing failed: {str(e)}"
+        )
+
+
 # ---- Health Check ----
 
 @api_router.get("/health")

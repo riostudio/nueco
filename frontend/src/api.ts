@@ -96,3 +96,27 @@ export const transcribeApi = {
     }
   },
 };
+
+export const textProcessApi = {
+  processText: async (text: string, action: 'organize' | 'summarize'): Promise<{ text: string }> => {
+    console.log(`Processing text with action: ${action}, length: ${text.length}`);
+    
+    const response = await fetch(`${BASE_URL}/api/process-text`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ text, action }),
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Text processing error:', errorText);
+      throw new Error(`Text processing failed: ${response.status}`);
+    }
+    
+    const result = await response.json();
+    console.log('Text processing result length:', result.text.length);
+    return result;
+  },
+};

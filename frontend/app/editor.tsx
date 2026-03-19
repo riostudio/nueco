@@ -2,13 +2,13 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   ScrollView, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
-  Keyboard, Share,
+  Keyboard, Share, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAudioRecorder, AudioModule, RecordingPresets, setAudioModeAsync } from 'expo-audio';
-import { notesApi, transcribeApi } from '../src/api';
+import { notesApi, transcribeApi, textProcessApi } from '../src/api';
 import { Tag } from '../src/types';
 import { TAG_COLORS } from '../src/theme';
 import { 
@@ -49,6 +49,9 @@ export default function EditorScreen() {
 
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isProcessingText, setIsProcessingText] = useState(false);
+  const [showAiSuggestion, setShowAiSuggestion] = useState(false);
+  const [transcribedText, setTranscribedText] = useState('');
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
 
   const [showTagPicker, setShowTagPicker] = useState(false);
@@ -293,14 +296,45 @@ export default function EditorScreen() {
       const result = await transcribeApi.transcribe(uri);
       console.log('Transcription result:', result);
       
-      const newContent = content + (content ? ' ' : '') + result.text;
-      setContent(newContent);
-      triggerAutoSave();
+      // Store the transcribed text and show AI suggestion modal
+      setTranscribedText(result.text);
+      setIsTranscribing(false);
+      setShowAiSuggestion(true);
     } catch (e) {
       console.error('Transcription failed:', e);
       Alert.alert('Error', 'Voice transcription failed. Please try again.');
-    } finally {
       setIsTranscribing(false);
+    }
+  };
+
+  // Handle AI text processing
+  const handleAiProcess = async (action: 'organize' | 'summarize' | 'keep') => {
+    setShowAiSuggestion(false);
+    
+    if (action === 'keep') {
+      // Just add the transcribed text as-is
+      const newContent = content + (content ? ' ' : '') + transcribedText;
+      setContent(newContent);
+      triggerAutoSave();
+      return;
+    }
+
+    try {
+      setIsProcessingText(true);
+      const result = await textProcessApi.processText(transcribedText, action);
+      const newContent = content + (content ? '\n\n' : '') + result.text;
+      setContent(newContent);
+      triggerAutoSave();
+    } catch (e) {
+      console.error('Text processing failed:', e);
+      Alert.alert('Error', 'AI processing failed. Adding original text.');
+      // Fallback to original text
+      const newContent = content + (content ? ' ' : '') + transcribedText;
+      setContent(newContent);
+      triggerAutoSave();
+    } finally {
+      setIsProcessingText(false);
+      setTranscribedText('');
     }
   };
 
@@ -678,6 +712,70 @@ export default function EditorScreen() {
         </View>
       </KeyboardAvoidingView>
       
+      {/* AI Processing Indicator */}
+      {isProcessingText && (
+        <View style={s.processingOverlay}>
+          <View style={s.processingCard}>
+            <ActivityIndicator size="large" color={C.primary} />
+            <Text style={s.processingText}>AI is processing your text...</Text>
+          </View>
+        </View>
+      )}
+      
+      {/* AI Suggestion Modal */}
+      <Modal
+        visible={showAiSuggestion}
+        transparent
+        animationType="fade"
+        onRequestClose={() => handleAiProcess('keep')}
+      >
+        <View style={s.modalOverlay}>
+          <View style={s.aiSuggestionCard}>
+            <Text style={s.aiTitle}>Transcription Complete!</Text>
+            <Text style={s.aiSubtitle}>Would you like AI to improve your text?</Text>
+            
+            <View style={s.aiPreview}>
+              <Text style={s.aiPreviewText} numberOfLines={3}>
+                "{transcribedText.substring(0, 150)}{transcribedText.length > 150 ? '...' : ''}"
+              </Text>
+            </View>
+            
+            <TouchableOpacity
+              style={s.aiOption}
+              onPress={() => handleAiProcess('organize')}
+            >
+              <MaterialIcons name="format-list-bulleted" size={24} color={C.secondary} />
+              <View style={s.aiOptionText}>
+                <Text style={s.aiOptionTitle}>Organize</Text>
+                <Text style={s.aiOptionDesc}>Structure with paragraphs, bullets & headings</Text>
+              </View>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={s.aiOption}
+              onPress={() => handleAiProcess('summarize')}
+            >
+              <MaterialIcons name="compress" size={24} color={C.secondary} />
+              <View style={s.aiOptionText}>
+                <Text style={s.aiOptionTitle}>Summarize</Text>
+                <Text style={s.aiOptionDesc}>Condense into key points</Text>
+              </View>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              style={[s.aiOption, s.aiOptionKeep]}
+              onPress={() => handleAiProcess('keep')}
+            >
+              <MaterialIcons name="check" size={24} color={C.textSec} />
+              <View style={s.aiOptionText}>
+                <Text style={[s.aiOptionTitle, { color: C.textSec }]}>Keep as is</Text>
+                <Text style={s.aiOptionDesc}>Use the original transcription</Text>
+              </View>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+      
       {/* Link Account Bottom Sheet */}
       <LinkAccountBottomSheet
         isVisible={showLinkSheet}
@@ -831,4 +929,73 @@ const s = StyleSheet.create({
   voiceBtnRec: { backgroundColor: C.error, borderColor: C.error },
   voiceBtnText: { fontSize: 20, fontWeight: '600', color: C.primary, marginLeft: 8 },
   voiceBtnTextRec: { color: C.primaryFg },
+  // AI Suggestion Modal Styles
+  processingOverlay: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  processingCard: {
+    backgroundColor: C.surface,
+    padding: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+  },
+  processingText: {
+    marginTop: 16, fontSize: 18, fontWeight: '600', color: C.text,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  aiSuggestionCard: {
+    backgroundColor: C.surface,
+    borderRadius: 20,
+    padding: 24,
+    width: '100%',
+    maxWidth: 400,
+  },
+  aiTitle: {
+    fontSize: 24, fontWeight: '700', color: C.text, textAlign: 'center',
+    marginBottom: 8,
+  },
+  aiSubtitle: {
+    fontSize: 16, color: C.textSec, textAlign: 'center',
+    marginBottom: 16,
+  },
+  aiPreview: {
+    backgroundColor: C.bg,
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 20,
+  },
+  aiPreviewText: {
+    fontSize: 14, color: C.textSec, fontStyle: 'italic',
+  },
+  aiOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    borderRadius: 12,
+    backgroundColor: C.bg,
+    marginBottom: 12,
+    borderWidth: 2,
+    borderColor: C.borderSub + '40',
+  },
+  aiOptionKeep: {
+    backgroundColor: 'transparent',
+    borderStyle: 'dashed',
+  },
+  aiOptionText: {
+    marginLeft: 16, flex: 1,
+  },
+  aiOptionTitle: {
+    fontSize: 18, fontWeight: '600', color: C.text,
+  },
+  aiOptionDesc: {
+    fontSize: 14, color: C.textSec, marginTop: 2,
+  },
 });
