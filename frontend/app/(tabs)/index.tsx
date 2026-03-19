@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
-  ScrollView, RefreshControl, ActivityIndicator,
+  ScrollView, RefreshControl, ActivityIndicator, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -19,6 +19,7 @@ const C = {
   textSec: '#37474F',
   border: '#121212',
   borderSub: '#78909C',
+  error: '#C62828',
 };
 
 function formatTime(dateStr: string): string {
@@ -87,6 +88,29 @@ export default function NotesScreen() {
     }
   };
 
+  const handleDelete = (noteId: string, noteTitle: string) => {
+    Alert.alert(
+      'Delete Note',
+      `Are you sure you want to delete "${noteTitle || 'Untitled Note'}"?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await notesApi.delete(noteId);
+              loadNotes(debouncedSearch || undefined);
+            } catch (e) {
+              console.error('Delete failed:', e);
+              Alert.alert('Error', 'Failed to delete note. Please try again.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const renderCard = (note: Note) => (
     <TouchableOpacity
       key={note.id}
@@ -99,17 +123,26 @@ export default function NotesScreen() {
         <Text style={s.cardTitle} numberOfLines={1}>
           {note.title || 'Untitled Note'}
         </Text>
-        <TouchableOpacity
-          testID={`pin-toggle-${note.id}`}
-          onPress={() => handleTogglePin(note.id)}
-          style={s.pinBtn}
-        >
-          <MaterialIcons
-            name="push-pin"
-            size={22}
-            color={note.is_pinned ? C.primary : C.borderSub}
-          />
-        </TouchableOpacity>
+        <View style={s.cardActions}>
+          <TouchableOpacity
+            testID={`pin-toggle-${note.id}`}
+            onPress={() => handleTogglePin(note.id)}
+            style={s.actionBtn}
+          >
+            <MaterialIcons
+              name="push-pin"
+              size={22}
+              color={note.is_pinned ? C.primary : C.borderSub}
+            />
+          </TouchableOpacity>
+          <TouchableOpacity
+            testID={`delete-note-${note.id}`}
+            onPress={() => handleDelete(note.id, note.title)}
+            style={s.actionBtn}
+          >
+            <MaterialIcons name="delete-outline" size={22} color={C.error} />
+          </TouchableOpacity>
+        </View>
       </View>
       {note.content ? (
         <Text style={s.cardPreview} numberOfLines={2}>
@@ -243,8 +276,13 @@ const s = StyleSheet.create({
   },
   pinnedCard: { borderColor: C.primary, backgroundColor: C.surfaceHi },
   cardHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
-  pinBtn: {
-    width: 48, height: 48, borderRadius: 24,
+  cardActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  actionBtn: {
+    width: 44, height: 44, borderRadius: 22,
     justifyContent: 'center', alignItems: 'center',
     backgroundColor: C.bg,
   },
