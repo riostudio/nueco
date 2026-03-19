@@ -238,6 +238,8 @@ async def delete_event(event_id: str):
 @api_router.post("/transcribe")
 async def transcribe_audio(file: UploadFile = File(...)):
     try:
+        logger.info(f"Received transcription request. Filename: {file.filename}, Content-Type: {file.content_type}")
+        
         from emergentintegrations.llm.openai import OpenAISpeechToText
 
         api_key = os.getenv("EMERGENT_LLM_KEY")
@@ -247,10 +249,20 @@ async def transcribe_audio(file: UploadFile = File(...)):
             )
 
         stt = OpenAISpeechToText(api_key=api_key)
-        suffix = os.path.splitext(file.filename or "audio.m4a")[1] or ".m4a"
+        
+        # Get extension from filename or default to m4a
+        original_filename = file.filename or "recording.m4a"
+        suffix = os.path.splitext(original_filename)[1] or ".m4a"
+        
+        # Map common audio extensions to supported formats
+        if suffix.lower() == '.caf':
+            suffix = '.m4a'  # Convert CAF to m4a for Whisper compatibility
+        
+        logger.info(f"Processing audio file with suffix: {suffix}")
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             content = await file.read()
+            logger.info(f"Read {len(content)} bytes from uploaded file")
             tmp.write(content)
             tmp_path = tmp.name
 
@@ -262,6 +274,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
                     response_format="json",
                     language="en",
                 )
+            logger.info(f"Transcription successful: {response.text[:100]}...")
             return {"text": response.text}
         finally:
             os.unlink(tmp_path)

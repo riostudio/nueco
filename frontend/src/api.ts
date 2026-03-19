@@ -1,3 +1,5 @@
+import * as FileSystem from 'expo-file-system';
+
 const BASE_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
 
 async function fetchApi(path: string, options?: RequestInit) {
@@ -46,18 +48,43 @@ export const eventsApi = {
 
 export const transcribeApi = {
   transcribe: async (fileUri: string): Promise<{ text: string }> => {
-    const formData = new FormData();
-    formData.append('file', {
-      uri: fileUri,
-      type: 'audio/m4a',
-      name: 'recording.m4a',
-    } as any);
+    console.log('Transcribing file from URI:', fileUri);
+    
+    // Determine file extension from URI
+    const extension = fileUri.split('.').pop()?.toLowerCase() || 'm4a';
+    const mimeType = extension === 'caf' ? 'audio/x-caf' : 
+                     extension === 'wav' ? 'audio/wav' :
+                     extension === 'webm' ? 'audio/webm' : 'audio/m4a';
+    
+    console.log('File extension:', extension, 'MIME type:', mimeType);
 
-    const res = await fetch(`${BASE_URL}/api/transcribe`, {
-      method: 'POST',
-      body: formData,
-    });
-    if (!res.ok) throw new Error(`Transcription failed: ${res.status}`);
-    return res.json();
+    try {
+      // Use FileSystem.uploadAsync for reliable file upload
+      const response = await FileSystem.uploadAsync(
+        `${BASE_URL}/api/transcribe`,
+        fileUri,
+        {
+          uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+          fieldName: 'file',
+          mimeType: mimeType,
+          parameters: {},
+          headers: {},
+        }
+      );
+      
+      console.log('Upload response status:', response.status);
+      console.log('Upload response body:', response.body);
+      
+      if (response.status !== 200) {
+        throw new Error(`Transcription failed: ${response.status} - ${response.body}`);
+      }
+      
+      const result = JSON.parse(response.body);
+      console.log('Transcription result:', result);
+      return result;
+    } catch (error) {
+      console.error('Transcription upload error:', error);
+      throw error;
+    }
   },
 };

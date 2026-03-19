@@ -281,10 +281,19 @@ export default function EditorScreen() {
       setIsRecording(false);
       await audioRecorder.stop();
       const uri = audioRecorder.uri;
-      if (!uri) return;
+      console.log('Recording stopped. URI:', uri);
+      
+      if (!uri) {
+        console.error('No recording URI available');
+        Alert.alert('Error', 'Recording failed. No audio file was created.');
+        return;
+      }
 
       setIsTranscribing(true);
+      console.log('Starting transcription for:', uri);
       const result = await transcribeApi.transcribe(uri);
+      console.log('Transcription result:', result);
+      
       const newContent = content + (content ? ' ' : '') + result.text;
       setContent(newContent);
       triggerAutoSave();
