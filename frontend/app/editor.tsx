@@ -329,7 +329,7 @@ export default function EditorScreen() {
     triggerAutoSave();
   };
 
-  // Save note and show sign-up prompt
+  // Save note and show sign-up prompt (only on first note save)
   const handleSaveAndBack = async () => {
     // Check if there's content to save
     if (!title.trim() && !content.trim()) {
@@ -359,9 +359,15 @@ export default function EditorScreen() {
       }
       setSaveStatus('All changes saved');
       
-      // Show link account sheet for sign-up
+      // Only show sign-up sheet on the FIRST note save ever
+      const firstNoteSaved = await authStorage.isFirstNoteSaved();
       const modalDismissed = await authStorage.isModalDismissed();
-      if (!modalDismissed) {
+      const userVerified = authUser?.email_verified || authUser?.mobile_verified;
+      
+      if (!firstNoteSaved && !modalDismissed && !userVerified) {
+        // Mark first note as saved
+        await authStorage.setFirstNoteSaved();
+        // Show the sign-up sheet
         setShowLinkSheet(true);
       } else {
         router.replace('/(tabs)');
