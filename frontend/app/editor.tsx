@@ -359,13 +359,17 @@ export default function EditorScreen() {
       }
       setSaveStatus('All changes saved');
       
-      // Only show sign-up sheet on the FIRST note save ever
-      const firstNoteSaved = await authStorage.isFirstNoteSaved();
+      // Show sign-up sheet if user hasn't signed up yet
       const modalDismissed = await authStorage.isModalDismissed();
+      const userHasEmail = authUser?.email;
       const userVerified = authUser?.email_verified || authUser?.mobile_verified;
       
-      if (!firstNoteSaved && !modalDismissed && !userVerified) {
-        // Mark first note as saved
+      // Show sign-up form if:
+      // 1. User hasn't dismissed the modal
+      // 2. User doesn't have an email (hasn't signed up)
+      // 3. User is not verified
+      if (!modalDismissed && !userHasEmail && !userVerified) {
+        // Mark first note as saved (for banner logic)
         await authStorage.setFirstNoteSaved();
         // Show the sign-up sheet
         setShowLinkSheet(true);
@@ -432,7 +436,15 @@ export default function EditorScreen() {
           </TouchableOpacity>
           <View style={s.headerRight}>
             {/* User Avatar - shows first letter of email when verified */}
-            <UserAvatar user={authUser} size={36} />
+            <UserAvatar 
+              user={authUser} 
+              size={36} 
+              onSignInPress={() => setShowLinkSheet(true)}
+              onLogout={async () => {
+                // Handle logout from editor - just go back to tabs
+                router.replace('/(tabs)');
+              }}
+            />
           </View>
         </View>
 
