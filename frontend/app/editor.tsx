@@ -380,8 +380,21 @@ export default function EditorScreen() {
         text: 'Delete',
         style: 'destructive',
         onPress: async () => {
-          if (isCreatedRef.current && noteIdRef.current) {
-            try { await notesApi.delete(noteIdRef.current); } catch (e) { console.error(e); }
+          try {
+            // Use noteIdRef or the noteId from params
+            const idToDelete = noteIdRef.current || noteId;
+            console.log('Attempting to delete note:', idToDelete, 'isCreatedRef:', isCreatedRef.current);
+            
+            if (idToDelete) {
+              await notesApi.delete(idToDelete);
+              console.log('Note deleted successfully');
+            } else {
+              console.log('No note ID to delete');
+            }
+          } catch (e) {
+            console.error('Delete failed:', e);
+            Alert.alert('Error', 'Failed to delete note. Please try again.');
+            return; // Don't navigate away if delete failed
           }
           router.back();
         },
