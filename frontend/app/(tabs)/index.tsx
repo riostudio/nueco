@@ -126,8 +126,12 @@ export default function NotesScreen() {
         <View style={s.cardActions}>
           <TouchableOpacity
             testID={`pin-toggle-${note.id}`}
-            onPress={() => handleTogglePin(note.id)}
+            onPress={(e) => {
+              e.stopPropagation();
+              handleTogglePin(note.id);
+            }}
             style={s.actionBtn}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
             <MaterialIcons
               name="push-pin"
@@ -137,8 +141,12 @@ export default function NotesScreen() {
           </TouchableOpacity>
           <TouchableOpacity
             testID={`delete-note-${note.id}`}
-            onPress={() => handleDelete(note.id, note.title)}
+            onPress={(e) => {
+              e.stopPropagation();
+              handleDelete(note.id, note.title);
+            }}
             style={s.actionBtn}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
             <MaterialIcons name="delete-outline" size={22} color={C.error} />
           </TouchableOpacity>
