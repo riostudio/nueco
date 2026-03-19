@@ -1,12 +1,13 @@
 import { Tabs } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
-import { StyleSheet, View, Text } from 'react-native';
-import React from 'react';
-import { UserAvatar, useAuth } from '../../src/auth';
+import { StyleSheet, View, Alert } from 'react-native';
+import React, { useState } from 'react';
+import { UserAvatar, useAuth, LinkAccountBottomSheet } from '../../src/auth';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 const C = {
   primary: '#D84315',
-  inactiveTab: '#757575', // Accessible grey (WCAG AA compliant)
+  inactiveTab: '#757575',
   surface: '#FFFFFF',
   border: '#121212',
   bg: '#FDFBF7',
@@ -29,58 +30,105 @@ function SettingsIcon({ color }: { color: string }) {
   return <MaterialIcons name="settings" size={22} color={color} />;
 }
 
-function HeaderRight() {
+function HeaderRight({ onSignInPress, onLogout }: { onSignInPress: () => void; onLogout: () => void }) {
   const { user } = useAuth();
   return (
     <View style={styles.headerRight}>
-      <UserAvatar user={user} size={36} />
+      <UserAvatar 
+        user={user} 
+        size={36} 
+        onSignInPress={onSignInPress}
+        onLogout={onLogout}
+      />
     </View>
   );
 }
 
 export default function TabLayout() {
+  const [showSignInSheet, setShowSignInSheet] = useState(false);
+  const { logout, refreshUser } = useAuth();
+
+  const handleSignInPress = () => {
+    setShowSignInSheet(true);
+  };
+
+  const handleLogout = () => {
+    Alert.alert(
+      'Log Out',
+      'Are you sure you want to log out? Your local notes will be kept.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Log Out',
+          style: 'destructive',
+          onPress: async () => {
+            await logout();
+          },
+        },
+      ]
+    );
+  };
+
+  const handleSignInSuccess = async () => {
+    await refreshUser();
+  };
+
   return (
-    <Tabs
-      screenOptions={{
-        headerShown: true,
-        headerStyle: styles.header,
-        headerTitleStyle: styles.headerTitle,
-        headerRight: () => <HeaderRight />,
-        tabBarStyle: styles.tabBar,
-        tabBarActiveTintColor: C.primary,
-        tabBarInactiveTintColor: C.inactiveTab,
-        tabBarLabelStyle: styles.tabLabel,
-      }}
-    >
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: 'My Notes',
-          tabBarIcon: NotesIcon,
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <Tabs
+        screenOptions={{
+          headerShown: true,
+          headerStyle: styles.header,
+          headerTitleStyle: styles.headerTitle,
+          headerRight: () => (
+            <HeaderRight 
+              onSignInPress={handleSignInPress} 
+              onLogout={handleLogout}
+            />
+          ),
+          tabBarStyle: styles.tabBar,
+          tabBarActiveTintColor: C.primary,
+          tabBarInactiveTintColor: C.inactiveTab,
+          tabBarLabelStyle: styles.tabLabel,
         }}
+      >
+        <Tabs.Screen
+          name="index"
+          options={{
+            title: 'My Notes',
+            tabBarIcon: NotesIcon,
+          }}
+        />
+        <Tabs.Screen
+          name="calendar"
+          options={{
+            title: 'Calendar',
+            tabBarIcon: CalendarIcon,
+          }}
+        />
+        <Tabs.Screen
+          name="events"
+          options={{
+            title: 'Events',
+            tabBarIcon: EventsIcon,
+          }}
+        />
+        <Tabs.Screen
+          name="settings"
+          options={{
+            title: 'Settings',
+            tabBarIcon: SettingsIcon,
+          }}
+        />
+      </Tabs>
+      
+      {/* Sign In Bottom Sheet */}
+      <LinkAccountBottomSheet
+        isVisible={showSignInSheet}
+        onDismiss={() => setShowSignInSheet(false)}
+        onSuccess={handleSignInSuccess}
       />
-      <Tabs.Screen
-        name="calendar"
-        options={{
-          title: 'Calendar',
-          tabBarIcon: CalendarIcon,
-        }}
-      />
-      <Tabs.Screen
-        name="events"
-        options={{
-          title: 'Events',
-          tabBarIcon: EventsIcon,
-        }}
-      />
-      <Tabs.Screen
-        name="settings"
-        options={{
-          title: 'Settings',
-          tabBarIcon: SettingsIcon,
-        }}
-      />
-    </Tabs>
+    </GestureHandlerRootView>
   );
 }
 

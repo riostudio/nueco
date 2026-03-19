@@ -1,10 +1,13 @@
 import time
 import secrets
 import bcrypt
+import logging
 from typing import Optional, Dict, Any
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from .schemas import RegisterDeviceRequest, LinkAccountRequest, ChangePasswordRequest, UserResponse
 from .email_service import send_confirmation_email
+
+logger = logging.getLogger(__name__)
 
 class AuthService:
     def __init__(self, db: AsyncIOMotorDatabase):
@@ -21,6 +24,7 @@ class AuthService:
             email=user.get('email'),
             auth_provider=user.get('auth_provider', 'local'),
             email_verified=user.get('email_verified', False),
+            mobile_verified=user.get('mobile_verified', False),
             created_at=user.get('created_at', time.time())
         )
     
@@ -39,12 +43,23 @@ class AuthService:
             'password': None,
             'auth_provider': 'local',
             'email_verified': False,
+            'mobile_verified': False,
             'verification_token': None,
             'verification_token_expiry': None,
             'created_at': time.time()
         }
         await self.collection.insert_one(user_doc)
         return self._user_to_response(user_doc)
+    
+    def _send_mock_sms(self, mobile_number: str, token: str) -> None:
+        """Mock SMS sending - logs the verification link instead of sending actual SMS"""
+        import os
+        app_url = os.getenv("APP_BASE_URL", "https://note-builder-10.preview.emergentagent.com")
+        verification_link = f"{app_url}/api/auth/verify-mobile/{token}"
+        
+        logger.info(f"[MOCK SMS] Would send SMS to {mobile_number}")
+        logger.info(f"[MOCK SMS] Verification link: {verification_link}")
+        logger.info(f"[MOCK SMS] Message: Your MemoPad verification code. Click to verify: {verification_link}")
     
     async def link_account(self, request: LinkAccountRequest) -> Optional[UserResponse]:
         """Link email/mobile/password to existing device user"""
@@ -61,11 +76,19 @@ class AuthService:
             hashed = bcrypt.hashpw(request.password.encode(), bcrypt.gensalt(rounds=10))
             updates['password'] = hashed.decode()
         
+        # Handle email verification
         if request.email:
             token = secrets.token_urlsafe(32)
             updates['verification_token'] = token
             updates['verification_token_expiry'] = time.time() + 86400
             send_confirmation_email(request.email, token)
+        
+        # Handle mobile verification (mock)
+        if request.mobile_number and not request.email:
+            token = secrets.token_urlsafe(32)
+            updates['mobile_verification_token'] = token
+            updates['mobile_verification_token_expiry'] = time.time() + 86400
+            self._send_mock_sms(request.mobile_number, token)
         
         if updates:
             await self.collection.update_one(
@@ -116,3 +139,24 @@ class AuthService:
             }
         )
         return True, 'success', user_email
+    
+    async def verify_mobile(self, token: str) -> tuple[bool, str, str]:
+        """Verify mobile with token. Returns (success, status, mobile_number)"""
+        user = await self.collection.find_one({'mobile_verification_token': token})
+        if not user:
+            return False, 'invalid_token', ''
+        
+        expiry = user.get('mobile_verification_token_expiry', 0)
+        if expiry < time.time():
+            return False, 'expired_token', ''
+        
+        mobile_number = user.get('mobile_number', '')
+        
+        await self.collection.update_one(
+            {'mobile_verification_token': token},
+            {
+                '$set': {'mobile_verified': True, 'email_verified': True},  # Mark as verified
+                '$unset': {'mobile_verification_token': '', 'mobile_verification_token_expiry': ''}
+            }
+        )
+        return True, 'success', mobile_number

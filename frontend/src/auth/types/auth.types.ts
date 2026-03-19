@@ -6,6 +6,7 @@ export interface User {
   email: string | null;
   auth_provider: 'local' | 'google' | 'facebook' | 'microsoft';
   email_verified: boolean;
+  mobile_verified?: boolean;
   created_at: number;
 }
 

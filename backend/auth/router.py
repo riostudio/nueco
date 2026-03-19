@@ -116,3 +116,74 @@ async def verify_email(token: str, db: AsyncIOMotorDatabase = Depends(get_db)):
     </body>
     </html>
     """
+
+@router.get("/verify-mobile/{token}", response_class=HTMLResponse)
+async def verify_mobile(token: str, db: AsyncIOMotorDatabase = Depends(get_db)):
+    """Verify mobile with token and redirect to app"""
+    service = AuthService(db)
+    success, status, mobile_number = await service.verify_mobile(token)
+    
+    app_url = os.getenv("APP_BASE_URL", "https://note-builder-10.preview.emergentagent.com")
+    
+    if status in ['invalid_token', 'expired_token']:
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Mobile Verification Failed</title>
+            <style>
+                body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: #FDFBF7; }}
+                .container {{ text-align: center; padding: 40px; max-width: 400px; }}
+                .icon {{ font-size: 64px; margin-bottom: 20px; }}
+                h1 {{ color: #C62828; font-size: 24px; margin-bottom: 16px; }}
+                p {{ color: #37474F; font-size: 16px; line-height: 1.5; }}
+                a {{ color: #D84315; text-decoration: none; font-weight: 600; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="icon">❌</div>
+                <h1>Verification Failed</h1>
+                <p>This verification link is invalid or has expired. Please request a new verification SMS from the app.</p>
+                <p><a href="{app_url}">Return to MemoPad</a></p>
+            </div>
+        </body>
+        </html>
+        """
+    
+    # Mask mobile number for display
+    masked_mobile = mobile_number[-4:] if mobile_number else "****"
+    
+    notes_list_url = f"{app_url}/(tabs)"
+    
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Mobile Verified - MemoPad</title>
+        <meta http-equiv="refresh" content="3;url={notes_list_url}">
+        <style>
+            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: #FDFBF7; }}
+            .container {{ text-align: center; padding: 40px; max-width: 400px; }}
+            .avatar {{ width: 80px; height: 80px; border-radius: 50%; background: #4CAF50; color: white; font-size: 40px; font-weight: 700; display: flex; justify-content: center; align-items: center; margin: 0 auto 20px; }}
+            h1 {{ color: #121212; font-size: 24px; margin-bottom: 16px; }}
+            p {{ color: #37474F; font-size: 16px; line-height: 1.5; }}
+            .redirect {{ color: #78909C; font-size: 14px; margin-top: 24px; }}
+            a {{ color: #D84315; text-decoration: none; font-weight: 600; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="avatar">📱</div>
+            <h1>Mobile Verified!</h1>
+            <p>Your mobile number ending in ***{masked_mobile} has been verified. You can now access all features of MemoPad.</p>
+            <p class="redirect">Redirecting to your notes in 3 seconds...</p>
+            <p><a href="{notes_list_url}">Click here if not redirected</a></p>
+        </div>
+    </body>
+    </html>
+    """

@@ -25,4 +25,5 @@ class UserResponse(BaseModel):
     email: Optional[str]
     auth_provider: str
     email_verified: bool
+    mobile_verified: bool = False
     created_at: float

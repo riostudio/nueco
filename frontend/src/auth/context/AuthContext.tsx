@@ -11,6 +11,7 @@ interface AuthContextType {
   isLoading: boolean;
   isFirstLaunch: boolean;
   refreshUser: () => Promise<void>;
+  logout: () => Promise<void>;
   clearAllData: () => Promise<void>;
 }
 
@@ -90,11 +91,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await fetchUserFromServer();
   }, [fetchUserFromServer]);
 
+  // Logout function - keeps local notes but clears account link
+  const logout = useCallback(async () => {
+    try {
+      // Generate new device ID to act as a new user
+      const newDeviceId = Crypto.randomUUID();
+      await authStorage.setDeviceId(newDeviceId);
+      
+      // Clear user data but keep modal dismissed flag so they can sign in later
+      await authStorage.clearUser();
+      
+      // Clear the first note saved flag so sign-up prompt can show again
+      const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+      await AsyncStorage.removeItem('first_note_saved');
+      
+      // Reset modal dismissed so they can see sign-in option
+      await AsyncStorage.removeItem('modal_dismissed');
+      
+      setUser(null);
+      
+      // Register the new device
+      await fetchUserFromServer();
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
+  }, [fetchUserFromServer]);
+
   const clearAllData = useCallback(async () => {
     try {
       await authStorage.setDeviceId('');
       await authStorage.clearUser();
-      // Clear the dismissed modal flag
       const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
       await AsyncStorage.multiRemove(['device_id', 'modal_dismissed', 'first_note_saved', 'auth_user']);
       setUser(null);
@@ -105,7 +131,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, isFirstLaunch, refreshUser, clearAllData }}>
+    <AuthContext.Provider value={{ user, isLoading, isFirstLaunch, refreshUser, logout, clearAllData }}>
       {children}
     </AuthContext.Provider>
   );

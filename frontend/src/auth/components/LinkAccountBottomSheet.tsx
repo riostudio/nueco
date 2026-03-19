@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -6,8 +6,11 @@ import {
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
+  Keyboard,
+  Platform,
+  KeyboardAvoidingView,
 } from 'react-native';
-import BottomSheet, { BottomSheetView } from '@gorhom/bottom-sheet';
+import BottomSheet, { BottomSheetView, BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { useLinkAccount } from '../hooks/useLinkAccount';
 import { authStorage } from '../storage/authStorage';
 import { strings } from '../constants/strings';
@@ -40,13 +43,35 @@ export function LinkAccountBottomSheet({
   onSuccess,
 }: LinkAccountBottomSheetProps) {
   const bottomSheetRef = useRef<BottomSheet>(null);
-  const snapPoints = useMemo(() => ['70%'], []);
+  const snapPoints = useMemo(() => ['85%'], []);
   const [contactMethod, setContactMethod] = useState<ContactMethod>('email');
   const [email, setEmail] = useState('');
   const [mobile, setMobile] = useState('');
   const [password, setPassword] = useState('');
   const [errors, setErrors] = useState<{ contact?: string; password?: string }>({});
   const { linkAccount, isLoading } = useLinkAccount();
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+  // Handle keyboard events
+  useEffect(() => {
+    const keyboardWillShow = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      (e) => {
+        setKeyboardHeight(e.endCoordinates.height);
+      }
+    );
+    const keyboardWillHide = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => {
+        setKeyboardHeight(0);
+      }
+    );
+
+    return () => {
+      keyboardWillShow.remove();
+      keyboardWillHide.remove();
+    };
+  }, []);
 
   const validateEmail = (email: string): boolean => {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -54,15 +79,14 @@ export function LinkAccountBottomSheet({
   };
 
   const validateMobile = (mobile: string): boolean => {
-    // Allow digits, spaces, dashes, parentheses, and + for international
     const mobileRegex = /^[\d\s\-\(\)\+]{8,}$/;
     return mobileRegex.test(mobile);
   };
 
   const handleSave = useCallback(async () => {
+    Keyboard.dismiss();
     const newErrors: { contact?: string; password?: string } = {};
 
-    // Validate contact method
     if (contactMethod === 'email') {
       if (!email.trim()) {
         newErrors.contact = strings.errorEmailRequired;
@@ -77,7 +101,6 @@ export function LinkAccountBottomSheet({
       }
     }
 
-    // Validate password
     if (!password.trim()) {
       newErrors.password = strings.errorPasswordRequired;
     } else if (password.trim().length < 6) {
@@ -102,6 +125,7 @@ export function LinkAccountBottomSheet({
   }, [contactMethod, email, mobile, password, linkAccount, onDismiss, onSuccess]);
 
   const handleMaybeLater = useCallback(async () => {
+    Keyboard.dismiss();
     await authStorage.dismissModal();
     onDismiss();
   }, [onDismiss]);
@@ -109,6 +133,7 @@ export function LinkAccountBottomSheet({
   const handleSheetChanges = useCallback(
     (index: number) => {
       if (index === -1) {
+        Keyboard.dismiss();
         onDismiss();
       }
     },
@@ -126,8 +151,19 @@ export function LinkAccountBottomSheet({
       enablePanDownToClose
       backgroundStyle={styles.sheetBackground}
       handleIndicatorStyle={styles.handleIndicator}
+      keyboardBehavior="interactive"
+      keyboardBlurBehavior="restore"
+      android_keyboardInputMode="adjustResize"
+      animateOnMount={true}
     >
-      <BottomSheetView style={styles.container}>
+      <BottomSheetScrollView 
+        style={styles.scrollView}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingBottom: keyboardHeight > 0 ? keyboardHeight + 20 : 40 }
+        ]}
+        keyboardShouldPersistTaps="handled"
+      >
         <Text style={styles.heading}>{strings.linkAccountHeading}</Text>
         <Text style={styles.subheading}>{strings.linkAccountSubheading}</Text>
 
@@ -227,7 +263,7 @@ export function LinkAccountBottomSheet({
         <TouchableOpacity onPress={handleMaybeLater} style={styles.laterButton}>
           <Text style={styles.laterText}>{strings.btnMaybeLater}</Text>
         </TouchableOpacity>
-      </BottomSheetView>
+      </BottomSheetScrollView>
     </BottomSheet>
   );
 }
@@ -242,8 +278,10 @@ const styles = StyleSheet.create({
     backgroundColor: C.borderSub,
     width: 40,
   },
-  container: {
+  scrollView: {
     flex: 1,
+  },
+  scrollContent: {
     padding: 24,
   },
   heading: {
