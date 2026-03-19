@@ -682,16 +682,6 @@ export default function EditorScreen() {
             </View>
           )}
 
-          {/* Add Image Button */}
-          <TouchableOpacity
-            testID="add-image-btn"
-            style={s.addImageBtn}
-            onPress={() => setShowImagePicker(true)}
-          >
-            <MaterialIcons name="add-photo-alternate" size={24} color={C.secondary} />
-            <Text style={s.addImageBtnText}>Add Image</Text>
-          </TouchableOpacity>
-
           {/* Calendar Link */}
           <TouchableOpacity
             testID="schedule-event-btn"
@@ -744,7 +734,7 @@ export default function EditorScreen() {
             </View>
           )}
           
-          {/* Action Buttons - Pin, Share, Delete - shows when keyboard is hidden */}
+          {/* Action Buttons - Pin, Add Image, Share, Delete - shows when keyboard is hidden */}
           {!isKeyboardVisible && (
             <View style={s.actionBar}>
               <TouchableOpacity testID="pin-btn" style={s.actionBtn} onPress={togglePin}>
@@ -756,6 +746,10 @@ export default function EditorScreen() {
                 <Text style={[s.actionBtnLabel, isPinned && { color: C.primary }]}>
                   {isPinned ? 'Pinned' : 'Pin'}
                 </Text>
+              </TouchableOpacity>
+              <TouchableOpacity testID="add-image-btn" style={s.actionBtn} onPress={() => setShowImagePicker(true)}>
+                <MaterialIcons name="add-photo-alternate" size={24} color={C.secondary} />
+                <Text style={[s.actionBtnLabel, { color: C.secondary }]}>Image</Text>
               </TouchableOpacity>
               <TouchableOpacity testID="share-btn" style={s.actionBtn} onPress={handleShare}>
                 <MaterialIcons name="share" size={24} color={C.secondary} />
