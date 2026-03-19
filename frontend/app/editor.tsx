@@ -7,7 +7,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { useAudioRecorder, AudioModule, RecordingPresets, useAudioRecorderState } from 'expo-audio';
+import { useAudioRecorder, AudioModule, RecordingPresets, useAudioRecorderState, setAudioModeAsync } from 'expo-audio';
 import { notesApi, transcribeApi } from '../src/api';
 import { Tag } from '../src/types';
 import { TAG_COLORS } from '../src/theme';
@@ -260,6 +260,13 @@ export default function EditorScreen() {
         Alert.alert('Permission Needed', 'Microphone access is required for voice input.');
         return;
       }
+      
+      // Configure audio mode for recording (required on iOS)
+      await setAudioModeAsync({
+        playsInSilentMode: true,
+        allowsRecording: true,
+      });
+      
       await audioRecorder.prepareToRecordAsync();
       audioRecorder.record();
       setIsRecording(true);
