@@ -2,12 +2,13 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   ScrollView, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
-  Keyboard, Share, Modal,
+  Keyboard, Share, Modal, Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAudioRecorder, AudioModule, RecordingPresets, setAudioModeAsync } from 'expo-audio';
+import * as ImagePicker from 'expo-image-picker';
 import { notesApi, transcribeApi, textProcessApi } from '../src/api';
 import { Tag } from '../src/types';
 import { TAG_COLORS } from '../src/theme';
@@ -52,6 +53,8 @@ export default function EditorScreen() {
   const [isProcessingText, setIsProcessingText] = useState(false);
   const [showAiSuggestion, setShowAiSuggestion] = useState(false);
   const [transcribedText, setTranscribedText] = useState('');
+  const [images, setImages] = useState<string[]>([]);
+  const [showImagePicker, setShowImagePicker] = useState(false);
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
 
   const [showTagPicker, setShowTagPicker] = useState(false);
@@ -338,6 +341,61 @@ export default function EditorScreen() {
     }
   };
 
+  // Image picker functions
+  const takePhoto = async () => {
+    setShowImagePicker(false);
+    
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission Needed', 'Camera access is required to take photos.');
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [4, 3],
+      quality: 0.7,
+      base64: true,
+    });
+
+    if (!result.canceled && result.assets[0]) {
+      const imageUri = result.assets[0].uri;
+      setImages(prev => [...prev, imageUri]);
+      triggerAutoSave();
+    }
+  };
+
+  const pickFromGallery = async () => {
+    setShowImagePicker(false);
+    
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert('Permission Needed', 'Gallery access is required to select photos.');
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [4, 3],
+      quality: 0.7,
+      allowsMultipleSelection: true,
+      selectionLimit: 5,
+    });
+
+    if (!result.canceled && result.assets.length > 0) {
+      const newImages = result.assets.map(asset => asset.uri);
+      setImages(prev => [...prev, ...newImages]);
+      triggerAutoSave();
+    }
+  };
+
+  const removeImage = (index: number) => {
+    setImages(prev => prev.filter((_, i) => i !== index));
+    triggerAutoSave();
+  };
+
   const addTag = () => {
     if (!newTagName.trim()) return;
     if (tags.length >= 3) {
@@ -604,6 +662,36 @@ export default function EditorScreen() {
             />
           </View>
 
+          {/* Images Section */}
+          {images.length > 0 && (
+            <View style={s.imagesContainer}>
+              <Text style={s.imagesSectionTitle}>Attached Images</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.imagesScroll}>
+                {images.map((uri, index) => (
+                  <View key={index} style={s.imageWrapper}>
+                    <Image source={{ uri }} style={s.attachedImage} />
+                    <TouchableOpacity
+                      style={s.removeImageBtn}
+                      onPress={() => removeImage(index)}
+                    >
+                      <MaterialIcons name="close" size={16} color={C.primaryFg} />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </ScrollView>
+            </View>
+          )}
+
+          {/* Add Image Button */}
+          <TouchableOpacity
+            testID="add-image-btn"
+            style={s.addImageBtn}
+            onPress={() => setShowImagePicker(true)}
+          >
+            <MaterialIcons name="add-photo-alternate" size={24} color={C.secondary} />
+            <Text style={s.addImageBtnText}>Add Image</Text>
+          </TouchableOpacity>
+
           {/* Calendar Link */}
           <TouchableOpacity
             testID="schedule-event-btn"
@@ -771,6 +859,37 @@ export default function EditorScreen() {
                 <Text style={[s.aiOptionTitle, { color: C.textSec }]}>Keep as is</Text>
                 <Text style={s.aiOptionDesc}>Use the original transcription</Text>
               </View>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+      
+      {/* Image Picker Modal */}
+      <Modal
+        visible={showImagePicker}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowImagePicker(false)}
+      >
+        <View style={s.modalOverlay}>
+          <View style={s.imagePickerCard}>
+            <Text style={s.imagePickerTitle}>Add Image</Text>
+            
+            <TouchableOpacity style={s.imagePickerOption} onPress={takePhoto}>
+              <MaterialIcons name="camera-alt" size={28} color={C.primary} />
+              <Text style={s.imagePickerOptionText}>Take Photo</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity style={s.imagePickerOption} onPress={pickFromGallery}>
+              <MaterialIcons name="photo-library" size={28} color={C.secondary} />
+              <Text style={s.imagePickerOptionText}>Choose from Gallery</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={s.imagePickerCancel} 
+              onPress={() => setShowImagePicker(false)}
+            >
+              <Text style={s.imagePickerCancelText}>Cancel</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -997,5 +1116,84 @@ const s = StyleSheet.create({
   },
   aiOptionDesc: {
     fontSize: 14, color: C.textSec, marginTop: 2,
+  },
+  // Image Styles
+  imagesContainer: {
+    marginTop: 16,
+    paddingHorizontal: 20,
+  },
+  imagesSectionTitle: {
+    fontSize: 16, fontWeight: '600', color: C.text, marginBottom: 12,
+  },
+  imagesScroll: {
+    flexDirection: 'row',
+  },
+  imageWrapper: {
+    position: 'relative',
+    marginRight: 12,
+  },
+  attachedImage: {
+    width: 120,
+    height: 120,
+    borderRadius: 12,
+    backgroundColor: C.borderSub + '20',
+  },
+  removeImageBtn: {
+    position: 'absolute',
+    top: -8,
+    right: -8,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: C.error,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  addImageBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginHorizontal: 20,
+    marginTop: 16,
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: C.borderSub + '40',
+    borderStyle: 'dashed',
+    backgroundColor: C.surface,
+  },
+  addImageBtnText: {
+    fontSize: 16, fontWeight: '600', color: C.secondary, marginLeft: 8,
+  },
+  // Image Picker Modal
+  imagePickerCard: {
+    backgroundColor: C.surface,
+    borderRadius: 20,
+    padding: 24,
+    width: '100%',
+    maxWidth: 340,
+  },
+  imagePickerTitle: {
+    fontSize: 22, fontWeight: '700', color: C.text, textAlign: 'center',
+    marginBottom: 20,
+  },
+  imagePickerOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    borderRadius: 12,
+    backgroundColor: C.bg,
+    marginBottom: 12,
+  },
+  imagePickerOptionText: {
+    fontSize: 18, fontWeight: '600', color: C.text, marginLeft: 16,
+  },
+  imagePickerCancel: {
+    alignItems: 'center',
+    padding: 16,
+    marginTop: 8,
+  },
+  imagePickerCancelText: {
+    fontSize: 18, fontWeight: '600', color: C.textSec,
   },
 });

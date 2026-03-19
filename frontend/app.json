@@ -12,7 +12,9 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Record voice notes hands-free",
-        "NSCalendarsUsageDescription": "Link notes to calendar events"
+        "NSCalendarsUsageDescription": "Link notes to calendar events",
+        "NSCameraUsageDescription": "Take photos to add to your notes",
+        "NSPhotoLibraryUsageDescription": "Select photos to add to your notes"
       }
     },
     "android": {
@@ -24,7 +26,9 @@
       "permissions": [
         "android.permission.RECORD_AUDIO",
         "android.permission.READ_CALENDAR",
-        "android.permission.WRITE_CALENDAR"
+        "android.permission.WRITE_CALENDAR",
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE"
       ]
     },
     "web": {
