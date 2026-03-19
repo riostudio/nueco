@@ -7,12 +7,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { 
-  ExpoSpeechRecognitionModule, 
-  useSpeechRecognitionEvent,
-  getSpeechRecognitionServices 
-} from 'expo-speech-recognition';
-import { notesApi } from '../src/api';
+import { useAudioRecorder, AudioModule, RecordingPresets, setAudioModeAsync } from 'expo-audio';
+import { notesApi, transcribeApi } from '../src/api';
 import { Tag } from '../src/types';
 import { TAG_COLORS } from '../src/theme';
 import { 
@@ -52,8 +48,8 @@ export default function EditorScreen() {
   const [loading, setLoading] = useState(!isNew);
 
   const [isRecording, setIsRecording] = useState(false);
-  const [liveTranscript, setLiveTranscript] = useState('');
-  const contentBeforeRecording = useRef('');
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
 
   const [showTagPicker, setShowTagPicker] = useState(false);
   const [newTagName, setNewTagName] = useState('');
@@ -256,77 +252,55 @@ export default function EditorScreen() {
     }
   };
 
-  // Speech recognition event handlers for real-time transcription
-  useSpeechRecognitionEvent('start', () => {
-    console.log('Speech recognition started');
-    setIsRecording(true);
-  });
-
-  useSpeechRecognitionEvent('end', () => {
-    console.log('Speech recognition ended');
-    setIsRecording(false);
-    // Finalize the content with the transcript
-    if (liveTranscript) {
-      const finalContent = contentBeforeRecording.current + (contentBeforeRecording.current ? ' ' : '') + liveTranscript;
-      setContent(finalContent);
-      setLiveTranscript('');
-      triggerAutoSave();
-    }
-  });
-
-  useSpeechRecognitionEvent('result', (event) => {
-    // Get the latest transcript (partial or final)
-    const transcript = event.results[event.results.length - 1]?.transcript || '';
-    console.log('Speech result:', transcript, 'isFinal:', event.results[event.results.length - 1]?.isFinal);
-    
-    // Update live transcript
-    setLiveTranscript(transcript);
-    
-    // Update content in real-time
-    const updatedContent = contentBeforeRecording.current + (contentBeforeRecording.current ? ' ' : '') + transcript;
-    setContent(updatedContent);
-  });
-
-  useSpeechRecognitionEvent('error', (event) => {
-    console.error('Speech recognition error:', event.error, event.message);
-    setIsRecording(false);
-    setLiveTranscript('');
-    if (event.error !== 'no-speech') {
-      Alert.alert('Speech Error', event.message || 'Speech recognition failed. Please try again.');
-    }
-  });
-
   const startRecording = async () => {
     try {
-      // Request permissions
-      const result = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
-      if (!result.granted) {
+      const status = await AudioModule.requestRecordingPermissionsAsync();
+      if (!status.granted) {
         Alert.alert('Permission Needed', 'Microphone access is required for voice input.');
         return;
       }
-
-      // Save current content before recording
-      contentBeforeRecording.current = content;
-      setLiveTranscript('');
-
-      // Start speech recognition with real-time results
-      ExpoSpeechRecognitionModule.start({
-        lang: 'en-US',
-        interimResults: true, // Enable real-time partial results
-        maxAlternatives: 1,
-        continuous: true, // Keep listening until stopped
+      
+      // Configure audio mode for recording (required on iOS)
+      await setAudioModeAsync({
+        playsInSilentMode: true,
+        allowsRecording: true,
       });
+      
+      await audioRecorder.prepareToRecordAsync();
+      audioRecorder.record();
+      setIsRecording(true);
     } catch (e) {
-      console.error('Speech recognition start failed:', e);
-      Alert.alert('Error', 'Could not start speech recognition.');
+      console.error('Recording start failed:', e);
+      Alert.alert('Error', 'Could not start recording.');
     }
   };
 
   const stopRecording = async () => {
     try {
-      ExpoSpeechRecognitionModule.stop();
+      setIsRecording(false);
+      await audioRecorder.stop();
+      const uri = audioRecorder.uri;
+      console.log('Recording stopped. URI:', uri);
+      
+      if (!uri) {
+        console.error('No recording URI available');
+        Alert.alert('Error', 'Recording failed. No audio file was created.');
+        return;
+      }
+
+      setIsTranscribing(true);
+      console.log('Starting transcription for:', uri);
+      const result = await transcribeApi.transcribe(uri);
+      console.log('Transcription result:', result);
+      
+      const newContent = content + (content ? ' ' : '') + result.text;
+      setContent(newContent);
+      triggerAutoSave();
     } catch (e) {
-      console.error('Speech recognition stop failed:', e);
+      console.error('Transcription failed:', e);
+      Alert.alert('Error', 'Voice transcription failed. Please try again.');
+    } finally {
+      setIsTranscribing(false);
     }
   };
 
@@ -677,21 +651,28 @@ export default function EditorScreen() {
           {/* Voice Input - hide when keyboard is visible */}
           {!isKeyboardVisible && (
             <View style={s.voiceBar}>
-              <TouchableOpacity
-                testID="voice-input-btn"
-                style={[s.voiceBtn, isRecording && s.voiceBtnRec]}
-                onPress={isRecording ? stopRecording : startRecording}
-                activeOpacity={0.7}
-              >
-                <MaterialIcons
-                  name={isRecording ? 'stop' : 'mic'}
-                  size={28}
-                  color={isRecording ? C.primaryFg : C.primary}
-                />
-                <Text style={[s.voiceBtnText, isRecording && s.voiceBtnTextRec]}>
-                  {isRecording ? 'Tap to Stop' : 'Voice Input'}
-                </Text>
-              </TouchableOpacity>
+              {isTranscribing ? (
+                <View style={s.transcribing}>
+                  <ActivityIndicator size="small" color={C.primary} />
+                  <Text style={s.transcribingText}>Converting speech to text...</Text>
+                </View>
+              ) : (
+                <TouchableOpacity
+                  testID="voice-input-btn"
+                  style={[s.voiceBtn, isRecording && s.voiceBtnRec]}
+                  onPress={isRecording ? stopRecording : startRecording}
+                  activeOpacity={0.7}
+                >
+                  <MaterialIcons
+                    name={isRecording ? 'stop' : 'mic'}
+                    size={28}
+                    color={isRecording ? C.primaryFg : C.primary}
+                  />
+                  <Text style={[s.voiceBtnText, isRecording && s.voiceBtnTextRec]}>
+                    {isRecording ? 'Stop Recording' : 'Voice Input'}
+                  </Text>
+                </TouchableOpacity>
+              )}
             </View>
           )}
         </View>

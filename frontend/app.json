@@ -12,8 +12,7 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Record voice notes hands-free",
-        "NSCalendarsUsageDescription": "Link notes to calendar events",
-        "NSSpeechRecognitionUsageDescription": "Convert your speech to text in real-time"
+        "NSCalendarsUsageDescription": "Link notes to calendar events"
       }
     },
     "android": {
@@ -49,13 +48,6 @@
         "expo-calendar",
         {
           "calendarPermission": "Save events to your calendar"
-        }
-      ],
-      [
-        "expo-speech-recognition",
-        {
-          "microphonePermission": "Record voice notes hands-free",
-          "speechRecognitionPermission": "Convert your speech to text in real-time"
         }
       ]
     ],
