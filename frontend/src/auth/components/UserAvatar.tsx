@@ -28,9 +28,23 @@ export function UserAvatar({ user, size = 40, onSignInPress, onLogout }: UserAva
   const router = useRouter();
   const [menuVisible, setMenuVisible] = useState(false);
 
-  // Check if user is verified (has email and email_verified is true)
-  const isVerified = user?.email && user?.email_verified;
-  const firstLetter = isVerified ? user.email!.charAt(0).toUpperCase() : '';
+  // Check if user is verified (email_verified OR mobile_verified)
+  const isVerified = user?.email_verified || user?.mobile_verified;
+  
+  // Get first letter - prefer email, fallback to mobile number first digit, then phone icon
+  const getDisplayLetter = () => {
+    if (user?.email && user?.email_verified) {
+      return user.email.charAt(0).toUpperCase();
+    }
+    if (user?.mobile_number && user?.mobile_verified) {
+      // Return phone icon indicator for mobile-verified users
+      return null; // Will show phone icon instead
+    }
+    return '';
+  };
+  
+  const firstLetter = getDisplayLetter();
+  const showPhoneIcon = isVerified && !firstLetter && user?.mobile_verified;
 
   const handlePress = () => {
     setMenuVisible(true);
@@ -66,7 +80,11 @@ export function UserAvatar({ user, size = 40, onSignInPress, onLogout }: UserAva
         ]}
       >
         {isVerified ? (
-          <Text style={[styles.letter, { fontSize: size * 0.5 }]}>{firstLetter}</Text>
+          showPhoneIcon ? (
+            <MaterialIcons name="phone" size={size * 0.5} color={C.surface} />
+          ) : (
+            <Text style={[styles.letter, { fontSize: size * 0.5 }]}>{firstLetter}</Text>
+          )
         ) : (
           <MaterialIcons name="person" size={size * 0.6} color={C.surface} />
         )}
