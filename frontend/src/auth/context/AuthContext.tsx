@@ -1,137 +1,79 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
-import { AppState, AppStateStatus } from 'react-native';
-import { authStorage } from '../storage/authStorage';
-import { authApi } from '../api/authApi';
 import { User } from '../types/auth.types';
-import * as Crypto from 'expo-crypto';
-import * as Device from 'expo-device';
+import { authApi } from '../api/authApi';
+import { authStorage } from '../storage/authStorage';
 
 interface AuthContextType {
   user: User | null;
   isLoading: boolean;
-  isFirstLaunch: boolean;
-  refreshUser: () => Promise<void>;
+  isAuthenticated: boolean;
+  login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
-  clearAllData: () => Promise<void>;
+  refreshAuth: () => Promise<boolean>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isFirstLaunch, setIsFirstLaunch] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
-  const fetchUserFromServer = useCallback(async () => {
+  const refreshAuth = useCallback(async (): Promise<boolean> => {
     try {
-      const deviceId = await authStorage.getDeviceId();
-      if (!deviceId) return;
-
-      const deviceModel = Device.modelName || 'Unknown';
-      const osVersion = Device.osVersion || 'Unknown';
-
-      const response = await authApi.registerDevice({
-        device_id: deviceId,
-        device_model: deviceModel,
-        os_version: osVersion,
-      });
-
-      if (response.success) {
-        setUser(response.user);
-        await authStorage.setUser(response.user);
+      const result = await authApi.refreshToken();
+      if (result) {
+        setUser(result.user);
+        return true;
       }
-    } catch (error) {
-      console.error('Fetch user error:', error);
+      setUser(null);
+      return false;
+    } catch {
+      setUser(null);
+      return false;
     }
   }, []);
 
-  const initAuth = useCallback(async () => {
-    try {
-      // Check if this is first launch (no device ID)
-      let deviceId = await authStorage.getDeviceId();
-      const isFirst = !deviceId;
-      setIsFirstLaunch(isFirst);
-
-      if (!deviceId) {
-        deviceId = Crypto.randomUUID();
-        await authStorage.setDeviceId(deviceId);
-      }
-
-      // Check for stored user
-      const storedUser = await authStorage.getUser();
-      if (storedUser) {
-        setUser(JSON.parse(storedUser));
-      }
-
-      // Register device in background - don't block on this
-      fetchUserFromServer();
-    } catch (error) {
-      console.error('Auth init error:', error);
-    }
-  }, [fetchUserFromServer]);
-
+  // Check for existing session on mount
   useEffect(() => {
-    initAuth();
-  }, [initAuth]);
-
-  // Refresh user when app comes to foreground (after email verification)
-  useEffect(() => {
-    const handleAppStateChange = (nextAppState: AppStateStatus) => {
-      if (nextAppState === 'active') {
-        // App came to foreground, refresh user data
-        fetchUserFromServer();
+    const initAuth = async () => {
+      try {
+        const storedUser = await authStorage.getUser();
+        if (storedUser) {
+          setUser(storedUser as User);
+          // Try to refresh token in background
+          refreshAuth();
+        }
+      } catch (error) {
+        console.error('Auth init error:', error);
+      } finally {
+        setIsLoading(false);
       }
     };
 
-    const subscription = AppState.addEventListener('change', handleAppStateChange);
-    return () => subscription.remove();
-  }, [fetchUserFromServer]);
+    initAuth();
+  }, [refreshAuth]);
 
-  const refreshUser = useCallback(async () => {
-    await fetchUserFromServer();
-  }, [fetchUserFromServer]);
+  const login = useCallback(async (email: string, password: string) => {
+    const result = await authApi.login(email, password);
+    setUser(result.user);
+  }, []);
 
-  // Logout function - keeps local notes but clears account link
   const logout = useCallback(async () => {
-    try {
-      // Generate new device ID to act as a new user
-      const newDeviceId = Crypto.randomUUID();
-      await authStorage.setDeviceId(newDeviceId);
-      
-      // Clear user data but keep modal dismissed flag so they can sign in later
-      await authStorage.clearUser();
-      
-      // Clear the first note saved flag so sign-up prompt can show again
-      const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
-      await AsyncStorage.removeItem('first_note_saved');
-      
-      // Reset modal dismissed so they can see sign-in option
-      await AsyncStorage.removeItem('modal_dismissed');
-      
-      setUser(null);
-      
-      // Register the new device
-      await fetchUserFromServer();
-    } catch (error) {
-      console.error('Logout error:', error);
-    }
-  }, [fetchUserFromServer]);
-
-  const clearAllData = useCallback(async () => {
-    try {
-      await authStorage.setDeviceId('');
-      await authStorage.clearUser();
-      const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
-      await AsyncStorage.multiRemove(['device_id', 'modal_dismissed', 'first_note_saved', 'auth_user']);
-      setUser(null);
-      setIsFirstLaunch(true);
-    } catch (error) {
-      console.error('Clear data error:', error);
-    }
+    await authApi.logout();
+    setUser(null);
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, isFirstLaunch, refreshUser, logout, clearAllData }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        isLoading,
+        isAuthenticated: !!user,
+        login,
+        logout,
+        refreshAuth,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

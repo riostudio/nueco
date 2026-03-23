@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, Modal, Pressable } from 'reac
 import { useRouter } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import { User } from '../types/auth.types';
+import { useAuth } from '../context/AuthContext';
 
 const C = {
   primary: '#D84315',
@@ -14,80 +15,46 @@ const C = {
   borderSub: '#78909C',
   surface: '#FFFFFF',
   bg: '#FDFBF7',
-  defaultAvatar: '#9E9E9E',
 };
 
 interface UserAvatarProps {
-  user: User | null;
   size?: number;
-  onSignInPress?: () => void;
-  onLogout?: () => void;
 }
 
-export function UserAvatar({ user, size = 40, onSignInPress, onLogout }: UserAvatarProps) {
+export function UserAvatar({ size = 40 }: UserAvatarProps) {
   const router = useRouter();
+  const { user, logout } = useAuth();
   const [menuVisible, setMenuVisible] = useState(false);
 
-  // Check if user is verified (email_verified OR mobile_verified)
-  const isVerified = user?.email_verified || user?.mobile_verified;
-  
-  // Get first letter - prefer email, fallback to mobile number first digit, then phone icon
-  const getDisplayLetter = () => {
-    if (user?.email && user?.email_verified) {
-      return user.email.charAt(0).toUpperCase();
-    }
-    if (user?.mobile_number && user?.mobile_verified) {
-      // Return phone icon indicator for mobile-verified users
-      return null; // Will show phone icon instead
-    }
-    return '';
-  };
-  
-  const firstLetter = getDisplayLetter();
-  const showPhoneIcon = isVerified && !firstLetter && user?.mobile_verified;
+  if (!user) return null;
 
-  const handlePress = () => {
-    setMenuVisible(true);
-  };
+  const firstLetter = user.email.charAt(0).toUpperCase();
 
   const handleChangePassword = () => {
     setMenuVisible(false);
     router.push('/change-password');
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     setMenuVisible(false);
-    onLogout?.();
-  };
-
-  const handleSignIn = () => {
-    setMenuVisible(false);
-    onSignInPress?.();
+    await logout();
+    router.replace('/welcome');
   };
 
   return (
     <>
       <TouchableOpacity
-        onPress={handlePress}
+        onPress={() => setMenuVisible(true)}
         style={[
           styles.avatar,
           {
             width: size,
             height: size,
             borderRadius: size / 2,
-            backgroundColor: isVerified ? C.success : C.defaultAvatar,
           },
         ]}
       >
-        {isVerified ? (
-          showPhoneIcon ? (
-            <MaterialIcons name="phone" size={size * 0.5} color={C.surface} />
-          ) : (
-            <Text style={[styles.letter, { fontSize: size * 0.5 }]}>{firstLetter}</Text>
-          )
-        ) : (
-          <MaterialIcons name="person" size={size * 0.6} color={C.surface} />
-        )}
+        <Text style={[styles.letter, { fontSize: size * 0.5 }]}>{firstLetter}</Text>
       </TouchableOpacity>
 
       <Modal
@@ -98,26 +65,27 @@ export function UserAvatar({ user, size = 40, onSignInPress, onLogout }: UserAva
       >
         <Pressable style={styles.modalOverlay} onPress={() => setMenuVisible(false)}>
           <View style={styles.menuContainer}>
-            {isVerified ? (
-              // Signed in menu
-              <>
-                <TouchableOpacity style={styles.menuItem} onPress={handleChangePassword}>
-                  <MaterialIcons name="lock" size={24} color={C.text} />
-                  <Text style={styles.menuText}>Change Password</Text>
-                </TouchableOpacity>
-                <View style={styles.menuDivider} />
-                <TouchableOpacity style={styles.menuItem} onPress={handleLogout}>
-                  <MaterialIcons name="logout" size={24} color={C.primary} />
-                  <Text style={[styles.menuText, { color: C.primary }]}>Log out</Text>
-                </TouchableOpacity>
-              </>
-            ) : (
-              // Signed out menu
-              <TouchableOpacity style={styles.menuItem} onPress={handleSignIn}>
-                <MaterialIcons name="login" size={24} color={C.success} />
-                <Text style={[styles.menuText, { color: C.success }]}>Sign In</Text>
-              </TouchableOpacity>
-            )}
+            <View style={styles.menuHeader}>
+              <View style={styles.menuAvatar}>
+                <Text style={styles.menuAvatarText}>{firstLetter}</Text>
+              </View>
+              <View style={styles.menuUserInfo}>
+                <Text style={styles.menuUserName}>{user.name}</Text>
+                <Text style={styles.menuUserEmail}>{user.email}</Text>
+              </View>
+            </View>
+            
+            <View style={styles.menuDivider} />
+            
+            <TouchableOpacity style={styles.menuItem} onPress={handleChangePassword}>
+              <MaterialIcons name="lock" size={24} color={C.text} />
+              <Text style={styles.menuText}>Change Password</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity style={styles.menuItem} onPress={handleLogout}>
+              <MaterialIcons name="logout" size={24} color={C.primary} />
+              <Text style={[styles.menuText, { color: C.primary }]}>Log Out</Text>
+            </TouchableOpacity>
           </View>
         </Pressable>
       </Modal>
@@ -127,6 +95,7 @@ export function UserAvatar({ user, size = 40, onSignInPress, onLogout }: UserAva
 
 const styles = StyleSheet.create({
   avatar: {
+    backgroundColor: C.success,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -144,14 +113,52 @@ const styles = StyleSheet.create({
   },
   menuContainer: {
     backgroundColor: C.surface,
-    borderRadius: 12,
-    paddingVertical: 8,
-    minWidth: 200,
+    borderRadius: 16,
+    paddingVertical: 16,
+    minWidth: 260,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    elevation: 5,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  menuHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingBottom: 16,
+  },
+  menuAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: C.success,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  menuAvatarText: {
+    color: C.successFg,
+    fontSize: 22,
+    fontWeight: '700',
+  },
+  menuUserInfo: {
+    marginLeft: 12,
+    flex: 1,
+  },
+  menuUserName: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: C.text,
+  },
+  menuUserEmail: {
+    fontSize: 14,
+    color: C.textSec,
+    marginTop: 2,
+  },
+  menuDivider: {
+    height: 1,
+    backgroundColor: C.borderSub + '30',
+    marginVertical: 8,
   },
   menuItem: {
     flexDirection: 'row',
@@ -161,13 +168,8 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   menuText: {
-    fontSize: 18,
-    fontWeight: '600',
+    fontSize: 17,
+    fontWeight: '500',
     color: C.text,
-  },
-  menuDivider: {
-    height: 1,
-    backgroundColor: C.borderSub + '40',
-    marginHorizontal: 16,
   },
 });

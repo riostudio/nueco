@@ -1,16 +1,59 @@
+from datetime import datetime
 from typing import Optional
-from pydantic import BaseModel, Field
 
-class UserDocument:
-    """MongoDB User Document Schema - used with motor async driver"""
-    device_id: str
-    device_model: str
-    os_version: str
-    mobile_number: Optional[str] = None
-    email: Optional[str] = None
-    password: Optional[str] = None
-    auth_provider: str = 'local'
-    email_verified: bool = False
-    verification_token: Optional[str] = None
-    verification_token_expiry: Optional[float] = None
-    created_at: float
+# MongoDB document structures (used with motor)
+
+def create_user_doc(
+    user_id: str,
+    email: str,
+    name: str,
+    password_hash: str
+) -> dict:
+    return {
+        "id": user_id,
+        "email": email.lower(),
+        "name": name,
+        "password": password_hash,
+        "email_verified": False,
+        "verification_token": None,
+        "verification_token_expiry": None,
+        "reset_token": None,
+        "reset_token_expiry": None,
+        "failed_login_attempts": 0,
+        "locked_until": None,
+        "created_at": datetime.utcnow(),
+        "updated_at": datetime.utcnow()
+    }
+
+def create_device_doc(
+    device_id: str,
+    user_id: str,
+    device_name: str,
+    platform: str,
+    fcm_token: Optional[str] = None
+) -> dict:
+    return {
+        "id": device_id,
+        "user_id": user_id,
+        "device_name": device_name,
+        "platform": platform,
+        "fcm_token": fcm_token,
+        "last_active_at": datetime.utcnow(),
+        "registered_at": datetime.utcnow()
+    }
+
+def create_session_doc(
+    session_id: str,
+    user_id: str,
+    device_id: str,
+    refresh_token_hash: str,
+    expires_at: datetime
+) -> dict:
+    return {
+        "id": session_id,
+        "user_id": user_id,
+        "device_id": device_id,
+        "refresh_token": refresh_token_hash,
+        "expires_at": expires_at,
+        "created_at": datetime.utcnow()
+    }

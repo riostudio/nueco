@@ -1,29 +1,58 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from typing import Optional
+from datetime import datetime
 
-class RegisterDeviceRequest(BaseModel):
-    device_id: str
-    device_model: str
-    os_version: str
+# Request schemas
+class SignUpRequest(BaseModel):
+    name: str
+    email: EmailStr
+    password: str
+    confirm_password: str
 
-class LinkAccountRequest(BaseModel):
-    device_id: str
-    email: Optional[str] = None
-    mobile_number: Optional[str] = None
-    password: Optional[str] = None
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+    device_name: str = "Unknown Device"
+    platform: str = "unknown"
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+    confirm_password: str
 
 class ChangePasswordRequest(BaseModel):
-    device_id: str
     current_password: str
     new_password: str
+    confirm_password: str
 
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr
+
+# Response schemas
 class UserResponse(BaseModel):
-    device_id: str
-    device_model: str
-    os_version: str
-    mobile_number: Optional[str]
-    email: Optional[str]
-    auth_provider: str
+    id: str
+    email: str
+    name: str
     email_verified: bool
-    mobile_verified: bool = False
-    created_at: float
+    created_at: datetime
+
+class AuthResponse(BaseModel):
+    user: UserResponse
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+
+class MessageResponse(BaseModel):
+    message: str
+    success: bool = True
+
+class SyncStatusResponse(BaseModel):
+    notes_count: int
+    synced: bool
+    user_name: str
