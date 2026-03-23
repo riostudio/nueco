@@ -46,26 +46,17 @@ export default function LoginScreen() {
     if (!validate()) return;
 
     setIsLoading(true);
+    setErrors({}); // Clear previous errors
     try {
       await login(email.trim().toLowerCase(), password);
       router.replace('/(tabs)');
     } catch (error: any) {
-      if (error.message?.includes('verify')) {
-        Alert.alert(
-          'Email Not Verified',
-          'Please check your email and click the verification link before logging in.',
-          [
-            { text: 'OK' },
-            {
-              text: 'Resend Email',
-              onPress: () => {
-                // Could implement resend logic here
-              },
-            },
-          ]
-        );
+      // Show error inline instead of Alert (Alert doesn't work on web)
+      const errorMessage = error.message || 'Invalid email or password. Please try again.';
+      if (errorMessage.includes('verify')) {
+        setErrors({ general: 'Please verify your email before logging in. Check your inbox for the verification link.' });
       } else {
-        Alert.alert('Login Failed', error.message || 'Invalid email or password. Please try again.');
+        setErrors({ general: errorMessage });
       }
     } finally {
       setIsLoading(false);
@@ -102,6 +93,14 @@ export default function LoginScreen() {
 
           {/* Form */}
           <View style={styles.form}>
+            {/* General Error */}
+            {errors.general ? (
+              <View style={styles.generalErrorContainer}>
+                <Ionicons name="alert-circle" size={20} color="#C62828" />
+                <Text style={styles.generalErrorText}>{errors.general}</Text>
+              </View>
+            ) : null}
+
             {/* Email Input */}
             <View style={styles.inputGroup}>
               <Text style={styles.label}>Email Address</Text>
@@ -321,5 +320,21 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#1565C0',
     fontWeight: '600',
+  },
+  // General error styles
+  generalErrorContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFEBEE',
+    padding: 16,
+    borderRadius: 12,
+    gap: 12,
+    marginBottom: 8,
+  },
+  generalErrorText: {
+    flex: 1,
+    fontSize: 16,
+    color: '#C62828',
+    lineHeight: 22,
   },
 });

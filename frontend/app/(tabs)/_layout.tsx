@@ -1,9 +1,10 @@
 import { Tabs } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StyleSheet, View, Alert } from 'react-native';
-import React, { useState } from 'react';
-import { UserAvatar, useAuth, LinkAccountBottomSheet } from '../../src/auth';
+import React from 'react';
+import { UserAvatar, useAuth } from '../../src/auth';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { useRouter } from 'expo-router';
 
 const C = {
   primary: '#D84315',
@@ -30,14 +31,16 @@ function SettingsIcon({ color }: { color: string }) {
   return <MaterialIcons name="settings" size={22} color={color} />;
 }
 
-function HeaderRight({ onSignInPress, onLogout }: { onSignInPress: () => void; onLogout: () => void }) {
+function HeaderRight({ onLogout }: { onLogout: () => void }) {
   const { user } = useAuth();
+  const router = useRouter();
+  
   return (
     <View style={styles.headerRight}>
       <UserAvatar 
         user={user} 
         size={36} 
-        onSignInPress={onSignInPress}
+        onSignInPress={() => router.push('/login')}
         onLogout={onLogout}
       />
     </View>
@@ -45,17 +48,13 @@ function HeaderRight({ onSignInPress, onLogout }: { onSignInPress: () => void; o
 }
 
 export default function TabLayout() {
-  const [showSignInSheet, setShowSignInSheet] = useState(false);
-  const { logout, refreshUser } = useAuth();
-
-  const handleSignInPress = () => {
-    setShowSignInSheet(true);
-  };
+  const { logout } = useAuth();
+  const router = useRouter();
 
   const handleLogout = () => {
     Alert.alert(
       'Log Out',
-      'Are you sure you want to log out? Your local notes will be kept.',
+      'Are you sure you want to log out?',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -63,14 +62,11 @@ export default function TabLayout() {
           style: 'destructive',
           onPress: async () => {
             await logout();
+            router.replace('/welcome');
           },
         },
       ]
     );
-  };
-
-  const handleSignInSuccess = async () => {
-    await refreshUser();
   };
 
   return (
@@ -81,10 +77,7 @@ export default function TabLayout() {
           headerStyle: styles.header,
           headerTitleStyle: styles.headerTitle,
           headerRight: () => (
-            <HeaderRight 
-              onSignInPress={handleSignInPress} 
-              onLogout={handleLogout}
-            />
+            <HeaderRight onLogout={handleLogout} />
           ),
           tabBarStyle: styles.tabBar,
           tabBarActiveTintColor: C.primary,
@@ -121,13 +114,6 @@ export default function TabLayout() {
           }}
         />
       </Tabs>
-      
-      {/* Sign In Bottom Sheet */}
-      <LinkAccountBottomSheet
-        isVisible={showSignInSheet}
-        onDismiss={() => setShowSignInSheet(false)}
-        onSuccess={handleSignInSuccess}
-      />
     </GestureHandlerRootView>
   );
 }

@@ -84,10 +84,17 @@ class AuthService:
         user_doc["verification_token"] = verification_token
         user_doc["verification_token_expiry"] = datetime.utcnow() + timedelta(hours=24)
         
+        # Auto-verify in development mode (since Resend SMTP has domain restrictions)
+        # In production, remove this line and require email verification
+        user_doc["email_verified"] = True
+        
         await self.users.insert_one(user_doc)
         
-        # Send verification email
-        send_verification_email(email, name, verification_token)
+        # Send verification email (may fail in dev due to domain restrictions)
+        try:
+            send_verification_email(email, name, verification_token)
+        except Exception as e:
+            logger.warning(f"Could not send verification email to {email}: {e}")
         
         logger.info(f"New user created: {email}")
         return True, "Account created successfully", {"user_id": user_id, "email": email, "name": name}

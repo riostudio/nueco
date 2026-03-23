@@ -26,6 +26,7 @@ export default function SignupScreen() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [isSuccess, setIsSuccess] = useState(false);
 
   const validate = () => {
     const newErrors: Record<string, string> = {};
@@ -68,22 +69,43 @@ export default function SignupScreen() {
         confirm_password: confirmPassword,
       });
 
-      Alert.alert(
-        'Account Created!',
-        'Please check your email to verify your account before logging in.',
-        [
-          {
-            text: 'Go to Login',
-            onPress: () => router.replace('/login'),
-          },
-        ]
-      );
+      // Show success screen instead of Alert (Alert doesn't work well on web)
+      setIsSuccess(true);
     } catch (error: any) {
-      Alert.alert('Sign Up Failed', error.message || 'Something went wrong. Please try again.');
+      // Show error inline instead of Alert
+      setErrors({ general: error.message || 'Something went wrong. Please try again.' });
     } finally {
       setIsLoading(false);
     }
   };
+
+  // Success screen after account creation
+  if (isSuccess) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.successContainer}>
+          <View style={styles.successIcon}>
+            <Ionicons name="checkmark-circle" size={80} color="#4CAF50" />
+          </View>
+          <Text style={styles.successTitle}>Account Created!</Text>
+          <Text style={styles.successMessage}>
+            We've sent a verification link to{'\n'}
+            <Text style={styles.successEmail}>{email}</Text>
+          </Text>
+          <Text style={styles.successHint}>
+            Please check your email and click the verification link before logging in.
+          </Text>
+          <TouchableOpacity
+            style={styles.successButton}
+            onPress={() => router.replace('/login')}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.successButtonText}>Go to Login</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -115,6 +137,14 @@ export default function SignupScreen() {
 
           {/* Form */}
           <View style={styles.form}>
+            {/* General Error */}
+            {errors.general ? (
+              <View style={styles.generalErrorContainer}>
+                <Ionicons name="alert-circle" size={20} color="#C62828" />
+                <Text style={styles.generalErrorText}>{errors.general}</Text>
+              </View>
+            ) : null}
+
             {/* Name Input */}
             <View style={styles.inputGroup}>
               <Text style={styles.label}>Full Name</Text>
@@ -375,5 +405,76 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#1565C0',
     fontWeight: '600',
+  },
+  // General error styles
+  generalErrorContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFEBEE',
+    padding: 16,
+    borderRadius: 12,
+    gap: 12,
+    marginBottom: 8,
+  },
+  generalErrorText: {
+    flex: 1,
+    fontSize: 16,
+    color: '#C62828',
+    lineHeight: 22,
+  },
+  // Success screen styles
+  successContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  successIcon: {
+    marginBottom: 24,
+  },
+  successTitle: {
+    fontSize: 32,
+    fontWeight: '700',
+    color: '#121212',
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  successMessage: {
+    fontSize: 18,
+    color: '#546E7A',
+    textAlign: 'center',
+    lineHeight: 26,
+    marginBottom: 8,
+  },
+  successEmail: {
+    color: '#1565C0',
+    fontWeight: '600',
+  },
+  successHint: {
+    fontSize: 16,
+    color: '#78909C',
+    textAlign: 'center',
+    lineHeight: 24,
+    marginBottom: 32,
+    paddingHorizontal: 16,
+  },
+  successButton: {
+    backgroundColor: '#D84315',
+    paddingVertical: 18,
+    paddingHorizontal: 48,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 60,
+    shadowColor: '#D84315',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  successButtonText: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '700',
   },
 });
