@@ -126,7 +126,6 @@ const styles = StyleSheet.create({
   },
   buttonSection: {
     paddingBottom: 40,
-    paddingHorizontal: 16,
     gap: 16,
   },
   primaryButton: {
