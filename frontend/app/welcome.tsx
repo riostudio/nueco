@@ -15,60 +15,64 @@ export default function WelcomeScreen() {
   const router = useRouter();
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="dark-content" backgroundColor="#FDFBF7" />
-      
-      {/* Logo and Branding */}
-      <View style={styles.brandSection}>
-        <View style={styles.logoContainer}>
-          <Ionicons name="document-text" size={64} color="#D84315" />
+      <View style={styles.container}>
+        {/* Logo and Branding */}
+        <View style={styles.brandSection}>
+          <View style={styles.logoContainer}>
+            <Ionicons name="document-text" size={64} color="#D84315" />
+          </View>
+          <Text style={styles.appName}>MemoPad</Text>
+          <Text style={styles.tagline}>Your thoughts, organized simply</Text>
         </View>
-        <Text style={styles.appName}>MemoPad</Text>
-        <Text style={styles.tagline}>Your thoughts, organized simply</Text>
-      </View>
 
-      {/* Features Highlight */}
-      <View style={styles.featuresSection}>
-        <View style={styles.featureItem}>
-          <Ionicons name="mic" size={28} color="#1565C0" />
-          <Text style={styles.featureText}>Voice-to-text notes</Text>
+        {/* Features Highlight */}
+        <View style={styles.featuresSection}>
+          <View style={styles.featureItem}>
+            <Ionicons name="mic" size={28} color="#1565C0" />
+            <Text style={styles.featureText}>Voice-to-text notes</Text>
+          </View>
+          <View style={styles.featureItem}>
+            <Ionicons name="sync" size={28} color="#1565C0" />
+            <Text style={styles.featureText}>Sync across devices</Text>
+          </View>
+          <View style={styles.featureItem}>
+            <Ionicons name="calendar" size={28} color="#1565C0" />
+            <Text style={styles.featureText}>Calendar integration</Text>
+          </View>
         </View>
-        <View style={styles.featureItem}>
-          <Ionicons name="sync" size={28} color="#1565C0" />
-          <Text style={styles.featureText}>Sync across devices</Text>
-        </View>
-        <View style={styles.featureItem}>
-          <Ionicons name="calendar" size={28} color="#1565C0" />
-          <Text style={styles.featureText}>Calendar integration</Text>
-        </View>
-      </View>
 
-      {/* Action Buttons */}
-      <View style={styles.buttonSection}>
-        <TouchableOpacity
-          style={styles.primaryButton}
-          onPress={() => router.push('/signup')}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.primaryButtonText}>Get Started</Text>
-        </TouchableOpacity>
+        {/* Action Buttons */}
+        <View style={styles.buttonSection}>
+          <TouchableOpacity
+            style={styles.primaryButton}
+            onPress={() => router.push('/signup')}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.primaryButtonText}>Get Started</Text>
+          </TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.secondaryButton}
-          onPress={() => router.push('/login')}
-          activeOpacity={0.8}
-        >
-          <Text style={styles.secondaryButtonText}>I already have an account</Text>
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.secondaryButton}
+            onPress={() => router.push('/login')}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.secondaryButtonText}>I already have an account</Text>
+          </TouchableOpacity>
+        </View>
       </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  safeArea: {
     flex: 1,
     backgroundColor: '#FDFBF7',
+  },
+  container: {
+    flex: 1,
     paddingHorizontal: 24,
   },
   brandSection: {
@@ -105,6 +109,7 @@ const styles = StyleSheet.create({
   featuresSection: {
     paddingVertical: 32,
     gap: 20,
+    marginHorizontal: 0,
   },
   featureItem: {
     flexDirection: 'row',
@@ -127,6 +132,7 @@ const styles = StyleSheet.create({
   buttonSection: {
     paddingBottom: 40,
     gap: 16,
+    marginHorizontal: 0,
   },
   primaryButton: {
     backgroundColor: '#D84315',
