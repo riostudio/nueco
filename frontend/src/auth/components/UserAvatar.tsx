@@ -43,8 +43,8 @@ export function UserAvatar({ size = 40 }: UserAvatarProps) {
     router.replace('/welcome');
   };
 
-  // Calculate top position based on safe area + header height
-  const topOffset = insets.top + 50; // Safe area + approximate header height
+  // Calculate top position based on safe area + header height + extra margin
+  const topOffset = insets.top + 80; // Safe area + header height + 30px extra margin
 
   return (
     <>
