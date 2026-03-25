@@ -44,10 +44,21 @@ export const strings = {
   currentPassword: 'Current Password',
   newPassword: 'New Password',
   changePasswordButton: 'Change Password',
+  hintCurrentPassword: 'Enter current password',
+  hintNewPassword: 'Enter new password',
+  hintConfirmPassword: 'Confirm new password',
+  btnUpdatePassword: 'Update Password',
+
+  // Snackbar messages
+  snackbarPasswordUpdated: 'Password updated successfully',
+  snackbarWrongPassword: 'Current password is incorrect',
+  snackbarGenericError: 'Something went wrong. Please try again.',
 
   // Errors
   errorRequired: 'This field is required',
+  errorFieldRequired: 'This field is required',
   errorEmailInvalid: 'Please enter a valid email',
   errorPasswordMin: 'Password must be at least 8 characters',
   errorPasswordMatch: 'Passwords do not match',
+  errorPasswordsNoMatch: 'Passwords do not match',
 };

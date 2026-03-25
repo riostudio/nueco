@@ -14,11 +14,8 @@ import { Tag } from '../src/types';
 import { TAG_COLORS } from '../src/theme';
 import { 
   authStorage, 
-  useLinkAccount, 
-  LinkAccountBottomSheet, 
-  EmailVerificationBanner,
-  UserAvatar,
   useAuth,
+  UserAvatar,
 } from '../src/auth';
 
 const C = {
@@ -69,9 +66,7 @@ export default function EditorScreen() {
   const lastContentLength = useRef(0);
 
   // Auth state from context
-  const { user: authUser, refreshUser } = useAuth();
-  const [showLinkSheet, setShowLinkSheet] = useState(false);
-  const { linkAccount } = useLinkAccount();
+  const { user: authUser } = useAuth();
 
   // Keyboard listener for showing format toolbar
   useEffect(() => {
@@ -530,7 +525,7 @@ export default function EditorScreen() {
             <UserAvatar 
               user={authUser} 
               size={36} 
-              onSignInPress={() => setShowLinkSheet(true)}
+              onSignInPress={() => router.push('/login')}
               onLogout={async () => {
                 // Handle logout from editor - just go back to tabs
                 router.replace('/(tabs)');
@@ -538,19 +533,6 @@ export default function EditorScreen() {
             />
           </View>
         </View>
-
-        {/* Email Verification Banner */}
-        <EmailVerificationBanner
-          user={authUser}
-          onResend={async () => {
-            if (authUser?.email) {
-              const result = await linkAccount(authUser.email);
-              if (result.success) {
-                Alert.alert('Success', 'Verification email sent!');
-              }
-            }
-          }}
-        />
 
         {/* Save Status */}
         {saveStatus ? (
@@ -888,20 +870,6 @@ export default function EditorScreen() {
           </View>
         </View>
       </Modal>
-      
-      {/* Link Account Bottom Sheet */}
-      <LinkAccountBottomSheet
-        isVisible={showLinkSheet}
-        onDismiss={() => {
-          setShowLinkSheet(false);
-          router.replace('/(tabs)');
-        }}
-        onSuccess={async () => {
-          // Reload user after linking
-          await refreshUser();
-          router.replace('/(tabs)');
-        }}
-      />
     </SafeAreaView>
   );
 }

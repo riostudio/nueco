@@ -76,6 +76,7 @@ export function ChangePasswordScreen() {
 
       <View style={styles.content}>
         <View style={styles.inputGroup}>
+          <Text style={styles.label}>{strings.currentPassword}</Text>
           <TextInput
             style={[styles.input, errors.current && styles.inputError]}
             placeholder={strings.hintCurrentPassword}
@@ -90,6 +91,7 @@ export function ChangePasswordScreen() {
         </View>
 
         <View style={styles.inputGroup}>
+          <Text style={styles.label}>{strings.newPassword}</Text>
           <TextInput
             style={[styles.input, errors.new && styles.inputError]}
             placeholder={strings.hintNewPassword}
@@ -102,6 +104,7 @@ export function ChangePasswordScreen() {
         </View>
 
         <View style={styles.inputGroup}>
+          <Text style={styles.label}>{strings.confirmPassword}</Text>
           <TextInput
             style={[styles.input, errors.confirm && styles.inputError]}
             placeholder={strings.hintConfirmPassword}
@@ -163,6 +166,12 @@ const styles = StyleSheet.create({
   },
   inputGroup: {
     marginBottom: 20,
+  },
+  label: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: C.text,
+    marginBottom: 8,
   },
   input: {
     height: 56,
