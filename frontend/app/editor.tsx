@@ -117,6 +117,20 @@ export default function EditorScreen() {
     }
   };
 
+  // Retry helper for network resilience
+  const retryOperation = async (operation: () => Promise<any>, maxRetries = 3): Promise<any> => {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        return await operation();
+      } catch (e) {
+        console.log(`Save attempt ${attempt} failed:`, e);
+        if (attempt === maxRetries) throw e;
+        // Wait before retrying (exponential backoff)
+        await new Promise(resolve => setTimeout(resolve, attempt * 500));
+      }
+    }
+  };
+
   const triggerAutoSave = useCallback(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     setSaveStatus('Unsaved changes');
@@ -124,27 +138,31 @@ export default function EditorScreen() {
       setSaveStatus('Saving...');
       try {
         if (!isCreatedRef.current) {
-          const created = await notesApi.create({
+          const created = await retryOperation(() => notesApi.create({
             title: titleRef.current,
             content: contentRef.current,
             tags: tagsRef.current,
             is_pinned: isPinnedRef.current,
-          });
+          }));
           noteIdRef.current = created.id;
           isCreatedRef.current = true;
           setNoteExists(true);
         } else if (noteIdRef.current) {
-          await notesApi.update(noteIdRef.current, {
+          await retryOperation(() => notesApi.update(noteIdRef.current, {
             title: titleRef.current,
             content: contentRef.current,
             tags: tagsRef.current,
             is_pinned: isPinnedRef.current,
-          });
+          }));
         }
         setSaveStatus('All changes saved');
-      } catch (e) {
-        setSaveStatus('Failed to save');
-        console.error('Save error:', e);
+      } catch (e: any) {
+        // Show more helpful error message
+        const errorMsg = e?.message?.includes('Network') 
+          ? 'Network error - tap to retry' 
+          : 'Failed to save';
+        setSaveStatus(errorMsg);
+        console.error('Save error after retries:', e);
       }
     }, 2000);
   }, []);
@@ -153,22 +171,22 @@ export default function EditorScreen() {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     try {
       if (!isCreatedRef.current && (titleRef.current || contentRef.current)) {
-        await notesApi.create({
+        await retryOperation(() => notesApi.create({
           title: titleRef.current,
           content: contentRef.current,
           tags: tagsRef.current,
           is_pinned: isPinnedRef.current,
-        });
+        }));
       } else if (isCreatedRef.current && noteIdRef.current) {
-        await notesApi.update(noteIdRef.current, {
+        await retryOperation(() => notesApi.update(noteIdRef.current, {
           title: titleRef.current,
           content: contentRef.current,
           tags: tagsRef.current,
           is_pinned: isPinnedRef.current,
-        });
+        }));
       }
     } catch (e) {
-      console.error('Save on back failed:', e);
+      console.error('Save on back failed after retries:', e);
     }
     router.back();
   }, [router]);
@@ -413,22 +431,22 @@ export default function EditorScreen() {
     setSaveStatus('Saving...');
     try {
       if (!isCreatedRef.current) {
-        const created = await notesApi.create({
+        const created = await retryOperation(() => notesApi.create({
           title: titleRef.current,
           content: contentRef.current,
           tags: tagsRef.current,
           is_pinned: isPinnedRef.current,
-        });
+        }));
         noteIdRef.current = created.id;
         isCreatedRef.current = true;
         setNoteExists(true);
       } else if (noteIdRef.current) {
-        await notesApi.update(noteIdRef.current, {
+        await retryOperation(() => notesApi.update(noteIdRef.current, {
           title: titleRef.current,
           content: contentRef.current,
           tags: tagsRef.current,
           is_pinned: isPinnedRef.current,
-        });
+        }));
       }
       setSaveStatus('All changes saved');
       
@@ -449,10 +467,14 @@ export default function EditorScreen() {
       } else {
         router.replace('/(tabs)');
       }
-    } catch (e) {
-      setSaveStatus('Failed to save');
-      console.error('Save error:', e);
-      Alert.alert('Error', 'Failed to save note. Please try again.');
+    } catch (e: any) {
+      const errorMsg = e?.message?.includes('Network') 
+        ? 'Network error - please check your connection' 
+        : 'Failed to save note';
+      setSaveStatus(errorMsg);
+      console.error('Save error after retries:', e);
+      // Don't show alert on web, show inline error instead
+      // Alert.alert('Error', 'Failed to save note. Please try again.');
     }
   };
 
