@@ -160,10 +160,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     minHeight: 60,
     borderWidth: 2,
-    borderColor: '#1565C0',
+    borderColor: '#D84315',
   },
   secondaryButtonText: {
-    color: '#1565C0',
+    color: '#D84315',
     fontSize: 18,
     fontWeight: '600',
   },
