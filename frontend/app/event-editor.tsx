@@ -2,7 +2,7 @@ import React, { useState, useEffect, createElement } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   ScrollView, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
-  Switch,
+  Switch, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -187,6 +187,10 @@ export default function EventEditorScreen() {
   const [showAndroidStart, setShowAndroidStart] = useState(false);
   const [showAndroidEnd, setShowAndroidEnd] = useState(false);
 
+  // Delete confirmation modal state
+  const [deleteModalVisible, setDeleteModalVisible] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
   useEffect(() => {
     if (isEditing && params.eventId) {
       loadEvent(params.eventId);
@@ -269,23 +273,26 @@ export default function EventEditorScreen() {
     }
   };
 
-  const handleDelete = () => {
+  const handleDeletePress = () => {
     if (!isEditing || !params.eventId) return;
-    Alert.alert('Delete Event', 'Are you sure you want to delete this event?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await eventsApi.delete(params.eventId!);
-            router.back();
-          } catch (e) {
-            Alert.alert('Error', 'Failed to delete event.');
-          }
-        },
-      },
-    ]);
+    setDeleteModalVisible(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!params.eventId) return;
+    setDeleting(true);
+    try {
+      await eventsApi.delete(params.eventId);
+      setDeleteModalVisible(false);
+      router.back();
+    } catch (e) {
+      console.error('Delete failed:', e);
+      setDeleting(false);
+    }
+  };
+
+  const cancelDelete = () => {
+    setDeleteModalVisible(false);
   };
 
   const writeToDeviceCalendar = async (
@@ -671,7 +678,7 @@ export default function EventEditorScreen() {
             <TouchableOpacity
               testID="delete-event-btn"
               style={s.deleteBtn}
-              onPress={handleDelete}
+              onPress={handleDeletePress}
             >
               <MaterialIcons name="delete" size={24} color={C.error} />
               <Text style={s.deleteBtnText}>Delete Event</Text>
@@ -681,6 +688,45 @@ export default function EventEditorScreen() {
           <View style={{ height: 40 }} />
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* Delete Confirmation Modal */}
+      <Modal
+        visible={deleteModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={cancelDelete}
+      >
+        <View style={s.modalOverlay}>
+          <View style={s.modalContent}>
+            <MaterialIcons name="delete" size={48} color={C.error} style={{ marginBottom: 16 }} />
+            <Text style={s.modalTitle}>Delete Event?</Text>
+            <Text style={s.modalMessage}>
+              Are you sure you want to delete "{title || 'this event'}"? This action cannot be undone.
+            </Text>
+            <View style={s.modalButtons}>
+              <TouchableOpacity
+                style={s.modalCancelBtn}
+                onPress={cancelDelete}
+                activeOpacity={0.7}
+              >
+                <Text style={s.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={s.modalDeleteBtn}
+                onPress={confirmDelete}
+                activeOpacity={0.7}
+                disabled={deleting}
+              >
+                {deleting ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={s.modalDeleteText}>Delete</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -839,5 +885,63 @@ const s = StyleSheet.create({
     fontSize: 14,
     color: C.textSec,
     marginTop: 2,
+  },
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  modalContent: {
+    backgroundColor: C.surface,
+    borderRadius: 20,
+    padding: 24,
+    width: '100%',
+    maxWidth: 340,
+    alignItems: 'center',
+  },
+  modalTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: C.text,
+    marginBottom: 12,
+  },
+  modalMessage: {
+    fontSize: 16,
+    color: C.textSec,
+    textAlign: 'center',
+    lineHeight: 24,
+    marginBottom: 24,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    width: '100%',
+  },
+  modalCancelBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: '#E0E0E0',
+    alignItems: 'center',
+  },
+  modalCancelText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: C.text,
+  },
+  modalDeleteBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: C.error,
+    alignItems: 'center',
+  },
+  modalDeleteText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFFFFF',
   },
 });
