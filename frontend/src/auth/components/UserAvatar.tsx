@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Modal, Pressable } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Modal, Pressable, Platform, StatusBar } from 'react-native';
 import { useRouter } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import { User } from '../types/auth.types';
 import { useAuth } from '../context/AuthContext';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const C = {
   primary: '#D84315',
@@ -25,6 +26,7 @@ export function UserAvatar({ size = 40 }: UserAvatarProps) {
   const router = useRouter();
   const { user, logout } = useAuth();
   const [menuVisible, setMenuVisible] = useState(false);
+  const insets = useSafeAreaInsets();
 
   if (!user) return null;
 
@@ -40,6 +42,9 @@ export function UserAvatar({ size = 40 }: UserAvatarProps) {
     await logout();
     router.replace('/welcome');
   };
+
+  // Calculate top position based on safe area + header height
+  const topOffset = insets.top + 50; // Safe area + approximate header height
 
   return (
     <>
@@ -63,7 +68,10 @@ export function UserAvatar({ size = 40 }: UserAvatarProps) {
         animationType="fade"
         onRequestClose={() => setMenuVisible(false)}
       >
-        <Pressable style={styles.modalOverlay} onPress={() => setMenuVisible(false)}>
+        <Pressable 
+          style={[styles.modalOverlay, { paddingTop: topOffset }]} 
+          onPress={() => setMenuVisible(false)}
+        >
           <View style={styles.menuContainer}>
             <View style={styles.menuHeader}>
               <View style={styles.menuAvatar}>
@@ -108,7 +116,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.3)',
     justifyContent: 'flex-start',
     alignItems: 'flex-end',
-    paddingTop: 100,
     paddingRight: 16,
   },
   menuContainer: {
