@@ -14,6 +14,9 @@ export interface Note {
   updated_at: string;
 }
 
+// Reminder options in minutes before event
+export type ReminderMinutes = 5 | 15 | 30 | 60 | 1440; // 1440 = 1 day
+
 export interface CalendarEvent {
   id: string;
   title: string;
@@ -21,5 +24,7 @@ export interface CalendarEvent {
   start_time: string;
   end_time: string;
   linked_note_ids: string[];
+  reminder_minutes: ReminderMinutes | null;
+  device_calendar_event_id: string | null;
   created_at: string;
 }

@@ -9,6 +9,17 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { eventsApi, notesApi } from '../src/api';
 import { MONTH_NAMES } from '../src/theme';
+import { ReminderMinutes } from '../src/types';
+
+// Import expo-notifications for reminders
+let Notifications: typeof import('expo-notifications') | null = null;
+if (Platform.OS !== 'web') {
+  try {
+    Notifications = require('expo-notifications');
+  } catch (e) {
+    // Not available
+  }
+}
 
 let ExpoCalendar: typeof import('expo-calendar') | null = null;
 if (Platform.OS !== 'web') {
@@ -33,6 +44,16 @@ const C = {
 };
 
 const isWeb = Platform.OS === 'web';
+
+// Reminder options
+const REMINDER_OPTIONS: { label: string; value: ReminderMinutes | null }[] = [
+  { label: 'No Reminder', value: null },
+  { label: '5 minutes before', value: 5 },
+  { label: '15 minutes before', value: 15 },
+  { label: '30 minutes before', value: 30 },
+  { label: '1 hour before', value: 60 },
+  { label: '1 day before', value: 1440 },
+];
 
 function pad2(n: number): string {
   return n.toString().padStart(2, '0');
@@ -180,7 +201,12 @@ export default function EventEditorScreen() {
   });
   const [loading, setLoading] = useState(isEditing);
   const [saving, setSaving] = useState(false);
-  const [addToDeviceCal, setAddToDeviceCal] = useState(true);
+  const [addToDeviceCal, setAddToDeviceCal] = useState(true); // ON by default
+  const [reminderMinutes, setReminderMinutes] = useState<ReminderMinutes | null>(15); // Default 15 min reminder
+  const [deviceCalendarEventId, setDeviceCalendarEventId] = useState<string | null>(null);
+
+  // Reminder picker modal state
+  const [showReminderPicker, setShowReminderPicker] = useState(false);
 
   // Android-only: pickers need show/hide toggle
   const [showAndroidDate, setShowAndroidDate] = useState(false);
@@ -195,7 +221,18 @@ export default function EventEditorScreen() {
     if (isEditing && params.eventId) {
       loadEvent(params.eventId);
     }
+    // Request notification permissions on mount
+    requestNotificationPermissions();
   }, []);
+
+  const requestNotificationPermissions = async () => {
+    if (Notifications && !isWeb) {
+      const { status } = await Notifications.requestPermissionsAsync();
+      if (status !== 'granted') {
+        console.log('Notification permissions not granted');
+      }
+    }
+  };
 
   const loadEvent = async (id: string) => {
     try {
@@ -207,6 +244,8 @@ export default function EventEditorScreen() {
       setDate(start);
       setStartTime(start);
       setEndTime(end);
+      setReminderMinutes(event.reminder_minutes || null);
+      setDeviceCalendarEventId(event.device_calendar_event_id || null);
     } catch (e) {
       console.error('Failed to load event:', e);
     } finally {
@@ -236,12 +275,31 @@ export default function EventEditorScreen() {
       const linkedNoteIds =
         params.noteId && params.noteId !== 'new' ? [params.noteId] : [];
 
+      // Write to device calendar first (if enabled) to get the device calendar event ID
+      let newDeviceCalEventId = deviceCalendarEventId;
+      if (addToDeviceCal && !isWeb) {
+        newDeviceCalEventId = await writeToDeviceCalendar(
+          title.trim(),
+          description.trim(),
+          st,
+          et,
+          deviceCalendarEventId // Pass existing ID for update
+        );
+      }
+
+      // Schedule notification reminder
+      if (reminderMinutes && !isWeb) {
+        await scheduleReminder(title.trim(), st, reminderMinutes);
+      }
+
       const eventData = {
         title: title.trim(),
         description: description.trim(),
         start_time: st.toISOString(),
         end_time: et.toISOString(),
         linked_note_ids: linkedNoteIds,
+        reminder_minutes: reminderMinutes,
+        device_calendar_event_id: newDeviceCalEventId,
       };
 
       if (isEditing && params.eventId) {
@@ -259,11 +317,6 @@ export default function EventEditorScreen() {
         }
       }
 
-      // Write to device calendar if toggled on
-      if (addToDeviceCal && !isWeb) {
-        await writeToDeviceCalendar(title.trim(), description.trim(), st, et);
-      }
-
       router.back();
     } catch (e) {
       Alert.alert('Error', 'Failed to save event. Please try again.');
@@ -271,6 +324,45 @@ export default function EventEditorScreen() {
     } finally {
       setSaving(false);
     }
+  };
+
+  // Schedule a notification reminder before the event
+  const scheduleReminder = async (
+    eventTitle: string,
+    eventStartTime: Date,
+    minutesBefore: number
+  ) => {
+    if (!Notifications || isWeb) return;
+
+    try {
+      // Cancel any existing notification for this event
+      await Notifications.cancelAllScheduledNotificationsAsync();
+
+      const reminderTime = new Date(eventStartTime.getTime() - minutesBefore * 60 * 1000);
+      
+      // Only schedule if reminder time is in the future
+      if (reminderTime > new Date()) {
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: '⏰ Event Reminder',
+            body: `"${eventTitle}" starts in ${getReminderLabel(minutesBefore)}`,
+            sound: true,
+          },
+          trigger: {
+            type: Notifications.SchedulableTriggerInputTypes.DATE,
+            date: reminderTime,
+          },
+        });
+        console.log('Reminder scheduled for:', reminderTime);
+      }
+    } catch (e) {
+      console.error('Failed to schedule reminder:', e);
+    }
+  };
+
+  const getReminderLabel = (minutes: number): string => {
+    const option = REMINDER_OPTIONS.find(o => o.value === minutes);
+    return option ? option.label.replace(' before', '') : `${minutes} minutes`;
   };
 
   const handleDeletePress = () => {
@@ -300,16 +392,17 @@ export default function EventEditorScreen() {
     eventDesc: string,
     startDate: Date,
     endDate: Date,
-  ) => {
-    if (!ExpoCalendar || isWeb) return;
+    existingEventId: string | null = null,
+  ): Promise<string | null> => {
+    if (!ExpoCalendar || isWeb) return null;
     try {
       const { status } = await ExpoCalendar.requestCalendarPermissionsAsync();
       if (status !== 'granted') {
         Alert.alert(
           'Calendar Permission',
-          'Calendar access is needed to add this event to your device calendar. You can enable it in Settings.',
+          'Calendar access is needed to sync events with your device calendar. You can enable it in Settings.',
         );
-        return;
+        return null;
       }
 
       const calendars = await ExpoCalendar.getCalendarsAsync(
@@ -343,26 +436,41 @@ export default function EventEditorScreen() {
 
       if (!targetCalId) {
         Alert.alert('No Calendar', 'No writable calendar found on your device.');
-        return;
+        return null;
       }
 
-      await ExpoCalendar.createEventAsync(targetCalId, {
+      const eventDetails = {
         title: eventTitle,
         notes: eventDesc,
         startDate,
         endDate,
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      });
+      };
 
-      Alert.alert(
-        'Added to Calendar',
-        Platform.OS === 'ios'
-          ? 'Event added to Apple Calendar'
-          : 'Event added to Google Calendar',
-      );
+      let deviceEventId: string | null = null;
+
+      // Try to update existing event, or create new one
+      if (existingEventId) {
+        try {
+          await ExpoCalendar.updateEventAsync(existingEventId, eventDetails);
+          deviceEventId = existingEventId;
+          console.log('Updated device calendar event:', existingEventId);
+        } catch (updateError) {
+          // Event might have been deleted from device calendar, create new one
+          console.log('Could not update event, creating new one');
+          deviceEventId = await ExpoCalendar.createEventAsync(targetCalId, eventDetails);
+        }
+      } else {
+        // Create new event
+        deviceEventId = await ExpoCalendar.createEventAsync(targetCalId, eventDetails);
+        console.log('Created device calendar event:', deviceEventId);
+      }
+
+      return deviceEventId;
     } catch (e) {
       console.error('Device calendar write error:', e);
-      Alert.alert('Calendar Error', 'Could not add event to device calendar.');
+      Alert.alert('Calendar Error', 'Could not sync event with device calendar.');
+      return null;
     }
   };
 
@@ -626,10 +734,10 @@ export default function EventEditorScreen() {
                 />
                 <View style={s.calendarToggleTextContainer}>
                   <Text style={s.calendarToggleTitle}>
-                    {Platform.OS === 'ios' ? 'Add to Apple Calendar' : 'Add to Google Calendar'}
+                    {Platform.OS === 'ios' ? 'Sync to Apple Calendar' : 'Sync to Google Calendar'}
                   </Text>
                   <Text style={s.calendarToggleSubtitle}>
-                    Sync this event to your device calendar
+                    Auto-sync with your device calendar
                   </Text>
                 </View>
               </View>
@@ -643,6 +751,69 @@ export default function EventEditorScreen() {
               />
             </View>
           )}
+
+          {/* Reminder Picker */}
+          <Text style={s.label}>Reminder</Text>
+          <TouchableOpacity
+            testID="reminder-picker-btn"
+            style={s.pickerBtn}
+            onPress={() => setShowReminderPicker(true)}
+          >
+            <MaterialIcons name="notifications" size={24} color={C.secondary} />
+            <Text style={s.pickerBtnText}>
+              {REMINDER_OPTIONS.find(o => o.value === reminderMinutes)?.label || 'No Reminder'}
+            </Text>
+            <MaterialIcons name="arrow-drop-down" size={28} color={C.borderSub} />
+          </TouchableOpacity>
+
+          {/* Reminder Picker Modal */}
+          <Modal
+            testID="reminder-modal"
+            visible={showReminderPicker}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setShowReminderPicker(false)}
+          >
+            <TouchableOpacity
+              style={s.modalOverlay}
+              activeOpacity={1}
+              onPress={() => setShowReminderPicker(false)}
+            >
+              <View style={s.reminderModal}>
+                <Text style={s.reminderModalTitle}>Set Reminder</Text>
+                {REMINDER_OPTIONS.map((option) => (
+                  <TouchableOpacity
+                    key={option.label}
+                    style={[
+                      s.reminderOption,
+                      reminderMinutes === option.value && s.reminderOptionSelected,
+                    ]}
+                    onPress={() => {
+                      setReminderMinutes(option.value);
+                      setShowReminderPicker(false);
+                    }}
+                  >
+                    <MaterialIcons
+                      name={option.value === null ? 'notifications-off' : 'notifications'}
+                      size={22}
+                      color={reminderMinutes === option.value ? C.primaryFg : C.textSec}
+                    />
+                    <Text
+                      style={[
+                        s.reminderOptionText,
+                        reminderMinutes === option.value && s.reminderOptionTextSelected,
+                      ]}
+                    >
+                      {option.label}
+                    </Text>
+                    {reminderMinutes === option.value && (
+                      <MaterialIcons name="check" size={22} color={C.primaryFg} />
+                    )}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </TouchableOpacity>
+          </Modal>
 
           {/* Linked Note Indicator */}
           {params.noteId && params.noteId !== 'new' && (
@@ -943,5 +1114,42 @@ const s = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#FFFFFF',
+  },
+  // Reminder picker modal styles
+  reminderModal: {
+    backgroundColor: C.surface,
+    borderRadius: 20,
+    padding: 20,
+    width: '100%',
+    maxWidth: 340,
+  },
+  reminderModalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: C.text,
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  reminderOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    marginBottom: 8,
+    backgroundColor: C.bg,
+  },
+  reminderOptionSelected: {
+    backgroundColor: C.primary,
+  },
+  reminderOptionText: {
+    flex: 1,
+    fontSize: 16,
+    color: C.text,
+    marginLeft: 12,
+  },
+  reminderOptionTextSelected: {
+    color: C.primaryFg,
+    fontWeight: '600',
   },
 });

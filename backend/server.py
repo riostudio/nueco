@@ -64,6 +64,8 @@ class EventCreate(BaseModel):
     start_time: str
     end_time: str
     linked_note_ids: List[str] = []
+    reminder_minutes: Optional[int] = None  # Minutes before event to remind
+    device_calendar_event_id: Optional[str] = None  # ID from device calendar
 
 class EventUpdate(BaseModel):
     title: Optional[str] = None
@@ -71,6 +73,8 @@ class EventUpdate(BaseModel):
     start_time: Optional[str] = None
     end_time: Optional[str] = None
     linked_note_ids: Optional[List[str]] = None
+    reminder_minutes: Optional[int] = None
+    device_calendar_event_id: Optional[str] = None
 
 class EventResponse(BaseModel):
     id: str
@@ -79,6 +83,8 @@ class EventResponse(BaseModel):
     start_time: str
     end_time: str
     linked_note_ids: List[str]
+    reminder_minutes: Optional[int] = None
+    device_calendar_event_id: Optional[str] = None
     created_at: str
 
 
@@ -180,6 +186,8 @@ async def create_event(event: EventCreate):
         "start_time": event.start_time,
         "end_time": event.end_time,
         "linked_note_ids": event.linked_note_ids,
+        "reminder_minutes": event.reminder_minutes,
+        "device_calendar_event_id": event.device_calendar_event_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.events.insert_one(doc)
