@@ -105,8 +105,8 @@ function NativeDateInput({
     style: {
       width: '100%',
       height: 60,
-      fontSize: 22,
-      fontWeight: '600',
+      fontSize: 20,
+      fontWeight: '400',
       padding: '0 16px',
       border: '2px solid #78909C',
       borderRadius: 12,
@@ -116,6 +116,7 @@ function NativeDateInput({
       boxSizing: 'border-box',
       WebkitAppearance: 'none',
       appearance: 'none',
+      textAlign: 'left',
     },
   });
 }
@@ -147,8 +148,8 @@ function NativeTimeInput({
     style: {
       width: '100%',
       height: 60,
-      fontSize: 22,
-      fontWeight: '600',
+      fontSize: 20,
+      fontWeight: '400',
       padding: '0 16px',
       border: '2px solid #78909C',
       borderRadius: 12,
@@ -158,6 +159,7 @@ function NativeTimeInput({
       boxSizing: 'border-box',
       WebkitAppearance: 'none',
       appearance: 'none',
+      textAlign: 'left',
     },
   });
 }
@@ -208,10 +210,10 @@ export default function EventEditorScreen() {
   // Reminder picker modal state
   const [showReminderPicker, setShowReminderPicker] = useState(false);
 
-  // Android-only: pickers need show/hide toggle
-  const [showAndroidDate, setShowAndroidDate] = useState(false);
-  const [showAndroidStart, setShowAndroidStart] = useState(false);
-  const [showAndroidEnd, setShowAndroidEnd] = useState(false);
+  // Native pickers need show/hide toggle (for Android and iOS inline modal)
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showStartPicker, setShowStartPicker] = useState(false);
+  const [showEndPicker, setShowEndPicker] = useState(false);
 
   // Delete confirmation modal state
   const [deleteModalVisible, setDeleteModalVisible] = useState(false);
@@ -537,25 +539,11 @@ export default function EventEditorScreen() {
           )}
 
           {isIOS && DateTimePicker && (
-            <View style={s.pickerContainer}>
-              <DateTimePicker
-                testID="ios-date-picker"
-                value={date}
-                mode="date"
-                display="spinner"
-                onChange={(_e: any, d?: Date) => d && setDate(d)}
-                style={{ height: 150 }}
-                textColor={C.text}
-              />
-            </View>
-          )}
-
-          {isAndroid && (
             <>
               <TouchableOpacity
-                testID="android-date-btn"
+                testID="ios-date-btn"
                 style={s.pickerBtn}
-                onPress={() => setShowAndroidDate(true)}
+                onPress={() => setShowDatePicker(true)}
               >
                 <MaterialIcons
                   name="calendar-today"
@@ -569,14 +557,59 @@ export default function EventEditorScreen() {
                   color={C.borderSub}
                 />
               </TouchableOpacity>
-              {showAndroidDate && DateTimePicker && (
+              {showDatePicker && (
+                <Modal transparent animationType="slide">
+                  <View style={s.pickerModalOverlay}>
+                    <View style={s.pickerModalContent}>
+                      <View style={s.pickerModalHeader}>
+                        <Text style={s.pickerModalTitle}>Select Date</Text>
+                        <TouchableOpacity onPress={() => setShowDatePicker(false)}>
+                          <Text style={s.pickerModalDone}>Done</Text>
+                        </TouchableOpacity>
+                      </View>
+                      <DateTimePicker
+                        testID="ios-date-picker"
+                        value={date}
+                        mode="date"
+                        display="spinner"
+                        onChange={(_e: any, d?: Date) => d && setDate(d)}
+                        style={{ height: 200 }}
+                        textColor={C.text}
+                      />
+                    </View>
+                  </View>
+                </Modal>
+              )}
+            </>
+          )}
+
+          {isAndroid && (
+            <>
+              <TouchableOpacity
+                testID="android-date-btn"
+                style={s.pickerBtn}
+                onPress={() => setShowDatePicker(true)}
+              >
+                <MaterialIcons
+                  name="calendar-today"
+                  size={24}
+                  color={C.secondary}
+                />
+                <Text style={s.pickerBtnText}>{formatDisplayDate(date)}</Text>
+                <MaterialIcons
+                  name="arrow-drop-down"
+                  size={28}
+                  color={C.borderSub}
+                />
+              </TouchableOpacity>
+              {showDatePicker && DateTimePicker && (
                 <DateTimePicker
                   testID="android-date-picker"
                   value={date}
                   mode="date"
                   display="default"
                   onChange={(_e: any, d?: Date) => {
-                    setShowAndroidDate(false);
+                    setShowDatePicker(false);
                     if (d) setDate(d);
                   }}
                 />
@@ -596,26 +629,11 @@ export default function EventEditorScreen() {
           )}
 
           {isIOS && DateTimePicker && (
-            <View style={s.pickerContainer}>
-              <DateTimePicker
-                testID="ios-start-picker"
-                value={startTime}
-                mode="time"
-                display="spinner"
-                onChange={(_e: any, d?: Date) => d && setStartTime(d)}
-                minuteInterval={5}
-                style={{ height: 150 }}
-                textColor={C.text}
-              />
-            </View>
-          )}
-
-          {isAndroid && (
             <>
               <TouchableOpacity
-                testID="android-start-btn"
+                testID="ios-start-btn"
                 style={s.pickerBtn}
-                onPress={() => setShowAndroidStart(true)}
+                onPress={() => setShowStartPicker(true)}
               >
                 <MaterialIcons
                   name="access-time"
@@ -631,7 +649,55 @@ export default function EventEditorScreen() {
                   color={C.borderSub}
                 />
               </TouchableOpacity>
-              {showAndroidStart && DateTimePicker && (
+              {showStartPicker && (
+                <Modal transparent animationType="slide">
+                  <View style={s.pickerModalOverlay}>
+                    <View style={s.pickerModalContent}>
+                      <View style={s.pickerModalHeader}>
+                        <Text style={s.pickerModalTitle}>Select Start Time</Text>
+                        <TouchableOpacity onPress={() => setShowStartPicker(false)}>
+                          <Text style={s.pickerModalDone}>Done</Text>
+                        </TouchableOpacity>
+                      </View>
+                      <DateTimePicker
+                        testID="ios-start-picker"
+                        value={startTime}
+                        mode="time"
+                        display="spinner"
+                        onChange={(_e: any, d?: Date) => d && setStartTime(d)}
+                        minuteInterval={5}
+                        style={{ height: 200 }}
+                        textColor={C.text}
+                      />
+                    </View>
+                  </View>
+                </Modal>
+              )}
+            </>
+          )}
+
+          {isAndroid && (
+            <>
+              <TouchableOpacity
+                testID="android-start-btn"
+                style={s.pickerBtn}
+                onPress={() => setShowStartPicker(true)}
+              >
+                <MaterialIcons
+                  name="access-time"
+                  size={24}
+                  color={C.secondary}
+                />
+                <Text style={s.pickerBtnText}>
+                  {formatDisplayTime(startTime)}
+                </Text>
+                <MaterialIcons
+                  name="arrow-drop-down"
+                  size={28}
+                  color={C.borderSub}
+                />
+              </TouchableOpacity>
+              {showStartPicker && DateTimePicker && (
                 <DateTimePicker
                   testID="android-start-picker"
                   value={startTime}
@@ -639,7 +705,7 @@ export default function EventEditorScreen() {
                   display="default"
                   minuteInterval={5}
                   onChange={(_e: any, d?: Date) => {
-                    setShowAndroidStart(false);
+                    setShowStartPicker(false);
                     if (d) setStartTime(d);
                   }}
                 />
@@ -659,26 +725,11 @@ export default function EventEditorScreen() {
           )}
 
           {isIOS && DateTimePicker && (
-            <View style={s.pickerContainer}>
-              <DateTimePicker
-                testID="ios-end-picker"
-                value={endTime}
-                mode="time"
-                display="spinner"
-                onChange={(_e: any, d?: Date) => d && setEndTime(d)}
-                minuteInterval={5}
-                style={{ height: 150 }}
-                textColor={C.text}
-              />
-            </View>
-          )}
-
-          {isAndroid && (
             <>
               <TouchableOpacity
-                testID="android-end-btn"
+                testID="ios-end-btn"
                 style={s.pickerBtn}
-                onPress={() => setShowAndroidEnd(true)}
+                onPress={() => setShowEndPicker(true)}
               >
                 <MaterialIcons
                   name="access-time"
@@ -694,7 +745,55 @@ export default function EventEditorScreen() {
                   color={C.borderSub}
                 />
               </TouchableOpacity>
-              {showAndroidEnd && DateTimePicker && (
+              {showEndPicker && (
+                <Modal transparent animationType="slide">
+                  <View style={s.pickerModalOverlay}>
+                    <View style={s.pickerModalContent}>
+                      <View style={s.pickerModalHeader}>
+                        <Text style={s.pickerModalTitle}>Select End Time</Text>
+                        <TouchableOpacity onPress={() => setShowEndPicker(false)}>
+                          <Text style={s.pickerModalDone}>Done</Text>
+                        </TouchableOpacity>
+                      </View>
+                      <DateTimePicker
+                        testID="ios-end-picker"
+                        value={endTime}
+                        mode="time"
+                        display="spinner"
+                        onChange={(_e: any, d?: Date) => d && setEndTime(d)}
+                        minuteInterval={5}
+                        style={{ height: 200 }}
+                        textColor={C.text}
+                      />
+                    </View>
+                  </View>
+                </Modal>
+              )}
+            </>
+          )}
+
+          {isAndroid && (
+            <>
+              <TouchableOpacity
+                testID="android-end-btn"
+                style={s.pickerBtn}
+                onPress={() => setShowEndPicker(true)}
+              >
+                <MaterialIcons
+                  name="access-time"
+                  size={24}
+                  color={C.secondary}
+                />
+                <Text style={s.pickerBtnText}>
+                  {formatDisplayTime(endTime)}
+                </Text>
+                <MaterialIcons
+                  name="arrow-drop-down"
+                  size={28}
+                  color={C.borderSub}
+                />
+              </TouchableOpacity>
+              {showEndPicker && DateTimePicker && (
                 <DateTimePicker
                   testID="android-end-picker"
                   value={endTime}
@@ -702,7 +801,7 @@ export default function EventEditorScreen() {
                   display="default"
                   minuteInterval={5}
                   onChange={(_e: any, d?: Date) => {
-                    setShowAndroidEnd(false);
+                    setShowEndPicker(false);
                     if (d) setEndTime(d);
                   }}
                 />
@@ -1152,5 +1251,36 @@ const s = StyleSheet.create({
   reminderOptionTextSelected: {
     color: C.primaryFg,
     fontWeight: '400', // Keep unbold even when selected
+  },
+  // iOS picker modal styles
+  pickerModalOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+  },
+  pickerModalContent: {
+    backgroundColor: C.surface,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingBottom: 30,
+  },
+  pickerModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: C.borderSub + '40',
+  },
+  pickerModalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: C.text,
+  },
+  pickerModalDone: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: C.secondary,
   },
 });

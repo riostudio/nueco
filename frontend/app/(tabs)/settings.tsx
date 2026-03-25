@@ -54,8 +54,7 @@ export default function SettingsScreen() {
               </View>
             </View>
             <Text style={s.aboutDesc}>
-              A simple, accessible note-taking app designed with seniors in mind.
-              Large text, clear actions, and voice input make it easy for everyone.
+              A simple, accessible note-taking app with large text, clear actions, and voice input that makes it easy for everyone.
             </Text>
           </View>
         </View>
