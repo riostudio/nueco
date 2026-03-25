@@ -123,7 +123,6 @@ export default function EditorScreen() {
     saveTimerRef.current = setTimeout(async () => {
       setSaveStatus('Saving...');
       try {
-        const wasNew = !isCreatedRef.current;
         if (!isCreatedRef.current) {
           const created = await notesApi.create({
             title: titleRef.current,
@@ -143,18 +142,6 @@ export default function EditorScreen() {
           });
         }
         setSaveStatus('All changes saved');
-        
-        // Show link account sheet after first note save
-        if (wasNew) {
-          const isFirstNote = !(await authStorage.isFirstNoteSaved());
-          if (isFirstNote) {
-            await authStorage.setFirstNoteSaved();
-            const modalDismissed = await authStorage.isModalDismissed();
-            if (!modalDismissed) {
-              setShowLinkSheet(true);
-            }
-          }
-        }
       } catch (e) {
         setSaveStatus('Failed to save');
         console.error('Save error:', e);
@@ -516,9 +503,9 @@ export default function EditorScreen() {
       >
         {/* Header */}
         <View style={s.header}>
-          <TouchableOpacity testID="save-back-btn" style={s.headerBtn} onPress={handleSaveAndBack}>
-            <MaterialIcons name="check" size={28} color={C.primary} />
-            <Text style={[s.headerBtnLabel, { color: C.primary }]}>Save</Text>
+          <TouchableOpacity testID="back-btn" style={s.headerBtn} onPress={handleSaveAndBack}>
+            <MaterialIcons name="arrow-back" size={28} color={C.primary} />
+            <Text style={[s.headerBtnLabel, { color: C.primary }]}>Back</Text>
           </TouchableOpacity>
           <View style={s.headerRight}>
             {/* User Avatar - shows first letter of email when verified */}
