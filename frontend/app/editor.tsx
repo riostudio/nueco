@@ -236,16 +236,64 @@ export default function EditorScreen() {
     triggerAutoSave();
   };
 
-  // Toggle format button state (visual indicator only)
+  // Toggle format button state and apply to selected text
   // Note: True WYSIWYG requires a rich text editor library
-  // For now, format buttons show intent but don't insert markdown
+  // For now, we apply formatting to selected text
   const toggleBold = () => {
-    setIsBoldActive(!isBoldActive);
+    const newBoldState = !isBoldActive;
+    setIsBoldActive(newBoldState);
+    
+    // If there's selected text, wrap it with bold markers
+    if (selection.start !== selection.end) {
+      const before = content.substring(0, selection.start);
+      const selected = content.substring(selection.start, selection.end);
+      const after = content.substring(selection.end);
+      
+      // Check if already bold (wrapped in **)
+      if (selected.startsWith('**') && selected.endsWith('**')) {
+        // Remove bold
+        const unbolded = selected.slice(2, -2);
+        const newContent = before + unbolded + after;
+        setContent(newContent);
+      } else {
+        // Add bold
+        const bolded = `**${selected}**`;
+        const newContent = before + bolded + after;
+        setContent(newContent);
+      }
+      triggerAutoSave();
+    }
+    
     contentInputRef.current?.focus();
   };
 
   const toggleItalic = () => {
-    setIsItalicActive(!isItalicActive);
+    const newItalicState = !isItalicActive;
+    setIsItalicActive(newItalicState);
+    
+    // If there's selected text, wrap it with italic markers
+    if (selection.start !== selection.end) {
+      const before = content.substring(0, selection.start);
+      const selected = content.substring(selection.start, selection.end);
+      const after = content.substring(selection.end);
+      
+      // Check if already italic (wrapped in single *)
+      // But not bold (which is **)
+      if (selected.startsWith('*') && selected.endsWith('*') && 
+          !selected.startsWith('**') && !selected.endsWith('**')) {
+        // Remove italic
+        const unitaliced = selected.slice(1, -1);
+        const newContent = before + unitaliced + after;
+        setContent(newContent);
+      } else {
+        // Add italic
+        const italiced = `*${selected}*`;
+        const newContent = before + italiced + after;
+        setContent(newContent);
+      }
+      triggerAutoSave();
+    }
+    
     contentInputRef.current?.focus();
   };
 
@@ -262,6 +310,62 @@ export default function EditorScreen() {
   // Convert content to plain text for sharing (remove bullet chars)
   const convertToPlainText = (text: string): string => {
     return text.replace(/\u2022 /g, '- '); // Convert bullet chars back to dashes
+  };
+
+  // Render formatted text (bold/italic) without showing markdown syntax
+  const renderFormattedText = (text: string): React.ReactNode => {
+    if (!text) return null;
+    
+    const parts: React.ReactNode[] = [];
+    let key = 0;
+    
+    // Regex to match **bold**, *italic*, and plain text
+    // Order matters: check bold (**) before italic (*)
+    const regex = /(\*\*[^*]+\*\*|\*[^*]+\*)/g;
+    let lastIndex = 0;
+    let match;
+    
+    while ((match = regex.exec(text)) !== null) {
+      // Add plain text before match
+      if (match.index > lastIndex) {
+        parts.push(
+          <Text key={key++} style={s.contentText}>
+            {text.slice(lastIndex, match.index)}
+          </Text>
+        );
+      }
+      
+      const matchedText = match[0];
+      
+      if (matchedText.startsWith('**') && matchedText.endsWith('**')) {
+        // Bold text
+        parts.push(
+          <Text key={key++} style={[s.contentText, s.boldText]}>
+            {matchedText.slice(2, -2)}
+          </Text>
+        );
+      } else if (matchedText.startsWith('*') && matchedText.endsWith('*')) {
+        // Italic text
+        parts.push(
+          <Text key={key++} style={[s.contentText, s.italicText]}>
+            {matchedText.slice(1, -1)}
+          </Text>
+        );
+      }
+      
+      lastIndex = match.index + matchedText.length;
+    }
+    
+    // Add remaining plain text
+    if (lastIndex < text.length) {
+      parts.push(
+        <Text key={key++} style={s.contentText}>
+          {text.slice(lastIndex)}
+        </Text>
+      );
+    }
+    
+    return parts.length > 0 ? parts : <Text style={s.contentText}>{text}</Text>;
   };
 
   // Format date/time for display
@@ -727,22 +831,30 @@ export default function EditorScreen() {
             )}
           </View>
 
-          {/* Content - Simple plain text input */}
+          {/* Content - Text input with formatting overlay */}
           <View style={s.contentContainer}>
+            {/* Invisible TextInput for editing */}
             <TextInput
               ref={contentInputRef}
               testID="note-content-input"
-              style={s.contentInput}
+              style={[s.contentInput, { color: 'transparent', position: 'absolute', zIndex: 1, top: 0, left: 0, right: 0, bottom: 0, minHeight: 150 }]}
               value={content}
               onChangeText={handleContentChange}
               multiline
               textAlignVertical="top"
-              placeholder="Tap here to start writing..."
-              placeholderTextColor={C.borderSub}
+              placeholder=""
               onSelectionChange={(e) => setSelection(e.nativeEvent.selection)}
               autoCorrect={true}
               autoCapitalize="sentences"
             />
+            {/* Visible formatted text overlay */}
+            <View style={s.contentInput} pointerEvents="none">
+              {content ? (
+                <Text style={s.contentText}>{renderFormattedText(content)}</Text>
+              ) : (
+                <Text style={[s.contentText, { color: C.borderSub }]}>Tap here to start writing...</Text>
+              )}
+            </View>
           </View>
 
           {/* Images Section */}
@@ -1086,6 +1198,17 @@ const s = StyleSheet.create({
     fontSize: 18,
     color: C.text,
     lineHeight: 28,
+  },
+  contentText: {
+    fontSize: 18,
+    color: C.text,
+    lineHeight: 28,
+  },
+  boldText: {
+    fontWeight: '700',
+  },
+  italicText: {
+    fontStyle: 'italic',
   },
   calBtn: {
     flexDirection: 'row', alignItems: 'center',

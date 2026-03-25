@@ -44,7 +44,7 @@ export function UserAvatar({ size = 40 }: UserAvatarProps) {
   };
 
   // Calculate top position based on safe area + header height + extra margin
-  const topOffset = insets.top + 80; // Safe area + header height + 30px extra margin
+  const topOffset = insets.top + 70; // Safe area + header height + extra margin
 
   return (
     <>
