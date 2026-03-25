@@ -48,6 +48,16 @@ function isEventToday(iso: string): boolean {
     d.getFullYear() === now.getFullYear();
 }
 
+function formatReminderMinutes(minutes: number | null | undefined): string {
+  if (!minutes) return '';
+  if (minutes === 5) return '5 min before';
+  if (minutes === 15) return '15 min before';
+  if (minutes === 30) return '30 min before';
+  if (minutes === 60) return '1 hr before';
+  if (minutes === 1440) return '1 day before';
+  return `${minutes} min before`;
+}
+
 function isEventUpcoming(iso: string): boolean {
   return new Date(iso) >= new Date(new Date().setHours(0, 0, 0, 0));
 }
@@ -268,6 +278,12 @@ export default function EventsScreen() {
                     {event.description ? (
                       <Text style={s.eventDesc} numberOfLines={1}>{event.description}</Text>
                     ) : null}
+                    {event.reminder_minutes ? (
+                      <View style={s.reminderRow}>
+                        <MaterialIcons name="notifications" size={14} color={C.primary} />
+                        <Text style={s.reminderText}>{formatReminderMinutes(event.reminder_minutes)}</Text>
+                      </View>
+                    ) : null}
                   </View>
 
                   <View style={s.actions}>
@@ -427,6 +443,17 @@ const s = StyleSheet.create({
   eventBody: { flex: 1 },
   eventTitle: { fontSize: 16, fontWeight: '600', color: C.text },
   eventDesc: { fontSize: 13, color: C.textSec, marginTop: 2 },
+  reminderRow: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    marginTop: 4,
+  },
+  reminderText: { 
+    fontSize: 12, 
+    color: C.primary, 
+    fontWeight: '500',
+    marginLeft: 4,
+  },
   actions: { flexDirection: 'row', gap: 2 },
   actionBtn: {
     width: 36, height: 36, justifyContent: 'center', alignItems: 'center',

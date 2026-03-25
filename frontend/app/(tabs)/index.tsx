@@ -86,6 +86,17 @@ export default function NotesScreen() {
     });
   };
 
+  // Format reminder minutes to readable text
+  const formatReminderMinutes = (minutes: number | null | undefined): string => {
+    if (!minutes) return '';
+    if (minutes === 5) return '5 min';
+    if (minutes === 15) return '15 min';
+    if (minutes === 30) return '30 min';
+    if (minutes === 60) return '1 hr';
+    if (minutes === 1440) return '1 day';
+    return `${minutes} min`;
+  };
+
   const loadNotes = useCallback(async (query?: string) => {
     try {
       const data = await notesApi.getAll(query || undefined);
@@ -218,11 +229,24 @@ export default function NotesScreen() {
         {/* Linked Event Info */}
         {linkedEvent && (
           <View style={s.eventInfo}>
-            <MaterialIcons name="event" size={16} color={C.secondary} />
-            <Text style={s.eventInfoTitle} numberOfLines={1}>{linkedEvent.title}</Text>
-            <Text style={s.eventInfoTime}>
-              {formatEventTime(linkedEvent.start_time)} - {formatEventTime(linkedEvent.end_time)}
-            </Text>
+            <View style={s.eventInfoRow}>
+              <MaterialIcons name="event" size={16} color={C.secondary} />
+              <Text style={s.eventInfoTitle} numberOfLines={1}>{linkedEvent.title}</Text>
+            </View>
+            <View style={s.eventInfoRow}>
+              <MaterialIcons name="schedule" size={14} color={C.textSec} />
+              <Text style={s.eventInfoTime}>
+                {formatEventTime(linkedEvent.start_time)} - {formatEventTime(linkedEvent.end_time)}
+              </Text>
+              {linkedEvent.reminder_minutes ? (
+                <>
+                  <MaterialIcons name="notifications" size={14} color={C.primary} style={{ marginLeft: 8 }} />
+                  <Text style={s.eventInfoReminder}>
+                    {formatReminderMinutes(linkedEvent.reminder_minutes)}
+                  </Text>
+                </>
+              ) : null}
+            </View>
           </View>
         )}
         
@@ -454,25 +478,33 @@ const s = StyleSheet.create({
   cardPreview: { fontSize: 15, color: C.textSec, lineHeight: 20, marginBottom: 8 },
   // Event info in card
   eventInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
     backgroundColor: '#E3F2FD',
     padding: 8,
     borderRadius: 8,
     marginBottom: 8,
-    flexWrap: 'wrap',
+  },
+  eventInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 2,
   },
   eventInfoTitle: {
     fontSize: 14,
     fontWeight: '600',
     color: C.secondary,
     marginLeft: 6,
-    marginRight: 8,
     flex: 1,
   },
   eventInfoTime: {
     fontSize: 12,
     color: C.textSec,
+    marginLeft: 4,
+  },
+  eventInfoReminder: {
+    fontSize: 12,
+    color: C.primary,
+    fontWeight: '500',
+    marginLeft: 4,
   },
   cardFoot: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   tagsRow: { flexDirection: 'row', flexWrap: 'wrap', flex: 1 },

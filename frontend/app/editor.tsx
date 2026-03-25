@@ -277,6 +277,17 @@ export default function EditorScreen() {
     });
   };
 
+  // Format reminder minutes to readable text
+  const formatReminderMinutes = (minutes: number | null): string => {
+    if (!minutes) return 'No reminder';
+    if (minutes === 5) return '5 minutes before';
+    if (minutes === 15) return '15 minutes before';
+    if (minutes === 30) return '30 minutes before';
+    if (minutes === 60) return '1 hour before';
+    if (minutes === 1440) return '1 day before';
+    return `${minutes} minutes before`;
+  };
+
   const handleShare = async () => {
     if (!title && !content && !linkedEvent) {
       Alert.alert('Nothing to Share', 'Please add a title or content to your note first.');
@@ -788,6 +799,14 @@ export default function EditorScreen() {
                     to {formatEventDateTime(linkedEvent.end_time)}
                   </Text>
                 </View>
+                {linkedEvent.reminder_minutes ? (
+                  <View style={s.eventTimeRow}>
+                    <MaterialIcons name="notifications" size={18} color={C.primary} />
+                    <Text style={s.eventReminderText}>
+                      Reminder: {formatReminderMinutes(linkedEvent.reminder_minutes)}
+                    </Text>
+                  </View>
+                ) : null}
                 {linkedEvent.description ? (
                   <Text style={s.eventDescription} numberOfLines={2}>
                     {linkedEvent.description}
@@ -1097,6 +1116,9 @@ const s = StyleSheet.create({
   },
   eventTimeText: {
     fontSize: 15, color: C.textSec, marginLeft: 8,
+  },
+  eventReminderText: {
+    fontSize: 15, color: C.primary, marginLeft: 8, fontWeight: '500',
   },
   eventDescription: {
     fontSize: 14, color: C.textSec, marginTop: 8, fontStyle: 'italic',

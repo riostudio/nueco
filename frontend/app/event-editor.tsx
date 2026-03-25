@@ -10,6 +10,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { eventsApi, notesApi } from '../src/api';
 import { MONTH_NAMES } from '../src/theme';
 import { ReminderMinutes } from '../src/types';
+import { Picker } from '@react-native-picker/picker';
 
 // Import expo-notifications for reminders
 let Notifications: typeof import('expo-notifications') | null = null;
@@ -204,9 +205,6 @@ export default function EventEditorScreen() {
   const [addToDeviceCal, setAddToDeviceCal] = useState(true); // ON by default
   const [reminderMinutes, setReminderMinutes] = useState<ReminderMinutes | null>(15); // Default 15 min reminder
   const [deviceCalendarEventId, setDeviceCalendarEventId] = useState<string | null>(null);
-
-  // Reminder picker modal state
-  const [showReminderPicker, setShowReminderPicker] = useState(false);
 
   // Android-only: pickers need show/hide toggle
   const [showAndroidDate, setShowAndroidDate] = useState(false);
@@ -752,68 +750,28 @@ export default function EventEditorScreen() {
             </View>
           )}
 
-          {/* Reminder Picker */}
+          {/* Reminder Picker - Native */}
           <Text style={s.label}>Reminder</Text>
-          <TouchableOpacity
-            testID="reminder-picker-btn"
-            style={s.pickerBtn}
-            onPress={() => setShowReminderPicker(true)}
-          >
-            <MaterialIcons name="notifications" size={24} color={C.secondary} />
-            <Text style={s.pickerBtnText}>
-              {REMINDER_OPTIONS.find(o => o.value === reminderMinutes)?.label || 'No Reminder'}
-            </Text>
-            <MaterialIcons name="arrow-drop-down" size={28} color={C.borderSub} />
-          </TouchableOpacity>
-
-          {/* Reminder Picker Modal */}
-          <Modal
-            testID="reminder-modal"
-            visible={showReminderPicker}
-            transparent
-            animationType="fade"
-            onRequestClose={() => setShowReminderPicker(false)}
-          >
-            <TouchableOpacity
-              style={s.modalOverlay}
-              activeOpacity={1}
-              onPress={() => setShowReminderPicker(false)}
-            >
-              <View style={s.reminderModal}>
-                <Text style={s.reminderModalTitle}>Set Reminder</Text>
+          <View style={s.pickerContainer}>
+            <MaterialIcons name="notifications" size={24} color={C.secondary} style={{ marginRight: 8 }} />
+            <View style={s.nativePickerWrapper}>
+              <Picker
+                testID="reminder-native-picker"
+                selectedValue={reminderMinutes}
+                onValueChange={(value) => setReminderMinutes(value as ReminderMinutes | null)}
+                style={s.nativePicker}
+                itemStyle={s.pickerItem}
+              >
                 {REMINDER_OPTIONS.map((option) => (
-                  <TouchableOpacity
+                  <Picker.Item
                     key={option.label}
-                    style={[
-                      s.reminderOption,
-                      reminderMinutes === option.value && s.reminderOptionSelected,
-                    ]}
-                    onPress={() => {
-                      setReminderMinutes(option.value);
-                      setShowReminderPicker(false);
-                    }}
-                  >
-                    <MaterialIcons
-                      name={option.value === null ? 'notifications-off' : 'notifications'}
-                      size={22}
-                      color={reminderMinutes === option.value ? C.primaryFg : C.textSec}
-                    />
-                    <Text
-                      style={[
-                        s.reminderOptionText,
-                        reminderMinutes === option.value && s.reminderOptionTextSelected,
-                      ]}
-                    >
-                      {option.label}
-                    </Text>
-                    {reminderMinutes === option.value && (
-                      <MaterialIcons name="check" size={22} color={C.primaryFg} />
-                    )}
-                  </TouchableOpacity>
+                    label={option.label}
+                    value={option.value}
+                  />
                 ))}
-              </View>
-            </TouchableOpacity>
-          </Modal>
+              </Picker>
+            </View>
+          </View>
 
           {/* Linked Note Indicator */}
           {params.noteId && params.noteId !== 'new' && (
@@ -1115,41 +1073,21 @@ const s = StyleSheet.create({
     fontWeight: '600',
     color: '#FFFFFF',
   },
-  // Reminder picker modal styles
-  reminderModal: {
-    backgroundColor: C.surface,
-    borderRadius: 20,
-    padding: 20,
-    width: '100%',
-    maxWidth: 340,
-  },
-  reminderModalTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: C.text,
-    textAlign: 'center',
-    marginBottom: 16,
-  },
-  reminderOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    borderRadius: 12,
-    marginBottom: 8,
-    backgroundColor: C.bg,
-  },
-  reminderOptionSelected: {
-    backgroundColor: C.primary,
-  },
-  reminderOptionText: {
+  // Native Picker styles
+  nativePickerWrapper: {
     flex: 1,
-    fontSize: 16,
-    color: C.text,
-    marginLeft: 12,
+    borderWidth: 2,
+    borderColor: C.borderSub,
+    borderRadius: 12,
+    backgroundColor: C.surface,
+    overflow: 'hidden',
   },
-  reminderOptionTextSelected: {
-    color: C.primaryFg,
-    fontWeight: '600',
+  nativePicker: {
+    height: 50,
+    width: '100%',
+  },
+  pickerItem: {
+    fontSize: 18,
+    color: C.text,
   },
 });
