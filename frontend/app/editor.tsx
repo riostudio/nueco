@@ -737,12 +737,6 @@ export default function EditorScreen() {
                 <MaterialIcons name="share" size={24} color={C.secondary} />
                 <Text style={[s.actionBtnLabel, { color: C.secondary }]}>Share</Text>
               </TouchableOpacity>
-              {noteExists && (
-                <TouchableOpacity testID="delete-btn" style={s.actionBtn} onPress={handleDelete}>
-                  <MaterialIcons name="delete" size={24} color={C.error} />
-                  <Text style={[s.actionBtnLabel, { color: C.error }]}>Delete</Text>
-                </TouchableOpacity>
-              )}
             </View>
           )}
           
