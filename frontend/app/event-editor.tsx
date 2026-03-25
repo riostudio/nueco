@@ -964,8 +964,8 @@ const s = StyleSheet.create({
   },
   pickerBtnText: {
     flex: 1,
-    fontSize: 22,
-    fontWeight: '600',
+    fontSize: 20,
+    fontWeight: '400',
     color: C.text,
     marginLeft: 12,
   },
