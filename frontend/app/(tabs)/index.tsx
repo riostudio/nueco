@@ -6,8 +6,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { notesApi } from '../../src/api';
-import { Note } from '../../src/types';
+import { notesApi, eventsApi } from '../../src/api';
+import { Note, CalendarEvent } from '../../src/types';
 import { UserAvatar, useAuth } from '../../src/auth';
 
 const C = {
@@ -46,6 +46,7 @@ export default function NotesScreen() {
   const router = useRouter();
   const { user, logout } = useAuth();
   const [notes, setNotes] = useState<Note[]>([]);
+  const [eventsMap, setEventsMap] = useState<Record<string, CalendarEvent>>({});
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -74,10 +75,45 @@ export default function NotesScreen() {
     return () => { if (searchTimer.current) clearTimeout(searchTimer.current); };
   }, [search]);
 
+  // Helper to format event time compactly
+  const formatEventTime = (dateStr: string): string => {
+    const date = new Date(dateStr);
+    return date.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  };
+
   const loadNotes = useCallback(async (query?: string) => {
     try {
       const data = await notesApi.getAll(query || undefined);
       setNotes(data);
+      
+      // Fetch events for notes that have linked_event_id
+      const eventIds = data
+        .filter((n: Note) => n.linked_event_id)
+        .map((n: Note) => n.linked_event_id as string);
+      
+      if (eventIds.length > 0) {
+        const uniqueIds = [...new Set(eventIds)];
+        const eventsData: Record<string, CalendarEvent> = {};
+        
+        // Fetch each event (in parallel)
+        await Promise.all(
+          uniqueIds.map(async (eventId) => {
+            try {
+              const event = await eventsApi.get(eventId);
+              eventsData[eventId] = event;
+            } catch (e) {
+              console.error('Failed to load event:', eventId, e);
+            }
+          })
+        );
+        
+        setEventsMap(eventsData);
+      }
     } catch (e) {
       console.error('Failed to load notes:', e);
     } finally {
@@ -129,67 +165,83 @@ export default function NotesScreen() {
     setNoteToDelete(null);
   };
 
-  const renderCard = (note: Note) => (
-    <TouchableOpacity
-      key={note.id}
-      testID={`note-card-${note.id}`}
-      style={[s.card, note.is_pinned && s.pinnedCard]}
-      onPress={() => router.push({ pathname: '/editor', params: { noteId: note.id } })}
-      activeOpacity={0.7}
-    >
-      <View style={s.cardHead}>
-        <Text style={s.cardTitle} numberOfLines={1}>
-          {note.title || 'Untitled Note'}
-        </Text>
-        <View style={s.cardActions}>
-          <TouchableOpacity
-            testID={`pin-toggle-${note.id}`}
-            onPress={(e) => {
-              e.stopPropagation();
-              handleTogglePin(note.id);
-            }}
-            style={s.actionBtn}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <MaterialIcons
-              name="push-pin"
-              size={22}
-              color={note.is_pinned ? C.primary : C.borderSub}
-            />
-          </TouchableOpacity>
-          <TouchableOpacity
-            testID={`delete-note-${note.id}`}
-            onPress={(e) => {
-              e.stopPropagation();
-              handleDeletePress(note.id, note.title);
-            }}
-            style={s.actionBtn}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <MaterialIcons name="delete-outline" size={22} color={C.error} />
-          </TouchableOpacity>
-        </View>
-      </View>
-      {note.content ? (
-        <Text style={s.cardPreview} numberOfLines={2}>
-          {stripMd(note.content).substring(0, 120)}
-        </Text>
-      ) : null}
-      <View style={s.cardFoot}>
-        <View style={s.tagsRow}>
-          {note.tags.map((tag, i) => (
-            <View
-              key={i}
-              style={[s.tagChip, { backgroundColor: tag.color + '20', borderColor: tag.color }]}
+  const renderCard = (note: Note) => {
+    const linkedEvent = note.linked_event_id ? eventsMap[note.linked_event_id] : null;
+    
+    return (
+      <TouchableOpacity
+        key={note.id}
+        testID={`note-card-${note.id}`}
+        style={[s.card, note.is_pinned && s.pinnedCard]}
+        onPress={() => router.push({ pathname: '/editor', params: { noteId: note.id } })}
+        activeOpacity={0.7}
+      >
+        <View style={s.cardHead}>
+          <Text style={s.cardTitle} numberOfLines={1}>
+            {note.title || 'Untitled Note'}
+          </Text>
+          <View style={s.cardActions}>
+            <TouchableOpacity
+              testID={`pin-toggle-${note.id}`}
+              onPress={(e) => {
+                e.stopPropagation();
+                handleTogglePin(note.id);
+              }}
+              style={s.actionBtn}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             >
-              <Text style={[s.tagText, { color: tag.color }]}>{tag.name}</Text>
-            </View>
-          ))}
+              <MaterialIcons
+                name="push-pin"
+                size={22}
+                color={note.is_pinned ? C.primary : C.borderSub}
+              />
+            </TouchableOpacity>
+            <TouchableOpacity
+              testID={`delete-note-${note.id}`}
+              onPress={(e) => {
+                e.stopPropagation();
+                handleDeletePress(note.id, note.title);
+              }}
+              style={s.actionBtn}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <MaterialIcons name="delete-outline" size={22} color={C.error} />
+            </TouchableOpacity>
+          </View>
         </View>
-        <Text style={s.timeText}>{formatTime(note.updated_at)}</Text>
-      </View>
-    </TouchableOpacity>
-  );
+        {note.content ? (
+          <Text style={s.cardPreview} numberOfLines={2}>
+            {stripMd(note.content).substring(0, 120)}
+          </Text>
+        ) : null}
+        
+        {/* Linked Event Info */}
+        {linkedEvent && (
+          <View style={s.eventInfo}>
+            <MaterialIcons name="event" size={16} color={C.secondary} />
+            <Text style={s.eventInfoTitle} numberOfLines={1}>{linkedEvent.title}</Text>
+            <Text style={s.eventInfoTime}>
+              {formatEventTime(linkedEvent.start_time)} - {formatEventTime(linkedEvent.end_time)}
+            </Text>
+          </View>
+        )}
+        
+        <View style={s.cardFoot}>
+          <View style={s.tagsRow}>
+            {note.tags.map((tag, i) => (
+              <View
+                key={i}
+                style={[s.tagChip, { backgroundColor: tag.color + '20', borderColor: tag.color }]}
+              >
+                <Text style={[s.tagText, { color: tag.color }]}>{tag.name}</Text>
+              </View>
+            ))}
+          </View>
+          <Text style={s.timeText}>{formatTime(note.updated_at)}</Text>
+        </View>
+      </TouchableOpacity>
+    );
+  };
 
   if (loading) {
     return (
@@ -400,6 +452,28 @@ const s = StyleSheet.create({
   },
   cardTitle: { fontSize: 18, fontWeight: '600', color: C.text, flex: 1, marginRight: 8 },
   cardPreview: { fontSize: 15, color: C.textSec, lineHeight: 20, marginBottom: 8 },
+  // Event info in card
+  eventInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#E3F2FD',
+    padding: 8,
+    borderRadius: 8,
+    marginBottom: 8,
+    flexWrap: 'wrap',
+  },
+  eventInfoTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: C.secondary,
+    marginLeft: 6,
+    marginRight: 8,
+    flex: 1,
+  },
+  eventInfoTime: {
+    fontSize: 12,
+    color: C.textSec,
+  },
   cardFoot: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   tagsRow: { flexDirection: 'row', flexWrap: 'wrap', flex: 1 },
   tagChip: {

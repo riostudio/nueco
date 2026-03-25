@@ -9,8 +9,8 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAudioRecorder, AudioModule, RecordingPresets, setAudioModeAsync } from 'expo-audio';
 import * as ImagePicker from 'expo-image-picker';
-import { notesApi, transcribeApi, textProcessApi } from '../src/api';
-import { Tag } from '../src/types';
+import { notesApi, eventsApi, transcribeApi, textProcessApi } from '../src/api';
+import { Tag, CalendarEvent } from '../src/types';
 import { TAG_COLORS } from '../src/theme';
 import { 
   authStorage, 
@@ -42,6 +42,7 @@ export default function EditorScreen() {
   const [tags, setTags] = useState<Tag[]>([]);
   const [isPinned, setIsPinned] = useState(false);
   const [linkedEventId, setLinkedEventId] = useState<string | null>(null);
+  const [linkedEvent, setLinkedEvent] = useState<CalendarEvent | null>(null);
   const [saveStatus, setSaveStatus] = useState('');
   const [loading, setLoading] = useState(!isNew);
 
@@ -110,12 +111,33 @@ export default function EditorScreen() {
       noteIdRef.current = note.id;
       isCreatedRef.current = true;
       setNoteExists(true);
+      
+      // Fetch linked event details if exists
+      if (note.linked_event_id) {
+        try {
+          const event = await eventsApi.get(note.linked_event_id);
+          setLinkedEvent(event);
+        } catch (e) {
+          console.error('Failed to load linked event:', e);
+        }
+      }
     } catch (e) {
       console.error('Failed to load note:', e);
     } finally {
       setLoading(false);
     }
   };
+
+  // Fetch event when linkedEventId changes (e.g., after creating event)
+  useEffect(() => {
+    if (linkedEventId && !linkedEvent) {
+      eventsApi.get(linkedEventId)
+        .then(event => setLinkedEvent(event))
+        .catch(e => console.error('Failed to load event:', e));
+    } else if (!linkedEventId) {
+      setLinkedEvent(null);
+    }
+  }, [linkedEventId]);
 
   // Retry helper for network resilience
   const retryOperation = async (operation: () => Promise<any>, maxRetries = 3): Promise<any> => {
@@ -230,20 +252,61 @@ export default function EditorScreen() {
     return text.replace(/\u2022 /g, '- '); // Convert bullet chars back to dashes
   };
 
+  // Format date/time for display
+  const formatEventDateTime = (dateStr: string): string => {
+    const date = new Date(dateStr);
+    return date.toLocaleDateString('en-US', {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  };
+
   const handleShare = async () => {
-    if (!title && !content) {
+    if (!title && !content && !linkedEvent) {
       Alert.alert('Nothing to Share', 'Please add a title or content to your note first.');
       return;
     }
 
     const plainContent = convertToPlainText(content);
-    const shareText = title 
-      ? `${title}\n\n${plainContent}`
-      : plainContent;
+    
+    // Build share text with all details
+    let shareText = '';
+    
+    // Add title
+    if (title) {
+      shareText += `📝 ${title}\n`;
+      shareText += '─'.repeat(30) + '\n\n';
+    }
+    
+    // Add content
+    if (plainContent) {
+      shareText += plainContent + '\n';
+    }
+    
+    // Add tags if any
+    if (tags.length > 0) {
+      shareText += '\n🏷️ Tags: ' + tags.map(t => t.name).join(', ') + '\n';
+    }
+    
+    // Add linked event details
+    if (linkedEvent) {
+      shareText += '\n📅 Linked Event\n';
+      shareText += '─'.repeat(20) + '\n';
+      shareText += `Event: ${linkedEvent.title}\n`;
+      shareText += `Start: ${formatEventDateTime(linkedEvent.start_time)}\n`;
+      shareText += `End: ${formatEventDateTime(linkedEvent.end_time)}\n`;
+      if (linkedEvent.description) {
+        shareText += `Details: ${linkedEvent.description}\n`;
+      }
+    }
 
     try {
       const result = await Share.share({
-        message: shareText,
+        message: shareText.trim(),
         title: title || 'My Note',
       });
 
@@ -679,26 +742,66 @@ export default function EditorScreen() {
             </View>
           )}
 
-          {/* Calendar Link */}
-          <TouchableOpacity
-            testID="schedule-event-btn"
-            style={s.calBtn}
-            onPress={() =>
-              router.push({
-                pathname: '/event-editor',
-                params: {
-                  noteId: noteIdRef.current || 'new',
-                  noteTitle: title,
-                },
-              })
-            }
-          >
-            <MaterialIcons name="calendar-today" size={24} color={C.secondary} />
-            <Text style={s.calBtnText}>
-              {linkedEventId ? 'Linked to Calendar Event' : 'Schedule Calendar Event'}
-            </Text>
-            <MaterialIcons name="chevron-right" size={24} color={C.borderSub} />
-          </TouchableOpacity>
+          {/* Calendar Link / Event Details */}
+          {linkedEvent ? (
+            <TouchableOpacity
+              testID="linked-event-card"
+              style={s.eventCard}
+              onPress={() =>
+                router.push({
+                  pathname: '/event-editor',
+                  params: {
+                    eventId: linkedEvent.id,
+                    noteId: noteIdRef.current || 'new',
+                  },
+                })
+              }
+            >
+              <View style={s.eventHeader}>
+                <MaterialIcons name="event" size={24} color={C.secondary} />
+                <Text style={s.eventHeaderText}>Linked Event</Text>
+                <MaterialIcons name="chevron-right" size={24} color={C.borderSub} />
+              </View>
+              <View style={s.eventDetails}>
+                <Text style={s.eventTitle}>{linkedEvent.title}</Text>
+                <View style={s.eventTimeRow}>
+                  <MaterialIcons name="schedule" size={18} color={C.textSec} />
+                  <Text style={s.eventTimeText}>
+                    {formatEventDateTime(linkedEvent.start_time)}
+                  </Text>
+                </View>
+                <View style={s.eventTimeRow}>
+                  <MaterialIcons name="schedule" size={18} color={C.textSec} />
+                  <Text style={s.eventTimeText}>
+                    to {formatEventDateTime(linkedEvent.end_time)}
+                  </Text>
+                </View>
+                {linkedEvent.description ? (
+                  <Text style={s.eventDescription} numberOfLines={2}>
+                    {linkedEvent.description}
+                  </Text>
+                ) : null}
+              </View>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              testID="schedule-event-btn"
+              style={s.calBtn}
+              onPress={() =>
+                router.push({
+                  pathname: '/event-editor',
+                  params: {
+                    noteId: noteIdRef.current || 'new',
+                    noteTitle: title,
+                  },
+                })
+              }
+            >
+              <MaterialIcons name="calendar-today" size={24} color={C.secondary} />
+              <Text style={s.calBtnText}>Schedule Calendar Event</Text>
+              <MaterialIcons name="chevron-right" size={24} color={C.borderSub} />
+            </TouchableOpacity>
+          )}
 
           <View style={{ height: 120 }} />
         </ScrollView>
@@ -959,6 +1062,33 @@ const s = StyleSheet.create({
     borderWidth: 2, borderColor: C.borderSub, marginTop: 16,
   },
   calBtnText: { flex: 1, fontSize: 18, color: C.secondary, marginLeft: 12, fontWeight: '500' },
+  // Event Card Styles
+  eventCard: {
+    backgroundColor: C.surface, borderRadius: 12, padding: 16,
+    borderWidth: 2, borderColor: C.secondary, marginTop: 16,
+  },
+  eventHeader: {
+    flexDirection: 'row', alignItems: 'center', marginBottom: 12,
+    paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: C.borderSub + '40',
+  },
+  eventHeaderText: {
+    flex: 1, fontSize: 16, fontWeight: '600', color: C.secondary, marginLeft: 8,
+  },
+  eventDetails: {
+    paddingLeft: 4,
+  },
+  eventTitle: {
+    fontSize: 18, fontWeight: '700', color: C.text, marginBottom: 8,
+  },
+  eventTimeRow: {
+    flexDirection: 'row', alignItems: 'center', marginBottom: 4,
+  },
+  eventTimeText: {
+    fontSize: 15, color: C.textSec, marginLeft: 8,
+  },
+  eventDescription: {
+    fontSize: 14, color: C.textSec, marginTop: 8, fontStyle: 'italic',
+  },
   bottomBar: {
     borderTopWidth: 1, borderTopColor: C.borderSub + '40',
     backgroundColor: C.bg,
