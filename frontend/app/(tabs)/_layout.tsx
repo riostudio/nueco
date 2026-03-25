@@ -73,12 +73,7 @@ export default function TabLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <Tabs
         screenOptions={{
-          headerShown: true,
-          headerStyle: styles.header,
-          headerTitleStyle: styles.headerTitle,
-          headerRight: () => (
-            <HeaderRight onLogout={handleLogout} />
-          ),
+          headerShown: false,
           tabBarStyle: styles.tabBar,
           tabBarActiveTintColor: C.primary,
           tabBarInactiveTintColor: C.inactiveTab,

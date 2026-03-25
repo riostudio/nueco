@@ -8,6 +8,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { notesApi } from '../../src/api';
 import { Note } from '../../src/types';
+import { UserAvatar, useAuth } from '../../src/auth';
 
 const C = {
   primary: '#D84315',
@@ -43,6 +44,7 @@ function stripMd(text: string): string {
 
 export default function NotesScreen() {
   const router = useRouter();
+  const { user, logout } = useAuth();
   const [notes, setNotes] = useState<Note[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -54,6 +56,15 @@ export default function NotesScreen() {
   const [deleteModalVisible, setDeleteModalVisible] = useState(false);
   const [noteToDelete, setNoteToDelete] = useState<{ id: string; title: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // Logout modal state
+  const [logoutModalVisible, setLogoutModalVisible] = useState(false);
+
+  const handleLogout = async () => {
+    await logout();
+    setLogoutModalVisible(false);
+    router.replace('/welcome');
+  };
 
   useEffect(() => {
     if (searchTimer.current) clearTimeout(searchTimer.current);
@@ -194,7 +205,13 @@ export default function NotesScreen() {
   return (
     <SafeAreaView style={s.container} edges={['top']}>
       <View style={s.header}>
-        <Text style={s.headerTitle}>MemoPad</Text>
+        <Text style={s.headerTitle}>My Notes</Text>
+        <UserAvatar 
+          user={user} 
+          size={36} 
+          onSignInPress={() => router.push('/login')}
+          onLogout={() => setLogoutModalVisible(true)}
+        />
       </View>
 
       <View style={s.searchBox}>
@@ -303,6 +320,40 @@ export default function NotesScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Logout Confirmation Modal */}
+      <Modal
+        visible={logoutModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setLogoutModalVisible(false)}
+      >
+        <View style={s.modalOverlay}>
+          <View style={s.modalContent}>
+            <MaterialIcons name="logout" size={48} color={C.primary} style={{ marginBottom: 16 }} />
+            <Text style={s.modalTitle}>Log Out?</Text>
+            <Text style={s.modalMessage}>
+              Are you sure you want to log out?
+            </Text>
+            <View style={s.modalButtons}>
+              <TouchableOpacity
+                style={s.modalCancelBtn}
+                onPress={() => setLogoutModalVisible(false)}
+                activeOpacity={0.7}
+              >
+                <Text style={s.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[s.modalDeleteBtn, { backgroundColor: C.primary }]}
+                onPress={handleLogout}
+                activeOpacity={0.7}
+              >
+                <Text style={s.modalDeleteText}>Log Out</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -311,7 +362,14 @@ const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: C.bg },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loadText: { fontSize: 20, color: C.textSec, marginTop: 16 },
-  header: { paddingHorizontal: 24, paddingTop: 12, paddingBottom: 8 },
+  header: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center',
+    paddingHorizontal: 24, 
+    paddingTop: 12, 
+    paddingBottom: 8 
+  },
   headerTitle: { fontSize: 34, fontWeight: '700', color: C.text, letterSpacing: 0.25 },
   searchBox: {
     flexDirection: 'row', alignItems: 'center',
