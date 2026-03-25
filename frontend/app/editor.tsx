@@ -6,7 +6,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { useAudioRecorder, AudioModule, RecordingPresets, setAudioModeAsync } from 'expo-audio';
 import * as ImagePicker from 'expo-image-picker';
 import { notesApi, eventsApi, transcribeApi, textProcessApi } from '../src/api';
@@ -138,6 +138,18 @@ export default function EditorScreen() {
       setLinkedEvent(null);
     }
   }, [linkedEventId]);
+
+  // Refresh linked event data when screen comes back into focus
+  // This ensures event time changes are reflected after editing
+  useFocusEffect(
+    useCallback(() => {
+      if (linkedEventId) {
+        eventsApi.get(linkedEventId)
+          .then(event => setLinkedEvent(event))
+          .catch(e => console.error('Failed to refresh event:', e));
+      }
+    }, [linkedEventId])
+  );
 
   // Retry helper for network resilience
   const retryOperation = async (operation: () => Promise<any>, maxRetries = 3): Promise<any> => {
