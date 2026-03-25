@@ -27,10 +27,6 @@ function EventsIcon({ color }: { color: string }) {
   return <MaterialIcons name="event-note" size={22} color={color} />;
 }
 
-function SettingsIcon({ color }: { color: string }) {
-  return <MaterialIcons name="settings" size={22} color={color} />;
-}
-
 function HeaderRight({ onLogout }: { onLogout: () => void }) {
   const { user } = useAuth();
   const router = useRouter();
@@ -104,8 +100,7 @@ export default function TabLayout() {
         <Tabs.Screen
           name="settings"
           options={{
-            title: 'Settings',
-            tabBarIcon: SettingsIcon,
+            href: null, // Hide settings tab from navigation
           }}
         />
       </Tabs>
