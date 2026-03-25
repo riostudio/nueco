@@ -429,6 +429,8 @@ export default function EditorScreen() {
     }
 
     setSaveStatus('Saving...');
+    let saveSucceeded = false;
+    
     try {
       if (!isCreatedRef.current) {
         const created = await retryOperation(() => notesApi.create({
@@ -440,6 +442,7 @@ export default function EditorScreen() {
         noteIdRef.current = created.id;
         isCreatedRef.current = true;
         setNoteExists(true);
+        saveSucceeded = true;
       } else if (noteIdRef.current) {
         await retryOperation(() => notesApi.update(noteIdRef.current, {
           title: titleRef.current,
@@ -447,35 +450,38 @@ export default function EditorScreen() {
           tags: tagsRef.current,
           is_pinned: isPinnedRef.current,
         }));
+        saveSucceeded = true;
       }
       setSaveStatus('All changes saved');
-      
-      // Show sign-up sheet if user hasn't signed up yet
-      const modalDismissed = await authStorage.isModalDismissed();
-      const userHasEmail = authUser?.email;
-      const userVerified = authUser?.email_verified || authUser?.mobile_verified;
-      
-      // Show sign-up form if:
-      // 1. User hasn't dismissed the modal
-      // 2. User doesn't have an email (hasn't signed up)
-      // 3. User is not verified
-      if (!modalDismissed && !userHasEmail && !userVerified) {
-        // Mark first note as saved (for banner logic)
-        await authStorage.setFirstNoteSaved();
-        // Show the sign-up sheet
-        setShowLinkSheet(true);
-      } else {
-        router.replace('/(tabs)');
-      }
     } catch (e: any) {
       const errorMsg = e?.message?.includes('Network') 
-        ? 'Network error - please check your connection' 
-        : 'Failed to save note';
+        ? 'Network error - changes may not be saved' 
+        : 'Could not save - please try again later';
       setSaveStatus(errorMsg);
       console.error('Save error after retries:', e);
-      // Don't show alert on web, show inline error instead
-      // Alert.alert('Error', 'Failed to save note. Please try again.');
+      // Continue to navigate back even if save failed - don't trap the user
     }
+    
+    // Always navigate back, regardless of save success
+    // Check if user needs to see sign-up prompt first
+    if (saveSucceeded) {
+      try {
+        const modalDismissed = await authStorage.isModalDismissed();
+        const userHasEmail = authUser?.email;
+        const userVerified = authUser?.email_verified || authUser?.mobile_verified;
+        
+        if (!modalDismissed && !userHasEmail && !userVerified) {
+          await authStorage.setFirstNoteSaved();
+          setShowLinkSheet(true);
+          return; // Don't navigate yet, show signup sheet
+        }
+      } catch (e) {
+        console.error('Error checking auth state:', e);
+      }
+    }
+    
+    // Navigate back
+    router.replace('/(tabs)');
   };
 
   const handleDelete = () => {
