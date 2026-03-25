@@ -1,7 +1,9 @@
-import React from 'react';
-import { View, Text, StyleSheet, ScrollView, Linking, TouchableOpacity } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, Linking, TouchableOpacity, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
+import { UserAvatar, useAuth } from '../../src/auth';
 
 const C = {
   primary: '#D84315',
@@ -16,10 +18,26 @@ const C = {
 };
 
 export default function SettingsScreen() {
+  const router = useRouter();
+  const { user, logout } = useAuth();
+  const [logoutModalVisible, setLogoutModalVisible] = useState(false);
+
+  const handleLogout = async () => {
+    await logout();
+    setLogoutModalVisible(false);
+    router.replace('/welcome');
+  };
+
   return (
     <SafeAreaView style={s.container} edges={['top']}>
       <View style={s.header}>
         <Text style={s.headerTitle}>Settings</Text>
+        <UserAvatar 
+          user={user} 
+          size={36} 
+          onSignInPress={() => router.push('/login')}
+          onLogout={() => setLogoutModalVisible(true)}
+        />
       </View>
 
       <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent}>
@@ -101,6 +119,30 @@ export default function SettingsScreen() {
 
         <View style={{ height: 40 }} />
       </ScrollView>
+
+      {/* Logout Confirmation Modal */}
+      <Modal
+        visible={logoutModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setLogoutModalVisible(false)}
+      >
+        <View style={s.modalOverlay}>
+          <View style={s.modalContent}>
+            <MaterialIcons name="logout" size={48} color={C.primary} style={{ marginBottom: 16 }} />
+            <Text style={s.modalTitle}>Log Out?</Text>
+            <Text style={s.modalMessage}>Are you sure you want to log out?</Text>
+            <View style={s.modalButtons}>
+              <TouchableOpacity style={s.modalCancelBtn} onPress={() => setLogoutModalVisible(false)}>
+                <Text style={s.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.modalLogoutBtn} onPress={handleLogout}>
+                <Text style={s.modalLogoutText}>Log Out</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -116,7 +158,14 @@ function FeatureItem({ icon, label }: { icon: string; label: string }) {
 
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: C.bg },
-  header: { paddingHorizontal: 24, paddingTop: 12, paddingBottom: 8 },
+  header: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center',
+    paddingHorizontal: 24, 
+    paddingTop: 12, 
+    paddingBottom: 12 
+  },
   headerTitle: { fontSize: 34, fontWeight: '700', color: C.text },
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 24 },
@@ -141,4 +190,14 @@ const s = StyleSheet.create({
   accessItem: { fontSize: 18, color: C.textSec, lineHeight: 28, paddingLeft: 8 },
   tipText: { fontSize: 18, color: C.textSec, lineHeight: 28, paddingLeft: 8 },
   tipBold: { fontWeight: '700', color: C.text },
+  // Modal styles
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 },
+  modalContent: { backgroundColor: C.surface, borderRadius: 20, padding: 24, width: '100%', maxWidth: 340, alignItems: 'center' },
+  modalTitle: { fontSize: 22, fontWeight: '700', color: C.text, marginBottom: 12 },
+  modalMessage: { fontSize: 16, color: C.textSec, textAlign: 'center', marginBottom: 24 },
+  modalButtons: { flexDirection: 'row', gap: 12, width: '100%' },
+  modalCancelBtn: { flex: 1, paddingVertical: 14, borderRadius: 12, backgroundColor: '#E0E0E0', alignItems: 'center' },
+  modalCancelText: { fontSize: 16, fontWeight: '600', color: C.text },
+  modalLogoutBtn: { flex: 1, paddingVertical: 14, borderRadius: 12, backgroundColor: C.primary, alignItems: 'center' },
+  modalLogoutText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
 });

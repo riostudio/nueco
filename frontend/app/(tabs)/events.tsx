@@ -10,6 +10,7 @@ import { useRouter, useFocusEffect } from 'expo-router';
 import { eventsApi } from '../../src/api';
 import { CalendarEvent } from '../../src/types';
 import { MONTH_NAMES } from '../../src/theme';
+import { UserAvatar, useAuth } from '../../src/auth';
 
 const C = {
   primary: '#D84315',
@@ -75,6 +76,7 @@ function groupEventsByDate(events: CalendarEvent[]): GroupedEvents {
 
 export default function EventsScreen() {
   const router = useRouter();
+  const { user, logout } = useAuth();
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -88,6 +90,15 @@ export default function EventsScreen() {
   const [deleteModalVisible, setDeleteModalVisible] = useState(false);
   const [eventToDelete, setEventToDelete] = useState<{ id: string; title: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // Logout modal state
+  const [logoutModalVisible, setLogoutModalVisible] = useState(false);
+
+  const handleLogout = async () => {
+    await logout();
+    setLogoutModalVisible(false);
+    router.replace('/welcome');
+  };
 
   const loadEvents = useCallback(async () => {
     try {
@@ -180,6 +191,12 @@ export default function EventsScreen() {
     <SafeAreaView style={s.container} edges={['top']}>
       <View style={s.header}>
         <Text style={s.headerTitle}>Events</Text>
+        <UserAvatar 
+          user={user} 
+          size={36} 
+          onSignInPress={() => router.push('/login')}
+          onLogout={() => setLogoutModalVisible(true)}
+        />
       </View>
 
       {/* Filter Toggle */}
@@ -332,6 +349,30 @@ export default function EventsScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Logout Confirmation Modal */}
+      <Modal
+        visible={logoutModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setLogoutModalVisible(false)}
+      >
+        <View style={s.modalOverlay}>
+          <View style={s.modalContent}>
+            <MaterialIcons name="logout" size={48} color={C.primary} style={{ marginBottom: 16 }} />
+            <Text style={s.modalTitle}>Log Out?</Text>
+            <Text style={s.modalMessage}>Are you sure you want to log out?</Text>
+            <View style={s.modalButtons}>
+              <TouchableOpacity style={s.modalCancelBtn} onPress={() => setLogoutModalVisible(false)}>
+                <Text style={s.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.modalLogoutBtn} onPress={handleLogout}>
+                <Text style={s.modalLogoutText}>Log Out</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -340,8 +381,15 @@ const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: C.bg },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   loadText: { fontSize: 18, color: C.textSec, marginTop: 12 },
-  header: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 4 },
-  headerTitle: { fontSize: 28, fontWeight: '700', color: C.text },
+  header: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center',
+    paddingHorizontal: 24, 
+    paddingTop: 12, 
+    paddingBottom: 12 
+  },
+  headerTitle: { fontSize: 34, fontWeight: '700', color: C.text },
   filterRow: {
     flexDirection: 'row', marginHorizontal: 20, marginBottom: 12,
     backgroundColor: C.surface, borderRadius: 10,
@@ -456,4 +504,7 @@ const s = StyleSheet.create({
     fontWeight: '600',
     color: '#FFFFFF',
   },
+  // Logout modal styles
+  modalLogoutBtn: { flex: 1, paddingVertical: 14, borderRadius: 12, backgroundColor: C.primary, alignItems: 'center' },
+  modalLogoutText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
 });
