@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
-  ScrollView, RefreshControl, ActivityIndicator, Alert,
+  ScrollView, RefreshControl, ActivityIndicator, Alert, Modal, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -49,6 +49,11 @@ export default function NotesScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [debouncedSearch, setDebouncedSearch] = useState('');
+  
+  // Delete confirmation modal state
+  const [deleteModalVisible, setDeleteModalVisible] = useState(false);
+  const [noteToDelete, setNoteToDelete] = useState<{ id: string; title: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     if (searchTimer.current) clearTimeout(searchTimer.current);
@@ -88,27 +93,29 @@ export default function NotesScreen() {
     }
   };
 
-  const handleDelete = (noteId: string, noteTitle: string) => {
-    Alert.alert(
-      'Delete Note',
-      `Are you sure you want to delete "${noteTitle || 'Untitled Note'}"?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await notesApi.delete(noteId);
-              loadNotes(debouncedSearch || undefined);
-            } catch (e) {
-              console.error('Delete failed:', e);
-              Alert.alert('Error', 'Failed to delete note. Please try again.');
-            }
-          },
-        },
-      ]
-    );
+  const handleDeletePress = (noteId: string, noteTitle: string) => {
+    setNoteToDelete({ id: noteId, title: noteTitle || 'Untitled Note' });
+    setDeleteModalVisible(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!noteToDelete) return;
+    setDeleting(true);
+    try {
+      await notesApi.delete(noteToDelete.id);
+      loadNotes(debouncedSearch || undefined);
+      setDeleteModalVisible(false);
+      setNoteToDelete(null);
+    } catch (e) {
+      console.error('Delete failed:', e);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const cancelDelete = () => {
+    setDeleteModalVisible(false);
+    setNoteToDelete(null);
   };
 
   const renderCard = (note: Note) => (
@@ -143,7 +150,7 @@ export default function NotesScreen() {
             testID={`delete-note-${note.id}`}
             onPress={(e) => {
               e.stopPropagation();
-              handleDelete(note.id, note.title);
+              handleDeletePress(note.id, note.title);
             }}
             style={s.actionBtn}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -257,6 +264,45 @@ export default function NotesScreen() {
         <MaterialIcons name="add" size={32} color={C.primaryFg} />
         <Text style={s.fabText}>New Note</Text>
       </TouchableOpacity>
+
+      {/* Delete Confirmation Modal */}
+      <Modal
+        visible={deleteModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={cancelDelete}
+      >
+        <View style={s.modalOverlay}>
+          <View style={s.modalContent}>
+            <MaterialIcons name="delete" size={48} color={C.error} style={{ marginBottom: 16 }} />
+            <Text style={s.modalTitle}>Delete Note?</Text>
+            <Text style={s.modalMessage}>
+              Are you sure you want to delete "{noteToDelete?.title}"? This action cannot be undone.
+            </Text>
+            <View style={s.modalButtons}>
+              <TouchableOpacity
+                style={s.modalCancelBtn}
+                onPress={cancelDelete}
+                activeOpacity={0.7}
+              >
+                <Text style={s.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={s.modalDeleteBtn}
+                onPress={confirmDelete}
+                activeOpacity={0.7}
+                disabled={deleting}
+              >
+                {deleting ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={s.modalDeleteText}>Delete</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -315,4 +361,62 @@ const s = StyleSheet.create({
     elevation: 4,
   },
   fabText: { fontSize: 20, fontWeight: '600', color: C.primaryFg, marginLeft: 8 },
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  modalContent: {
+    backgroundColor: C.surface,
+    borderRadius: 20,
+    padding: 24,
+    width: '100%',
+    maxWidth: 340,
+    alignItems: 'center',
+  },
+  modalTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: C.text,
+    marginBottom: 12,
+  },
+  modalMessage: {
+    fontSize: 16,
+    color: C.textSec,
+    textAlign: 'center',
+    lineHeight: 24,
+    marginBottom: 24,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    width: '100%',
+  },
+  modalCancelBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: '#E0E0E0',
+    alignItems: 'center',
+  },
+  modalCancelText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: C.text,
+  },
+  modalDeleteBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: C.error,
+    alignItems: 'center',
+  },
+  modalDeleteText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
 });
