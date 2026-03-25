@@ -2,7 +2,7 @@ import React, { useState, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
   RefreshControl, ActivityIndicator, Alert, Animated,
-  NativeSyntheticEvent, NativeScrollEvent,
+  NativeSyntheticEvent, NativeScrollEvent, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -84,6 +84,11 @@ export default function EventsScreen() {
   const textOpacity = useRef(new Animated.Value(0)).current;
   const lastScrollY = useRef(0);
 
+  // Delete confirmation modal state
+  const [deleteModalVisible, setDeleteModalVisible] = useState(false);
+  const [eventToDelete, setEventToDelete] = useState<{ id: string; title: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
   const loadEvents = useCallback(async () => {
     try {
       const data = await eventsApi.getAll();
@@ -98,26 +103,29 @@ export default function EventsScreen() {
 
   useFocusEffect(useCallback(() => { loadEvents(); }, [loadEvents]));
 
-  const handleDelete = (eventId: string, eventTitle: string) => {
-    Alert.alert(
-      'Delete Event',
-      `Delete "${eventTitle}"?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await eventsApi.delete(eventId);
-              loadEvents();
-            } catch (e) {
-              console.error('Delete failed:', e);
-            }
-          },
-        },
-      ]
-    );
+  const handleDeletePress = (eventId: string, eventTitle: string) => {
+    setEventToDelete({ id: eventId, title: eventTitle || 'Untitled Event' });
+    setDeleteModalVisible(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!eventToDelete) return;
+    setDeleting(true);
+    try {
+      await eventsApi.delete(eventToDelete.id);
+      loadEvents();
+      setDeleteModalVisible(false);
+      setEventToDelete(null);
+    } catch (e) {
+      console.error('Delete failed:', e);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const cancelDelete = () => {
+    setDeleteModalVisible(false);
+    setEventToDelete(null);
   };
 
   const expandFab = () => {
@@ -256,7 +264,7 @@ export default function EventsScreen() {
                     <TouchableOpacity
                       testID={`delete-event-${event.id}`}
                       style={s.actionBtn}
-                      onPress={() => handleDelete(event.id, event.title)}
+                      onPress={() => handleDeletePress(event.id, event.title)}
                     >
                       <MaterialIcons name="delete" size={20} color={C.error} />
                     </TouchableOpacity>
@@ -285,6 +293,45 @@ export default function EventsScreen() {
           </Animated.Text>
         </TouchableOpacity>
       </Animated.View>
+
+      {/* Delete Confirmation Modal */}
+      <Modal
+        visible={deleteModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={cancelDelete}
+      >
+        <View style={s.modalOverlay}>
+          <View style={s.modalContent}>
+            <MaterialIcons name="delete" size={48} color={C.error} style={{ marginBottom: 16 }} />
+            <Text style={s.modalTitle}>Delete Event?</Text>
+            <Text style={s.modalMessage}>
+              Are you sure you want to delete "{eventToDelete?.title}"? This action cannot be undone.
+            </Text>
+            <View style={s.modalButtons}>
+              <TouchableOpacity
+                style={s.modalCancelBtn}
+                onPress={cancelDelete}
+                activeOpacity={0.7}
+              >
+                <Text style={s.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={s.modalDeleteBtn}
+                onPress={confirmDelete}
+                activeOpacity={0.7}
+                disabled={deleting}
+              >
+                {deleting ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={s.modalDeleteText}>Delete</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -351,4 +398,62 @@ const s = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center',
   },
   fabText: { fontSize: 16, fontWeight: '600', color: C.primaryFg, marginRight: 16 },
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  modalContent: {
+    backgroundColor: C.surface,
+    borderRadius: 20,
+    padding: 24,
+    width: '100%',
+    maxWidth: 340,
+    alignItems: 'center',
+  },
+  modalTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: C.text,
+    marginBottom: 12,
+  },
+  modalMessage: {
+    fontSize: 16,
+    color: C.textSec,
+    textAlign: 'center',
+    lineHeight: 24,
+    marginBottom: 24,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    width: '100%',
+  },
+  modalCancelBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: '#E0E0E0',
+    alignItems: 'center',
+  },
+  modalCancelText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: C.text,
+  },
+  modalDeleteBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: C.error,
+    alignItems: 'center',
+  },
+  modalDeleteText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFFFFF',
+  },
 });
