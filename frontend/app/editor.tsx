@@ -18,6 +18,9 @@ import {
   UserAvatar,
 } from '../src/auth';
 
+// Rich Text Editor (only for native platforms)
+import { RichEditor, RichToolbar, actions } from 'react-native-pell-rich-editor';
+
 const C = {
   primary: '#D84315',
   primaryFg: '#FFFFFF',
@@ -64,7 +67,11 @@ export default function EditorScreen() {
 
   const [selection, setSelection] = useState({ start: 0, end: 0 });
   const contentInputRef = useRef<TextInput>(null);
+  const richEditorRef = useRef<RichEditor>(null);
   const lastContentLength = useRef(0);
+  
+  // Use rich editor on native platforms only
+  const isWeb = Platform.OS === 'web';
 
   // Auth state from context
   const { user: authUser } = useAuth();
@@ -831,22 +838,57 @@ export default function EditorScreen() {
             )}
           </View>
 
-          {/* Content - Simple plain text input */}
+          {/* Content - Rich Text Editor for native, plain TextInput for web */}
           <View style={s.contentContainer}>
-            <TextInput
-              ref={contentInputRef}
-              testID="note-content-input"
-              style={s.contentInput}
-              value={content}
-              onChangeText={handleContentChange}
-              multiline
-              textAlignVertical="top"
-              placeholder="Tap here to start writing..."
-              placeholderTextColor={C.borderSub}
-              onSelectionChange={(e) => setSelection(e.nativeEvent.selection)}
-              autoCorrect={true}
-              autoCapitalize="sentences"
-            />
+            {isWeb ? (
+              <TextInput
+                ref={contentInputRef}
+                testID="note-content-input"
+                style={s.contentInput}
+                value={content}
+                onChangeText={handleContentChange}
+                multiline
+                textAlignVertical="top"
+                placeholder="Tap here to start writing..."
+                placeholderTextColor={C.borderSub}
+                onSelectionChange={(e) => setSelection(e.nativeEvent.selection)}
+                autoCorrect={true}
+                autoCapitalize="sentences"
+              />
+            ) : (
+              <View style={s.richEditorContainer}>
+                <RichToolbar
+                  editor={richEditorRef}
+                  selectedIconTint={C.primary}
+                  iconTint={C.textSec}
+                  actions={[actions.setBold, actions.setItalic, actions.insertBulletsList, actions.insertOrderedList]}
+                  iconMap={{
+                    [actions.setBold]: () => <Text style={{ fontWeight: 'bold', fontSize: 18, color: C.textSec }}>B</Text>,
+                    [actions.setItalic]: () => <Text style={{ fontStyle: 'italic', fontSize: 18, color: C.textSec }}>I</Text>,
+                  }}
+                  style={s.richToolbar}
+                />
+                <RichEditor
+                  ref={richEditorRef}
+                  initialContentHTML={content}
+                  onChange={(html) => {
+                    // Strip HTML tags for plain text storage, but keep formatting
+                    setContent(html);
+                    contentRef.current = html;
+                    triggerAutoSave();
+                  }}
+                  placeholder="Tap here to start writing..."
+                  initialHeight={200}
+                  editorStyle={{
+                    backgroundColor: C.surface,
+                    color: C.text,
+                    placeholderColor: C.borderSub,
+                    contentCSSText: 'font-size: 18px; line-height: 28px; padding: 16px;',
+                  }}
+                  style={s.richEditor}
+                />
+              </View>
+            )}
           </View>
 
           {/* Images Section */}
@@ -943,8 +985,8 @@ export default function EditorScreen() {
 
         {/* Voice Input Bar + Format Toolbar */}
         <View style={s.bottomBar}>
-          {/* Format Toolbar - shows when keyboard is visible */}
-          {isKeyboardVisible && (
+          {/* Format Toolbar - shows when keyboard is visible (Web only, native uses RichToolbar) */}
+          {isKeyboardVisible && isWeb && (
             <View style={s.formatBar}>
               <TouchableOpacity 
                 testID="fmt-bold" 
@@ -1201,6 +1243,24 @@ const s = StyleSheet.create({
   },
   italicText: {
     fontStyle: 'italic',
+  },
+  // Rich Editor Styles
+  richEditorContainer: {
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: C.borderSub,
+    backgroundColor: C.surface,
+    overflow: 'hidden',
+    minHeight: 200,
+  },
+  richToolbar: {
+    backgroundColor: C.bg,
+    borderBottomWidth: 1,
+    borderBottomColor: C.borderSub,
+  },
+  richEditor: {
+    flex: 1,
+    minHeight: 150,
   },
   calBtn: {
     flexDirection: 'row', alignItems: 'center',
