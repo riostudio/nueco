@@ -19,7 +19,10 @@ def get_smtp_config():
     }
 
 def get_base_url():
-    return os.getenv("APP_BASE_URL", "https://note-builder-10.preview.emergentagent.com")
+    base_url = os.getenv("APP_BASE_URL")
+    if not base_url:
+        raise ValueError("APP_BASE_URL environment variable is required")
+    return base_url
 
 def send_email(to_email: str, subject: str, html_content: str) -> bool:
     """Send email via SMTP"""

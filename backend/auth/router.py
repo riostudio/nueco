@@ -84,7 +84,9 @@ async def verify_email(token: str, db: AsyncIOMotorDatabase = Depends(get_db)):
     service = AuthService(db)
     success, message, email = await service.verify_email(token)
     
-    app_url = os.getenv("APP_BASE_URL", "https://note-builder-10.preview.emergentagent.com")
+    app_url = os.getenv("APP_BASE_URL")
+    if not app_url:
+        raise HTTPException(status_code=500, detail="APP_BASE_URL environment variable is required")
     
     if not success:
         return f"""
