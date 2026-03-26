@@ -57,13 +57,20 @@ class AuthService:
     def _verify_token_hash(self, token: str, hashed: str) -> bool:
         return bcrypt.checkpw(token.encode(), hashed.encode())
 
+    def _get_user_id(self, user: dict) -> str:
+        """Get user ID with fallback to _id for legacy users"""
+        if "id" in user:
+            return user["id"]
+        # Fallback to MongoDB's _id if custom id doesn't exist
+        return str(user.get("_id", ""))
+
     def _user_to_response(self, user: dict) -> UserResponse:
         return UserResponse(
-            id=user["id"],
+            id=self._get_user_id(user),
             email=user["email"],
             name=user["name"],
-            email_verified=user["email_verified"],
-            created_at=user["created_at"]
+            email_verified=user.get("email_verified", False),
+            created_at=user.get("created_at", datetime.utcnow())
         )
 
     async def signup(self, name: str, email: str, password: str) -> Tuple[bool, str, Optional[dict]]:
@@ -126,10 +133,10 @@ class AuthService:
             
             if failed_attempts >= MAX_FAILED_ATTEMPTS:
                 updates["locked_until"] = datetime.utcnow() + timedelta(minutes=LOCKOUT_DURATION_MINUTES)
-                await self.users.update_one({"id": user["id"]}, {"$set": updates})
+                await self.users.update_one({"email": email}, {"$set": updates})
                 return False, "Too many failed attempts. Account locked for 30 minutes.", None
             
-            await self.users.update_one({"id": user["id"]}, {"$set": updates})
+            await self.users.update_one({"email": email}, {"$set": updates})
             return False, "Email or password is incorrect", None
 
         # Check email verification
@@ -138,13 +145,14 @@ class AuthService:
 
         # Reset failed attempts on successful login
         await self.users.update_one(
-            {"id": user["id"]},
+            {"email": email},
             {"$set": {"failed_login_attempts": 0, "locked_until": None}}
         )
 
         # Create or update device
+        user_id = self._get_user_id(user)
         device_id = str(uuid4())
-        device_doc = create_device_doc(device_id, user["id"], device_name, platform)
+        device_doc = create_device_doc(device_id, user_id, device_name, platform)
         await self.devices.insert_one(device_doc)
 
         # Create session with refresh token
@@ -154,7 +162,7 @@ class AuthService:
         
         session_doc = create_session_doc(
             session_id, 
-            user["id"], 
+            user_id, 
             device_id, 
             self._hash_token(refresh_token),
             expires_at
@@ -162,7 +170,7 @@ class AuthService:
         await self.sessions.insert_one(session_doc)
 
         # Create access token
-        access_token = self._create_access_token(user["id"])
+        access_token = self._create_access_token(user_id)
 
         logger.info(f"User logged in: {email}")
         return True, "Login successful", {
@@ -181,7 +189,7 @@ class AuthService:
             return False, "Verification link has expired. Please request a new one.", None
 
         await self.users.update_one(
-            {"id": user["id"]},
+            {"email": user["email"]},
             {
                 "$set": {"email_verified": True},
                 "$unset": {"verification_token": "", "verification_token_expiry": ""}
@@ -204,7 +212,7 @@ class AuthService:
 
         verification_token = secrets.token_urlsafe(32)
         await self.users.update_one(
-            {"id": user["id"]},
+            {"email": email},
             {
                 "$set": {
                     "verification_token": verification_token,
@@ -227,7 +235,7 @@ class AuthService:
 
         reset_token = secrets.token_urlsafe(32)
         await self.users.update_one(
-            {"id": user["id"]},
+            {"email": email},
             {
                 "$set": {
                     "reset_token": reset_token,
@@ -250,10 +258,11 @@ class AuthService:
             return False, "Reset link has expired. Please request a new one."
 
         password_hash = self._hash_password(new_password)
+        user_id = self._get_user_id(user)
         
         # Update password and invalidate all sessions (force re-login)
         await self.users.update_one(
-            {"id": user["id"]},
+            {"email": user["email"]},
             {
                 "$set": {"password": password_hash},
                 "$unset": {"reset_token": "", "reset_token_expiry": ""}
@@ -261,7 +270,7 @@ class AuthService:
         )
         
         # Invalidate all refresh tokens for this user
-        await self.sessions.delete_many({"user_id": user["id"]})
+        await self.sessions.delete_many({"user_id": user_id})
         
         logger.info(f"Password reset completed: {user['email']}")
         return True, "Password reset successful. Please log in with your new password."
