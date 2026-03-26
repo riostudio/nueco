@@ -44,7 +44,7 @@ export function UserAvatar({ size = 40 }: UserAvatarProps) {
   };
 
   // Calculate top position based on safe area + header height + extra margin
-  const topOffset = insets.top + 70; // Safe area + header height + extra margin
+  const topOffset = insets.top + 65; // Safe area + header height + extra margin
 
   return (
     <>
@@ -116,7 +116,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0, 0, 0, 0.3)',
     justifyContent: 'flex-start',
     alignItems: 'flex-end',
-    paddingRight: 16,
+    paddingRight: 21,
   },
   menuContainer: {
     backgroundColor: C.surface,
