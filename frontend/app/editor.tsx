@@ -18,22 +18,6 @@ import {
   UserAvatar,
 } from '../src/auth';
 
-// Rich Text Editor (only for native platforms - conditionally imported)
-let RichEditor: any = null;
-let RichToolbar: any = null;
-let actions: any = null;
-
-if (Platform.OS !== 'web') {
-  try {
-    const pellEditor = require('react-native-pell-rich-editor');
-    RichEditor = pellEditor.RichEditor;
-    RichToolbar = pellEditor.RichToolbar;
-    actions = pellEditor.actions;
-  } catch (e) {
-    console.log('Rich editor not available');
-  }
-}
-
 const C = {
   primary: '#D84315',
   primaryFg: '#FFFFFF',
@@ -80,11 +64,10 @@ export default function EditorScreen() {
 
   const [selection, setSelection] = useState({ start: 0, end: 0 });
   const contentInputRef = useRef<TextInput>(null);
-  const richEditorRef = useRef<RichEditor>(null);
   const lastContentLength = useRef(0);
   
-  // Use rich editor on native platforms only
-  const isWeb = Platform.OS === 'web';
+  // Track if content input is focused
+  const [isContentFocused, setIsContentFocused] = useState(false);
 
   // Auth state from context
   const { user: authUser } = useAuth();
@@ -851,92 +834,24 @@ export default function EditorScreen() {
             )}
           </View>
 
-          {/* Content - Rich Text Editor for native, formatted TextInput for web */}
+          {/* Content - Simple plain text input */}
           <View style={s.contentContainer}>
-            {isWeb ? (
-              <>
-                {/* Web Format Toolbar */}
-                <View style={s.webFormatToolbar}>
-                  <TouchableOpacity 
-                    style={s.webFormatBtn} 
-                    onPress={() => {
-                      // Apply bold to selection using document.execCommand
-                      if (typeof document !== 'undefined') {
-                        document.execCommand('bold', false);
-                      }
-                    }}
-                  >
-                    <Text style={{ fontWeight: 'bold', fontSize: 18, color: C.textSec }}>B</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity 
-                    style={s.webFormatBtn} 
-                    onPress={() => {
-                      if (typeof document !== 'undefined') {
-                        document.execCommand('italic', false);
-                      }
-                    }}
-                  >
-                    <Text style={{ fontStyle: 'italic', fontSize: 18, color: C.textSec }}>I</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity 
-                    style={s.webFormatBtn} 
-                    onPress={() => {
-                      if (typeof document !== 'undefined') {
-                        document.execCommand('insertUnorderedList', false);
-                      }
-                    }}
-                  >
-                    <MaterialIcons name="format-list-bulleted" size={18} color={C.textSec} />
-                  </TouchableOpacity>
-                </View>
-                {/* Web contenteditable div for rich text */}
-                <View 
-                  style={s.webEditorContainer}
-                  // @ts-ignore - Web only
-                  contentEditable={true}
-                  suppressContentEditableWarning={true}
-                  onInput={(e: any) => {
-                    const html = e.target.innerHTML || '';
-                    setContent(html);
-                    contentRef.current = html;
-                    triggerAutoSave();
-                  }}
-                  dangerouslySetInnerHTML={{ __html: content }}
-                />
-              </>
-            ) : (
-              <View style={s.richEditorContainer}>
-                <RichToolbar
-                  editor={richEditorRef}
-                  selectedIconTint={C.primary}
-                  iconTint={C.textSec}
-                  actions={[actions.setBold, actions.setItalic, actions.insertBulletsList, actions.insertOrderedList]}
-                  iconMap={{
-                    [actions.setBold]: () => <Text style={{ fontWeight: 'bold', fontSize: 18, color: C.textSec }}>B</Text>,
-                    [actions.setItalic]: () => <Text style={{ fontStyle: 'italic', fontSize: 18, color: C.textSec }}>I</Text>,
-                  }}
-                  style={s.richToolbar}
-                />
-                <RichEditor
-                  ref={richEditorRef}
-                  initialContentHTML={content}
-                  onChange={(html) => {
-                    setContent(html);
-                    contentRef.current = html;
-                    triggerAutoSave();
-                  }}
-                  placeholder="Tap here to start writing..."
-                  initialHeight={200}
-                  editorStyle={{
-                    backgroundColor: C.surface,
-                    color: C.text,
-                    placeholderColor: C.borderSub,
-                    contentCSSText: 'font-size: 18px; line-height: 28px; padding: 16px;',
-                  }}
-                  style={s.richEditor}
-                />
-              </View>
-            )}
+            <TextInput
+              ref={contentInputRef}
+              testID="note-content-input"
+              style={s.contentInput}
+              value={content}
+              onChangeText={handleContentChange}
+              multiline
+              textAlignVertical="top"
+              placeholder="Tap here to start writing..."
+              placeholderTextColor={C.borderSub}
+              onSelectionChange={(e) => setSelection(e.nativeEvent.selection)}
+              onFocus={() => setIsContentFocused(true)}
+              onBlur={() => setIsContentFocused(false)}
+              autoCorrect={true}
+              autoCapitalize="sentences"
+            />
           </View>
 
           {/* Images Section */}
@@ -1033,8 +948,8 @@ export default function EditorScreen() {
 
         {/* Voice Input Bar + Format Toolbar */}
         <View style={s.bottomBar}>
-          {/* Format Toolbar - shows when keyboard is visible (Web only, native uses RichToolbar) */}
-          {isKeyboardVisible && isWeb && (
+          {/* Format Toolbar - shows only when content input is focused and keyboard is visible */}
+          {isKeyboardVisible && isContentFocused && (
             <View style={s.formatBar}>
               <TouchableOpacity 
                 testID="fmt-bold" 
