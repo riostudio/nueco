@@ -831,30 +831,22 @@ export default function EditorScreen() {
             )}
           </View>
 
-          {/* Content - Text input with formatting overlay */}
+          {/* Content - Simple plain text input */}
           <View style={s.contentContainer}>
-            {/* Invisible TextInput for editing */}
             <TextInput
               ref={contentInputRef}
               testID="note-content-input"
-              style={[s.contentInput, { color: 'transparent', position: 'absolute', zIndex: 1, top: 0, left: 0, right: 0, bottom: 0, minHeight: 150 }]}
+              style={s.contentInput}
               value={content}
               onChangeText={handleContentChange}
               multiline
               textAlignVertical="top"
-              placeholder=""
+              placeholder="Tap here to start writing..."
+              placeholderTextColor={C.borderSub}
               onSelectionChange={(e) => setSelection(e.nativeEvent.selection)}
               autoCorrect={true}
               autoCapitalize="sentences"
             />
-            {/* Visible formatted text overlay */}
-            <View style={s.contentInput} pointerEvents="none">
-              {content ? (
-                <Text style={s.contentText}>{renderFormattedText(content)}</Text>
-              ) : (
-                <Text style={[s.contentText, { color: C.borderSub }]}>Tap here to start writing...</Text>
-              )}
-            </View>
           </View>
 
           {/* Images Section */}
