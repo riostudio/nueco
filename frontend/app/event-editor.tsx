@@ -203,6 +203,7 @@ export default function EventEditorScreen() {
   });
   const [loading, setLoading] = useState(isEditing);
   const [saving, setSaving] = useState(false);
+  const [showSuccessOverlay, setShowSuccessOverlay] = useState(false);
   const [addToDeviceCal, setAddToDeviceCal] = useState(true); // ON by default
   const [reminderMinutes, setReminderMinutes] = useState<ReminderMinutes | null>(15); // Default 15 min reminder
   const [deviceCalendarEventId, setDeviceCalendarEventId] = useState<string | null>(null);
@@ -306,6 +307,12 @@ export default function EventEditorScreen() {
 
       if (isEditing && params.eventId) {
         await eventsApi.update(params.eventId, eventData);
+        // Show success and go back
+        setShowSuccessOverlay(true);
+        setTimeout(() => {
+          setShowSuccessOverlay(false);
+          router.back();
+        }, 1000);
       } else {
         const created = await eventsApi.create(eventData);
         if (params.noteId && params.noteId !== 'new') {
@@ -327,9 +334,13 @@ export default function EventEditorScreen() {
             console.error('Failed to store pending event ID:', e);
           }
         }
+        // Show success overlay before going back
+        setShowSuccessOverlay(true);
+        setTimeout(() => {
+          setShowSuccessOverlay(false);
+          router.back();
+        }, 1000);
       }
-
-      router.back();
     } catch (e) {
       Alert.alert('Error', 'Failed to save event. Please try again.');
       console.error('Save event error:', e);
@@ -1007,6 +1018,22 @@ export default function EventEditorScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Success Overlay */}
+      <Modal
+        visible={showSuccessOverlay}
+        transparent={true}
+        animationType="fade"
+      >
+        <View style={s.successOverlay}>
+          <View style={s.successContent}>
+            <MaterialIcons name="check-circle" size={64} color="#4CAF50" />
+            <Text style={s.successText}>
+              {isEditing ? 'Event Updated!' : 'Event Created!'}
+            </Text>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1292,5 +1319,29 @@ const s = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
     color: C.secondary,
+  },
+  // Success overlay styles
+  successOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  successContent: {
+    backgroundColor: C.surface,
+    borderRadius: 20,
+    padding: 32,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  successText: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: C.text,
+    marginTop: 16,
   },
 });
