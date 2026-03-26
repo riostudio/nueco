@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 from .models import create_user_doc, create_device_doc, create_session_doc
 from .schemas import UserResponse
-from .email_service import send_verification_email, send_password_reset_email
+from .email_service import send_verification_email, send_password_reset_email, send_password_changed_email
 
 load_dotenv()
 
@@ -289,6 +289,12 @@ class AuthService:
             {"id": user_id},
             {"$set": {"password": password_hash, "updated_at": datetime.utcnow()}}
         )
+        
+        # Send confirmation email
+        try:
+            send_password_changed_email(user["email"], user.get("name", "User"))
+        except Exception as e:
+            logger.warning(f"Failed to send password change confirmation email: {e}")
         
         logger.info(f"Password changed: {user['email']}")
         return True, "Password changed successfully"
