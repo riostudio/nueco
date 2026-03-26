@@ -948,13 +948,17 @@ export default function EditorScreen() {
 
         {/* Voice Input Bar + Format Toolbar */}
         <View style={s.bottomBar}>
-          {/* Format Toolbar - shows only when content input is focused and keyboard is visible */}
-          {isKeyboardVisible && isContentFocused && (
+          {/* Format Toolbar - shows only when content input is focused */}
+          {isContentFocused && (
             <View style={s.formatBar}>
               <TouchableOpacity 
                 testID="fmt-bold" 
                 style={[s.fmtBtn, isBoldActive && s.fmtBtnActive]} 
-                onPress={toggleBold}
+                onPress={() => {
+                  toggleBold();
+                  // Keep focus on content input
+                  contentInputRef.current?.focus();
+                }}
               >
                 <Text style={[s.fmtBold, isBoldActive && s.fmtTextActive]}>B</Text>
                 <Text style={[s.fmtLabel, isBoldActive && s.fmtLabelActive]}>Bold</Text>
@@ -962,12 +966,24 @@ export default function EditorScreen() {
               <TouchableOpacity 
                 testID="fmt-italic" 
                 style={[s.fmtBtn, isItalicActive && s.fmtBtnActive]} 
-                onPress={toggleItalic}
+                onPress={() => {
+                  toggleItalic();
+                  // Keep focus on content input
+                  contentInputRef.current?.focus();
+                }}
               >
                 <Text style={[s.fmtItalic, isItalicActive && s.fmtTextActive]}>I</Text>
                 <Text style={[s.fmtLabel, isItalicActive && s.fmtLabelActive]}>Italic</Text>
               </TouchableOpacity>
-              <TouchableOpacity testID="fmt-bullet" style={s.fmtBtn} onPress={insertBullet}>
+              <TouchableOpacity 
+                testID="fmt-bullet" 
+                style={s.fmtBtn} 
+                onPress={() => {
+                  insertBullet();
+                  // Keep focus on content input
+                  contentInputRef.current?.focus();
+                }}
+              >
                 <MaterialIcons name="format-list-bulleted" size={22} color={C.text} />
                 <Text style={s.fmtLabel}>List</Text>
               </TouchableOpacity>
