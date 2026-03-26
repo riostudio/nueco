@@ -996,8 +996,8 @@ export default function EditorScreen() {
 
         {/* Voice Input Bar + Format Toolbar */}
         <View style={s.bottomBar}>
-          {/* Format Toolbar - shows only when content input is focused */}
-          {isContentFocused && (
+          {/* Format Toolbar - shows only when content input is focused (disabled on web) */}
+          {isContentFocused && Platform.OS !== 'web' && (
             <View style={s.formatBar}>
               <TouchableOpacity 
                 testID="fmt-bold" 
