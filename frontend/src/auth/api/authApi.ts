@@ -45,27 +45,47 @@ class AuthApiService {
   async login(email: string, password: string): Promise<AuthResponse> {
     const deviceInfo = this.getDeviceInfo();
     
-    const response = await fetch(`${BASE_URL}/api/auth/login`, {
-      method: 'POST',
-      headers: await this.getHeaders(),
-      body: JSON.stringify({
-        email,
-        password,
-        ...deviceInfo,
-      }),
-    });
+    try {
+      const response = await fetch(`${BASE_URL}/api/auth/login`, {
+        method: 'POST',
+        headers: await this.getHeaders(),
+        body: JSON.stringify({
+          email,
+          password,
+          ...deviceInfo,
+        }),
+      });
 
-    const result = await response.json();
-    if (!response.ok) {
-      throw new Error(result.detail || 'Login failed');
+      // Check if response is JSON
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        const text = await response.text();
+        console.error('Non-JSON response:', text.substring(0, 200));
+        throw new Error('Server returned an invalid response. Please try again.');
+      }
+
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.detail || 'Login failed');
+      }
+
+      // Store tokens
+      await authStorage.setAccessToken(result.access_token);
+      await authStorage.setRefreshToken(result.refresh_token);
+      await authStorage.setUser(result.user);
+
+      return result;
+    } catch (error: any) {
+      // Handle network errors
+      if (error.message === 'Network request failed') {
+        throw new Error('Unable to connect to server. Please check your internet connection.');
+      }
+      // Handle JSON parse errors
+      if (error.message?.includes('JSON')) {
+        throw new Error('Server returned an invalid response. Please try again.');
+      }
+      throw error;
     }
-
-    // Store tokens
-    await authStorage.setAccessToken(result.access_token);
-    await authStorage.setRefreshToken(result.refresh_token);
-    await authStorage.setUser(result.user);
-
-    return result;
   }
 
   async logout(): Promise<void> {
