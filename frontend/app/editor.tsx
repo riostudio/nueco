@@ -18,8 +18,21 @@ import {
   UserAvatar,
 } from '../src/auth';
 
-// Rich Text Editor (only for native platforms)
-import { RichEditor, RichToolbar, actions } from 'react-native-pell-rich-editor';
+// Rich Text Editor (only for native platforms - conditionally imported)
+let RichEditor: any = null;
+let RichToolbar: any = null;
+let actions: any = null;
+
+if (Platform.OS !== 'web') {
+  try {
+    const pellEditor = require('react-native-pell-rich-editor');
+    RichEditor = pellEditor.RichEditor;
+    RichToolbar = pellEditor.RichToolbar;
+    actions = pellEditor.actions;
+  } catch (e) {
+    console.log('Rich editor not available');
+  }
+}
 
 const C = {
   primary: '#D84315',
@@ -838,23 +851,59 @@ export default function EditorScreen() {
             )}
           </View>
 
-          {/* Content - Rich Text Editor for native, plain TextInput for web */}
+          {/* Content - Rich Text Editor for native, formatted TextInput for web */}
           <View style={s.contentContainer}>
             {isWeb ? (
-              <TextInput
-                ref={contentInputRef}
-                testID="note-content-input"
-                style={s.contentInput}
-                value={content}
-                onChangeText={handleContentChange}
-                multiline
-                textAlignVertical="top"
-                placeholder="Tap here to start writing..."
-                placeholderTextColor={C.borderSub}
-                onSelectionChange={(e) => setSelection(e.nativeEvent.selection)}
-                autoCorrect={true}
-                autoCapitalize="sentences"
-              />
+              <>
+                {/* Web Format Toolbar */}
+                <View style={s.webFormatToolbar}>
+                  <TouchableOpacity 
+                    style={s.webFormatBtn} 
+                    onPress={() => {
+                      // Apply bold to selection using document.execCommand
+                      if (typeof document !== 'undefined') {
+                        document.execCommand('bold', false);
+                      }
+                    }}
+                  >
+                    <Text style={{ fontWeight: 'bold', fontSize: 18, color: C.textSec }}>B</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    style={s.webFormatBtn} 
+                    onPress={() => {
+                      if (typeof document !== 'undefined') {
+                        document.execCommand('italic', false);
+                      }
+                    }}
+                  >
+                    <Text style={{ fontStyle: 'italic', fontSize: 18, color: C.textSec }}>I</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    style={s.webFormatBtn} 
+                    onPress={() => {
+                      if (typeof document !== 'undefined') {
+                        document.execCommand('insertUnorderedList', false);
+                      }
+                    }}
+                  >
+                    <MaterialIcons name="format-list-bulleted" size={18} color={C.textSec} />
+                  </TouchableOpacity>
+                </View>
+                {/* Web contenteditable div for rich text */}
+                <View 
+                  style={s.webEditorContainer}
+                  // @ts-ignore - Web only
+                  contentEditable={true}
+                  suppressContentEditableWarning={true}
+                  onInput={(e: any) => {
+                    const html = e.target.innerHTML || '';
+                    setContent(html);
+                    contentRef.current = html;
+                    triggerAutoSave();
+                  }}
+                  dangerouslySetInnerHTML={{ __html: content }}
+                />
+              </>
             ) : (
               <View style={s.richEditorContainer}>
                 <RichToolbar
@@ -872,7 +921,6 @@ export default function EditorScreen() {
                   ref={richEditorRef}
                   initialContentHTML={content}
                   onChange={(html) => {
-                    // Strip HTML tags for plain text storage, but keep formatting
                     setContent(html);
                     contentRef.current = html;
                     triggerAutoSave();
@@ -1261,6 +1309,35 @@ const s = StyleSheet.create({
   richEditor: {
     flex: 1,
     minHeight: 150,
+  },
+  // Web Editor Styles
+  webFormatToolbar: {
+    flexDirection: 'row',
+    backgroundColor: C.bg,
+    borderWidth: 2,
+    borderBottomWidth: 1,
+    borderColor: C.borderSub,
+    borderTopLeftRadius: 12,
+    borderTopRightRadius: 12,
+    padding: 8,
+    gap: 8,
+  },
+  webFormatBtn: {
+    padding: 8,
+    borderRadius: 6,
+    backgroundColor: C.surface,
+  },
+  webEditorContainer: {
+    minHeight: 150,
+    backgroundColor: C.surface,
+    borderWidth: 2,
+    borderTopWidth: 0,
+    borderColor: C.borderSub,
+    borderBottomLeftRadius: 12,
+    borderBottomRightRadius: 12,
+    padding: 16,
+    fontSize: 18,
+    lineHeight: 28,
   },
   calBtn: {
     flexDirection: 'row', alignItems: 'center',
