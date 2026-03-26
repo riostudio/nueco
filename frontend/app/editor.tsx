@@ -442,18 +442,17 @@ export default function EditorScreen() {
 
     const plainContent = convertToPlainText(content);
     
-    // Build share text with all details
+    // Build share text with all details - clean format without horizontal lines
     let shareText = '';
     
     // Add title
     if (title) {
-      shareText += `📝 ${title}\n`;
-      shareText += '─'.repeat(30) + '\n\n';
+      shareText += `📝 ${title}\n\n`;
     }
     
     // Add content
     if (plainContent) {
-      shareText += plainContent + '\n';
+      shareText += plainContent.trim() + '\n';
     }
     
     // Add tags if any
@@ -461,15 +460,17 @@ export default function EditorScreen() {
       shareText += '\n🏷️ Tags: ' + tags.map(t => t.name).join(', ') + '\n';
     }
     
-    // Add linked event details
+    // Add linked event details with Event header
     if (linkedEvent) {
-      shareText += '\n📅 Linked Event\n';
-      shareText += '─'.repeat(20) + '\n';
-      shareText += `Event: ${linkedEvent.title}\n`;
+      shareText += '\n📅 Event\n\n';
+      shareText += `Title: ${linkedEvent.title}\n`;
       shareText += `Start: ${formatEventDateTime(linkedEvent.start_time)}\n`;
       shareText += `End: ${formatEventDateTime(linkedEvent.end_time)}\n`;
+      if (linkedEvent.reminder_minutes) {
+        shareText += `Reminder: ${formatReminderMinutes(linkedEvent.reminder_minutes)}\n`;
+      }
       if (linkedEvent.description) {
-        shareText += `Details: ${linkedEvent.description}\n`;
+        shareText += `Description: ${linkedEvent.description}\n`;
       }
     }
 
