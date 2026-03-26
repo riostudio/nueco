@@ -142,15 +142,54 @@ export default function EditorScreen() {
     }
   }, [linkedEventId]);
 
-  // Refresh linked event data when screen comes back into focus
-  // This ensures event time changes are reflected after editing
+  // Refresh note and linked event data when screen comes back into focus
+  // This ensures event details are shown after creating/editing an event
   useFocusEffect(
     useCallback(() => {
-      if (linkedEventId) {
-        eventsApi.get(linkedEventId)
-          .then(event => setLinkedEvent(event))
-          .catch(e => console.error('Failed to refresh event:', e));
-      }
+      const refreshData = async () => {
+        // Check for pending event ID from AsyncStorage (for new notes)
+        try {
+          const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+          const pendingEventId = await AsyncStorage.getItem('pendingLinkedEventId');
+          if (pendingEventId) {
+            // Clear it immediately
+            await AsyncStorage.removeItem('pendingLinkedEventId');
+            // Set the linked event ID
+            setLinkedEventId(pendingEventId);
+            // Fetch the event details
+            const event = await eventsApi.get(pendingEventId);
+            setLinkedEvent(event);
+            return;
+          }
+        } catch (e) {
+          console.error('Error checking pending event:', e);
+        }
+        
+        // If we have a saved note, reload it to get the latest linked_event_id
+        if (noteIdRef.current && isCreatedRef.current) {
+          try {
+            const note = await notesApi.get(noteIdRef.current);
+            if (note.linked_event_id) {
+              setLinkedEventId(note.linked_event_id);
+              // Fetch the event details
+              const event = await eventsApi.get(note.linked_event_id);
+              setLinkedEvent(event);
+            }
+          } catch (e) {
+            console.error('Failed to refresh note data:', e);
+          }
+        } else if (linkedEventId) {
+          // Just refresh event if we already have a linkedEventId
+          try {
+            const event = await eventsApi.get(linkedEventId);
+            setLinkedEvent(event);
+          } catch (e) {
+            console.error('Failed to refresh event:', e);
+          }
+        }
+      };
+      
+      refreshData();
     }, [linkedEventId])
   );
 

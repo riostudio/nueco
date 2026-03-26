@@ -309,12 +309,22 @@ export default function EventEditorScreen() {
       } else {
         const created = await eventsApi.create(eventData);
         if (params.noteId && params.noteId !== 'new') {
+          // Link event to existing note
           try {
             await notesApi.update(params.noteId, {
               linked_event_id: created.id,
             });
           } catch (e) {
             console.error('Failed to link event to note:', e);
+          }
+        } else {
+          // For new notes, store the event ID temporarily so the editor can pick it up
+          // We'll use AsyncStorage to pass the event ID back
+          try {
+            const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+            await AsyncStorage.setItem('pendingLinkedEventId', created.id);
+          } catch (e) {
+            console.error('Failed to store pending event ID:', e);
           }
         }
       }
