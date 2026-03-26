@@ -1,6 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Modal,
+  View, Text, StyleSheet, TouchableOpacity, ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -8,7 +8,7 @@ import { useRouter, useFocusEffect } from 'expo-router';
 import { eventsApi } from '../../src/api';
 import { CalendarEvent } from '../../src/types';
 import { MONTH_NAMES, DAY_NAMES } from '../../src/theme';
-import { UserAvatar, useAuth } from '../../src/auth';
+import { UserAvatar } from '../../src/auth';
 
 const C = {
   primary: '#D84315',
@@ -24,18 +24,10 @@ const C = {
 
 export default function CalendarScreen() {
   const router = useRouter();
-  const { user, logout } = useAuth();
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState(true);
-  const [logoutModalVisible, setLogoutModalVisible] = useState(false);
-
-  const handleLogout = async () => {
-    await logout();
-    setLogoutModalVisible(false);
-    router.replace('/welcome');
-  };
 
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
@@ -97,12 +89,7 @@ export default function CalendarScreen() {
     <SafeAreaView style={s.container} edges={['top']}>
       <View style={s.header}>
         <Text style={s.headerTitle}>Calendar</Text>
-        <UserAvatar 
-          user={user} 
-          size={36} 
-          onSignInPress={() => router.push('/login')}
-          onLogout={() => setLogoutModalVisible(true)}
-        />
+        <UserAvatar size={36} />
       </View>
 
       {/* Month Navigation */}
@@ -205,30 +192,6 @@ export default function CalendarScreen() {
         <MaterialIcons name="add" size={32} color={C.primaryFg} />
         <Text style={s.fabText}>New Event</Text>
       </TouchableOpacity>
-
-      {/* Logout Confirmation Modal */}
-      <Modal
-        visible={logoutModalVisible}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={() => setLogoutModalVisible(false)}
-      >
-        <View style={s.modalOverlay}>
-          <View style={s.modalContent}>
-            <MaterialIcons name="logout" size={48} color={C.primary} style={{ marginBottom: 16 }} />
-            <Text style={s.modalTitle}>Log Out?</Text>
-            <Text style={s.modalMessage}>Are you sure you want to log out?</Text>
-            <View style={s.modalButtons}>
-              <TouchableOpacity style={s.modalCancelBtn} onPress={() => setLogoutModalVisible(false)}>
-                <Text style={s.modalCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={s.modalLogoutBtn} onPress={handleLogout}>
-                <Text style={s.modalLogoutText}>Log Out</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }
@@ -294,14 +257,4 @@ const s = StyleSheet.create({
     elevation: 4,
   },
   fabText: { fontSize: 20, fontWeight: '600', color: C.primaryFg, marginLeft: 8 },
-  // Modal styles
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 },
-  modalContent: { backgroundColor: C.surface, borderRadius: 20, padding: 24, width: '100%', maxWidth: 340, alignItems: 'center' },
-  modalTitle: { fontSize: 22, fontWeight: '700', color: C.text, marginBottom: 12 },
-  modalMessage: { fontSize: 16, color: C.textSec, textAlign: 'center', marginBottom: 24 },
-  modalButtons: { flexDirection: 'row', gap: 12, width: '100%' },
-  modalCancelBtn: { flex: 1, paddingVertical: 14, borderRadius: 12, backgroundColor: '#E0E0E0', alignItems: 'center' },
-  modalCancelText: { fontSize: 16, fontWeight: '600', color: C.text },
-  modalLogoutBtn: { flex: 1, paddingVertical: 14, borderRadius: 12, backgroundColor: C.primary, alignItems: 'center' },
-  modalLogoutText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
 });
