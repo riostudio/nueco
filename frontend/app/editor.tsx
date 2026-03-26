@@ -89,6 +89,7 @@ export default function EditorScreen() {
   const contentRef = useRef(content);
   const tagsRef = useRef(tags);
   const isPinnedRef = useRef(isPinned);
+  const linkedEventIdRef = useRef<string | null>(linkedEventId);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   // State to track if note exists (for UI rendering like delete button)
@@ -98,6 +99,7 @@ export default function EditorScreen() {
   useEffect(() => { contentRef.current = content; }, [content]);
   useEffect(() => { tagsRef.current = tags; }, [tags]);
   useEffect(() => { isPinnedRef.current = isPinned; }, [isPinned]);
+  useEffect(() => { linkedEventIdRef.current = linkedEventId; }, [linkedEventId]);
 
   useEffect(() => {
     if (!isNew && noteId) loadNote(noteId);
@@ -219,6 +221,7 @@ export default function EditorScreen() {
             content: contentRef.current,
             tags: tagsRef.current,
             is_pinned: isPinnedRef.current,
+            linked_event_id: linkedEventIdRef.current,
           }));
           noteIdRef.current = created.id;
           isCreatedRef.current = true;
@@ -229,6 +232,7 @@ export default function EditorScreen() {
             content: contentRef.current,
             tags: tagsRef.current,
             is_pinned: isPinnedRef.current,
+            linked_event_id: linkedEventIdRef.current,
           }));
         }
         setSaveStatus('All changes saved');
@@ -246,12 +250,13 @@ export default function EditorScreen() {
   const handleBack = useCallback(async () => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     try {
-      if (!isCreatedRef.current && (titleRef.current || contentRef.current)) {
+      if (!isCreatedRef.current && (titleRef.current || contentRef.current || linkedEventIdRef.current)) {
         await retryOperation(() => notesApi.create({
           title: titleRef.current,
           content: contentRef.current,
           tags: tagsRef.current,
           is_pinned: isPinnedRef.current,
+          linked_event_id: linkedEventIdRef.current,
         }));
       } else if (isCreatedRef.current && noteIdRef.current) {
         await retryOperation(() => notesApi.update(noteIdRef.current, {
@@ -259,6 +264,7 @@ export default function EditorScreen() {
           content: contentRef.current,
           tags: tagsRef.current,
           is_pinned: isPinnedRef.current,
+          linked_event_id: linkedEventIdRef.current,
         }));
       }
     } catch (e) {
@@ -655,8 +661,8 @@ export default function EditorScreen() {
 
   // Save note and show sign-up prompt (only on first note save)
   const handleSaveAndBack = async () => {
-    // Check if there's content to save
-    if (!title.trim() && !content.trim()) {
+    // Check if there's content to save (also save if there's a linked event)
+    if (!title.trim() && !content.trim() && !linkedEventIdRef.current) {
       router.replace('/(tabs)');
       return;
     }
@@ -671,6 +677,7 @@ export default function EditorScreen() {
           content: contentRef.current,
           tags: tagsRef.current,
           is_pinned: isPinnedRef.current,
+          linked_event_id: linkedEventIdRef.current,
         }));
         noteIdRef.current = created.id;
         isCreatedRef.current = true;
@@ -682,6 +689,7 @@ export default function EditorScreen() {
           content: contentRef.current,
           tags: tagsRef.current,
           is_pinned: isPinnedRef.current,
+          linked_event_id: linkedEventIdRef.current,
         }));
         saveSucceeded = true;
       }
