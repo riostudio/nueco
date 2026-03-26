@@ -119,9 +119,20 @@ async def get_notes(search: Optional[str] = Query(None)):
                 {"tags.name": {"$regex": search, "$options": "i"}},
             ]
         }
-    notes = await db.notes.find(query, {"_id": 0}).sort(
+    # Optimized query with field projection and pagination
+    notes = await db.notes.find(query, {
+        "_id": 0, 
+        "id": 1, 
+        "title": 1, 
+        "content": 1, 
+        "tags": 1, 
+        "is_pinned": 1, 
+        "linked_event_id": 1,
+        "created_at": 1, 
+        "updated_at": 1
+    }).sort(
         [("is_pinned", -1), ("updated_at", -1)]
-    ).to_list(1000)
+    ).to_list(100)  # Reduced limit for better performance
     return [NoteResponse(**n) for n in notes]
 
 
@@ -208,7 +219,19 @@ async def get_events(
         else:
             end = f"{year:04d}-{month + 1:02d}-01"
         query = {"start_time": {"$gte": start, "$lt": end}}
-    events = await db.events.find(query, {"_id": 0}).sort("start_time", 1).to_list(1000)
+    # Optimized query with field projection
+    events = await db.events.find(query, {
+        "_id": 0, 
+        "id": 1, 
+        "title": 1, 
+        "description": 1, 
+        "start_time": 1, 
+        "end_time": 1, 
+        "linked_note_ids": 1, 
+        "reminder_minutes": 1, 
+        "device_calendar_event_id": 1, 
+        "created_at": 1
+    }).sort("start_time", 1).to_list(100)  # Reduced limit
     return [EventResponse(**e) for e in events]
 
 
