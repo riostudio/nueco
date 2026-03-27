@@ -1,4 +1,4 @@
-import React, { useState, useEffect, createElement } from 'react';
+import React, { useState, useEffect, createElement, useRef, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   ScrollView, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
@@ -41,6 +41,7 @@ const C = {
   border: '#121212',
   borderSub: '#78909C',
   error: '#C62828',
+  success: '#2E7D32',
 };
 
 const isWeb = Platform.OS === 'web';
@@ -202,7 +203,7 @@ export default function EventEditorScreen() {
     return d;
   });
   const [loading, setLoading] = useState(isEditing);
-  const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState('');
   const [showSuccessOverlay, setShowSuccessOverlay] = useState(false);
   const [addToDeviceCal, setAddToDeviceCal] = useState(true); // ON by default
   const [reminderMinutes, setReminderMinutes] = useState<ReminderMinutes | null>(15); // Default 15 min reminder
@@ -219,6 +220,28 @@ export default function EventEditorScreen() {
   // Delete confirmation modal state
   const [deleteModalVisible, setDeleteModalVisible] = useState(false);
   const [deleting, setDeleting] = useState(false);
+
+  // Refs for auto-save closure safety
+  const eventIdRef = useRef(isEditing ? (params.eventId || '') : '');
+  const isCreatedRef = useRef(isEditing);
+  const titleRef = useRef(title);
+  const descriptionRef = useRef(description);
+  const dateRef = useRef(date);
+  const startTimeRef = useRef(startTime);
+  const endTimeRef = useRef(endTime);
+  const reminderMinutesRef = useRef(reminderMinutes);
+  const deviceCalendarEventIdRef = useRef(deviceCalendarEventId);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [eventExists, setEventExists] = useState(isEditing);
+
+  // Update refs when state changes
+  useEffect(() => { titleRef.current = title; }, [title]);
+  useEffect(() => { descriptionRef.current = description; }, [description]);
+  useEffect(() => { dateRef.current = date; }, [date]);
+  useEffect(() => { startTimeRef.current = startTime; }, [startTime]);
+  useEffect(() => { endTimeRef.current = endTime; }, [endTime]);
+  useEffect(() => { reminderMinutesRef.current = reminderMinutes; }, [reminderMinutes]);
+  useEffect(() => { deviceCalendarEventIdRef.current = deviceCalendarEventId; }, [deviceCalendarEventId]);
 
   useEffect(() => {
     if (isEditing && params.eventId) {
@@ -249,6 +272,9 @@ export default function EventEditorScreen() {
       setEndTime(end);
       setReminderMinutes(event.reminder_minutes || null);
       setDeviceCalendarEventId(event.device_calendar_event_id || null);
+      eventIdRef.current = event.id;
+      isCreatedRef.current = true;
+      setEventExists(true);
     } catch (e) {
       console.error('Failed to load event:', e);
     } finally {
@@ -256,98 +282,165 @@ export default function EventEditorScreen() {
     }
   };
 
-  const handleSave = async () => {
-    if (!title.trim()) {
-      Alert.alert('Title Required', 'Please enter a title for the event.');
-      return;
+  // Retry helper for network resilience
+  const retryOperation = async (operation: () => Promise<any>, maxRetries = 3): Promise<any> => {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        return await operation();
+      } catch (e) {
+        console.log(`Save attempt ${attempt} failed:`, e);
+        if (attempt === maxRetries) throw e;
+        await new Promise(resolve => setTimeout(resolve, attempt * 500));
+      }
     }
+  };
 
-    setSaving(true);
-    try {
-      const st = new Date(date);
-      st.setHours(startTime.getHours(), startTime.getMinutes(), 0, 0);
-      const et = new Date(date);
-      et.setHours(endTime.getHours(), endTime.getMinutes(), 0, 0);
-
-      if (et <= st) {
-        Alert.alert('Invalid Time', 'End time must be after start time.');
-        setSaving(false);
+  // Auto-save function
+  const triggerAutoSave = useCallback(() => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    setSaveStatus('Unsaved changes');
+    saveTimerRef.current = setTimeout(async () => {
+      // Validate before saving
+      if (!titleRef.current.trim()) {
+        setSaveStatus('Enter a title to save');
         return;
       }
 
-      const linkedNoteIds =
-        params.noteId && params.noteId !== 'new' ? [params.noteId] : [];
+      const st = new Date(dateRef.current);
+      st.setHours(startTimeRef.current.getHours(), startTimeRef.current.getMinutes(), 0, 0);
+      const et = new Date(dateRef.current);
+      et.setHours(endTimeRef.current.getHours(), endTimeRef.current.getMinutes(), 0, 0);
 
-      // Write to device calendar first (if enabled) to get the device calendar event ID
-      let newDeviceCalEventId = deviceCalendarEventId;
-      if (addToDeviceCal && !isWeb) {
-        newDeviceCalEventId = await writeToDeviceCalendar(
-          title.trim(),
-          description.trim(),
-          st,
-          et,
-          deviceCalendarEventId // Pass existing ID for update
-        );
+      if (et <= st) {
+        setSaveStatus('End time must be after start');
+        return;
       }
 
-      // Schedule notification reminder
-      if (reminderMinutes && !isWeb) {
-        await scheduleReminder(title.trim(), st, reminderMinutes);
-      }
+      setSaveStatus('Saving...');
+      try {
+        const linkedNoteIds = params.noteId && params.noteId !== 'new' ? [params.noteId] : [];
 
-      const eventData = {
-        title: title.trim(),
-        description: description.trim(),
-        start_time: st.toISOString(),
-        end_time: et.toISOString(),
-        linked_note_ids: linkedNoteIds,
-        reminder_minutes: reminderMinutes,
-        device_calendar_event_id: newDeviceCalEventId,
-      };
-
-      if (isEditing && params.eventId) {
-        await eventsApi.update(params.eventId, eventData);
-        // Show success and go back
-        setShowSuccessOverlay(true);
-        setTimeout(() => {
-          setShowSuccessOverlay(false);
-          router.back();
-        }, 1000);
-      } else {
-        const created = await eventsApi.create(eventData);
-        if (params.noteId && params.noteId !== 'new') {
-          // Link event to existing note
-          try {
-            await notesApi.update(params.noteId, {
-              linked_event_id: created.id,
-            });
-          } catch (e) {
-            console.error('Failed to link event to note:', e);
-          }
-        } else {
-          // For new notes, store the event ID temporarily so the editor can pick it up
-          // We'll use AsyncStorage to pass the event ID back
-          try {
-            const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-            await AsyncStorage.setItem('pendingLinkedEventId', created.id);
-          } catch (e) {
-            console.error('Failed to store pending event ID:', e);
+        // Write to device calendar (if enabled)
+        let newDeviceCalEventId = deviceCalendarEventIdRef.current;
+        if (addToDeviceCal && !isWeb) {
+          newDeviceCalEventId = await writeToDeviceCalendar(
+            titleRef.current.trim(),
+            descriptionRef.current.trim(),
+            st,
+            et,
+            deviceCalendarEventIdRef.current
+          );
+          if (newDeviceCalEventId) {
+            deviceCalendarEventIdRef.current = newDeviceCalEventId;
+            setDeviceCalendarEventId(newDeviceCalEventId);
           }
         }
-        // Show success overlay before going back
-        setShowSuccessOverlay(true);
-        setTimeout(() => {
-          setShowSuccessOverlay(false);
-          router.back();
-        }, 1000);
+
+        // Schedule notification reminder
+        if (reminderMinutesRef.current && !isWeb) {
+          await scheduleReminder(titleRef.current.trim(), st, reminderMinutesRef.current);
+        }
+
+        const eventData = {
+          title: titleRef.current.trim(),
+          description: descriptionRef.current.trim(),
+          start_time: st.toISOString(),
+          end_time: et.toISOString(),
+          linked_note_ids: linkedNoteIds,
+          reminder_minutes: reminderMinutesRef.current,
+          device_calendar_event_id: newDeviceCalEventId,
+        };
+
+        if (!isCreatedRef.current) {
+          const created = await retryOperation(() => eventsApi.create(eventData));
+          eventIdRef.current = created.id;
+          isCreatedRef.current = true;
+          setEventExists(true);
+
+          // Link to note if needed
+          if (params.noteId && params.noteId !== 'new') {
+            try {
+              await notesApi.update(params.noteId, { linked_event_id: created.id });
+            } catch (e) {
+              console.error('Failed to link event to note:', e);
+            }
+          } else {
+            // For new notes, store the event ID temporarily
+            try {
+              const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+              await AsyncStorage.setItem('pendingLinkedEventId', created.id);
+            } catch (e) {
+              console.error('Failed to store pending event ID:', e);
+            }
+          }
+        } else if (eventIdRef.current) {
+          await retryOperation(() => eventsApi.update(eventIdRef.current, eventData));
+        }
+        setSaveStatus('All changes saved');
+      } catch (e: any) {
+        const errorMsg = e?.message?.includes('Network')
+          ? 'Network error - will retry'
+          : 'Failed to save';
+        setSaveStatus(errorMsg);
+        console.error('Save error after retries:', e);
       }
-    } catch (e) {
-      Alert.alert('Error', 'Failed to save event. Please try again.');
-      console.error('Save event error:', e);
-    } finally {
-      setSaving(false);
+    }, 2000);
+  }, [addToDeviceCal, params.noteId]);
+
+  // Handle back button
+  const handleBack = useCallback(async () => {
+    // Save any pending changes before going back
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
     }
-  };
+
+    // If we have content, do a final save
+    if (titleRef.current.trim()) {
+      const st = new Date(dateRef.current);
+      st.setHours(startTimeRef.current.getHours(), startTimeRef.current.getMinutes(), 0, 0);
+      const et = new Date(dateRef.current);
+      et.setHours(endTimeRef.current.getHours(), endTimeRef.current.getMinutes(), 0, 0);
+
+      if (et > st) {
+        try {
+          const linkedNoteIds = params.noteId && params.noteId !== 'new' ? [params.noteId] : [];
+          const eventData = {
+            title: titleRef.current.trim(),
+            description: descriptionRef.current.trim(),
+            start_time: st.toISOString(),
+            end_time: et.toISOString(),
+            linked_note_ids: linkedNoteIds,
+            reminder_minutes: reminderMinutesRef.current,
+            device_calendar_event_id: deviceCalendarEventIdRef.current,
+          };
+
+          if (!isCreatedRef.current) {
+            const created = await eventsApi.create(eventData);
+            // Link to note if needed
+            if (params.noteId && params.noteId !== 'new') {
+              await notesApi.update(params.noteId, { linked_event_id: created.id });
+            } else {
+              const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+              await AsyncStorage.setItem('pendingLinkedEventId', created.id);
+            }
+          } else if (eventIdRef.current) {
+            await eventsApi.update(eventIdRef.current, eventData);
+          }
+        } catch (e) {
+          console.error('Final save on back failed:', e);
+        }
+      }
+    }
+
+    router.back();
+  }, [params.noteId, router]);
+
+  // Trigger auto-save when fields change
+  useEffect(() => {
+    if (title || description) {
+      triggerAutoSave();
+    }
+  }, [title, description, date, startTime, endTime, reminderMinutes, triggerAutoSave]);
 
   // Schedule a notification reminder before the event
   const scheduleReminder = async (
@@ -521,15 +614,27 @@ export default function EventEditorScreen() {
           <TouchableOpacity
             testID="event-back-btn"
             style={s.headerBtn}
-            onPress={() => router.back()}
+            onPress={handleBack}
           >
-            <MaterialIcons name="close" size={28} color={C.text} />
-            <Text style={s.headerBtnLabel}>Cancel</Text>
+            <MaterialIcons name="arrow-back" size={28} color={C.text} />
+            <Text style={s.headerBtnLabel}>Back</Text>
           </TouchableOpacity>
           <Text style={s.headerTitle}>
             {isEditing ? 'Edit Event' : 'New Event'}
           </Text>
-          <View style={{ width: 80 }} />
+          {/* Save Status Indicator */}
+          <View style={s.saveStatusContainer}>
+            {saveStatus === 'Saving...' && (
+              <ActivityIndicator size="small" color={C.primary} />
+            )}
+            <Text style={[
+              s.saveStatusText,
+              saveStatus === 'All changes saved' && { color: C.success },
+              saveStatus.includes('error') && { color: C.error },
+            ]}>
+              {saveStatus}
+            </Text>
+          </View>
         </View>
 
         <ScrollView
@@ -945,27 +1050,8 @@ export default function EventEditorScreen() {
             </View>
           )}
 
-          {/* Save */}
-          <TouchableOpacity
-            testID="save-event-btn"
-            style={s.saveBtn}
-            onPress={handleSave}
-            disabled={saving}
-            activeOpacity={0.8}
-          >
-            {saving ? (
-              <ActivityIndicator size="small" color={C.primaryFg} />
-            ) : (
-              <>
-                <MaterialIcons name="check" size={24} color={C.primaryFg} />
-                <Text style={s.saveBtnText}>
-                  {isEditing ? 'Update Event' : 'Create Event'}
-                </Text>
-              </>
-            )}
-          </TouchableOpacity>
-
-          {isEditing && (
+          {/* Delete Button - only show for existing events */}
+          {eventExists && (
             <TouchableOpacity
               testID="delete-event-btn"
               style={s.deleteBtn}
@@ -1058,6 +1144,17 @@ const s = StyleSheet.create({
     marginLeft: 4,
   },
   headerTitle: { fontSize: 22, fontWeight: '700', color: C.text },
+  saveStatusContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minWidth: 100,
+    justifyContent: 'flex-end',
+  },
+  saveStatusText: {
+    fontSize: 14,
+    color: C.textSec,
+    marginLeft: 6,
+  },
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 24, paddingTop: 24 },
   label: {
