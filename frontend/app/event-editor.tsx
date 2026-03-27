@@ -419,7 +419,8 @@ export default function EventEditorScreen() {
             // Link to note if needed
             if (params.noteId && params.noteId !== 'new') {
               await notesApi.update(params.noteId, { linked_event_id: created.id });
-            } else {
+            } else if (params.noteId === 'new') {
+              // For new notes, store the event ID temporarily so the editor can pick it up
               const AsyncStorage = require('@react-native-async-storage/async-storage').default;
               await AsyncStorage.setItem('pendingLinkedEventId', created.id);
             }
@@ -432,7 +433,14 @@ export default function EventEditorScreen() {
       }
     }
 
-    router.back();
+    // Navigate based on where user came from
+    if (params.noteId) {
+      // Came from note editor - go back to the note
+      router.back();
+    } else {
+      // Came from events list - go to events tab
+      router.replace('/(tabs)/events');
+    }
   }, [params.noteId, router]);
 
   // Trigger auto-save when fields change
@@ -616,26 +624,37 @@ export default function EventEditorScreen() {
             style={s.headerBtn}
             onPress={handleBack}
           >
-            <MaterialIcons name="arrow-back" size={28} color={C.text} />
-            <Text style={s.headerBtnLabel}>Back</Text>
+            <MaterialIcons name="arrow-back" size={28} color={C.primary} />
+            <Text style={[s.headerBtnLabel, { color: C.primary }]}>Back</Text>
           </TouchableOpacity>
           <Text style={s.headerTitle}>
             {isEditing ? 'Edit Event' : 'New Event'}
           </Text>
-          {/* Save Status Indicator */}
-          <View style={s.saveStatusContainer}>
-            {saveStatus === 'Saving...' && (
-              <ActivityIndicator size="small" color={C.primary} />
-            )}
-            <Text style={[
-              s.saveStatusText,
-              saveStatus === 'All changes saved' && { color: C.success },
-              saveStatus.includes('error') && { color: C.error },
-            ]}>
+          <View style={{ width: 80 }} />
+        </View>
+
+        {/* Save Status Bar - positioned below header like note editor */}
+        {saveStatus ? (
+          <View style={s.statusBar}>
+            <MaterialIcons
+              name={
+                saveStatus === 'All changes saved' ? 'check-circle' :
+                saveStatus === 'Saving...' ? 'sync' : 'error'
+              }
+              size={16}
+              color={
+                saveStatus === 'All changes saved' ? C.success :
+                saveStatus.includes('error') || saveStatus.includes('Failed') ? C.error : C.textSec
+              }
+            />
+            <Text style={[s.statusText, {
+              color: saveStatus === 'All changes saved' ? C.success :
+                saveStatus.includes('error') || saveStatus.includes('Failed') ? C.error : C.textSec,
+            }]}>
               {saveStatus}
             </Text>
           </View>
-        </View>
+        ) : null}
 
         <ScrollView
           style={s.scroll}
@@ -1144,15 +1163,18 @@ const s = StyleSheet.create({
     marginLeft: 4,
   },
   headerTitle: { fontSize: 22, fontWeight: '700', color: C.text },
-  saveStatusContainer: {
+  statusBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    minWidth: 100,
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    backgroundColor: C.bg,
+    borderBottomWidth: 1,
+    borderBottomColor: C.borderSub,
   },
-  saveStatusText: {
+  statusText: {
     fontSize: 14,
-    color: C.textSec,
     marginLeft: 6,
   },
   scroll: { flex: 1 },
