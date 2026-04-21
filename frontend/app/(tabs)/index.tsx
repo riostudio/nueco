@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
-  ScrollView, RefreshControl, ActivityIndicator, Alert, Modal, Platform,
+  FlatList, RefreshControl, ActivityIndicator, Alert, Modal, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -308,9 +308,11 @@ export default function NotesScreen() {
         )}
       </View>
 
-      <ScrollView
+      <FlatList
         style={s.scroll}
         contentContainerStyle={s.scrollContent}
+        data={notes}
+        keyExtractor={(item) => item.id}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -318,8 +320,7 @@ export default function NotesScreen() {
             colors={[C.primary]}
           />
         }
-      >
-        {notes.length === 0 ? (
+        ListEmptyComponent={
           <View style={s.empty}>
             <MaterialIcons name="note-add" size={72} color={C.borderSub} />
             <Text style={s.emptyTitle}>
@@ -329,24 +330,23 @@ export default function NotesScreen() {
               {search ? 'Try a different search term' : 'Tap the button below to create your first note!'}
             </Text>
           </View>
-        ) : (
-          <>
-            {pinnedNotes.length > 0 && (
-              <>
-                <Text style={s.section}>Pinned</Text>
-                {pinnedNotes.map(renderCard)}
-              </>
-            )}
-            {otherNotes.length > 0 && (
-              <>
-                {pinnedNotes.length > 0 && <Text style={s.section}>All Notes</Text>}
-                {otherNotes.map(renderCard)}
-              </>
-            )}
-          </>
-        )}
-        <View style={{ height: 100 }} />
-      </ScrollView>
+        }
+        ListHeaderComponent={
+          pinnedNotes.length > 0 ? (
+            <View>
+              <Text style={s.section}>Pinned</Text>
+              {pinnedNotes.map(renderCard)}
+              {otherNotes.length > 0 && <Text style={s.section}>All Notes</Text>}
+            </View>
+          ) : null
+        }
+        renderItem={({ item }) => {
+          // Skip pinned notes as they're rendered in header
+          if (item.is_pinned) return null;
+          return renderCard(item);
+        }}
+        ListFooterComponent={<View style={{ height: 100 }} />}
+      />
 
       <TouchableOpacity
         testID="create-note-btn"

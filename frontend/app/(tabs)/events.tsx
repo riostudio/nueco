@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useRef } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView,
+  View, Text, StyleSheet, TouchableOpacity, FlatList,
   RefreshControl, ActivityIndicator, Alert, Animated,
   NativeSyntheticEvent, NativeScrollEvent, Modal,
 } from 'react-native';
@@ -231,9 +231,11 @@ export default function EventsScreen() {
         </TouchableOpacity>
       </View>
 
-      <ScrollView
+      <FlatList
         style={s.scroll}
         contentContainerStyle={s.scrollContent}
+        data={grouped}
+        keyExtractor={(item) => item.date}
         onScroll={handleScroll}
         scrollEventThrottle={16}
         refreshControl={
@@ -243,8 +245,7 @@ export default function EventsScreen() {
             colors={[C.primary]}
           />
         }
-      >
-        {grouped.length === 0 ? (
+        ListEmptyComponent={
           <View style={s.empty}>
             <MaterialIcons name="event-busy" size={72} color={C.borderSub} />
             <Text style={s.emptyTitle}>
@@ -254,61 +255,60 @@ export default function EventsScreen() {
               Tap the button below to schedule one!
             </Text>
           </View>
-        ) : (
-          grouped.map((group) => (
-            <View key={group.date}>
-              <View style={s.dateHeader}>
-                <Text style={s.dateHeaderText}>{group.displayDate}</Text>
-                {group.isToday && (
-                  <View style={s.todayBadge}>
-                    <Text style={s.todayBadgeText}>Today</Text>
-                  </View>
-                )}
-              </View>
-
-              {group.events.map((event) => (
-                <View key={event.id} testID={`event-card-${event.id}`} style={s.eventCard}>
-                  <View style={s.eventTimeCol}>
-                    <Text style={s.timeStart}>{formatEventTime(event.start_time)}</Text>
-                    <Text style={s.timeEnd}>{formatEventTime(event.end_time)}</Text>
-                  </View>
-
-                  <View style={s.eventBody}>
-                    <Text style={s.eventTitle} numberOfLines={1}>{event.title}</Text>
-                    {event.description ? (
-                      <Text style={s.eventDesc} numberOfLines={1}>{event.description}</Text>
-                    ) : null}
-                    {event.reminder_minutes ? (
-                      <View style={s.reminderRow}>
-                        <MaterialIcons name="notifications" size={14} color={C.primary} />
-                        <Text style={s.reminderText}>{formatReminderMinutes(event.reminder_minutes)}</Text>
-                      </View>
-                    ) : null}
-                  </View>
-
-                  <View style={s.actions}>
-                    <TouchableOpacity
-                      testID={`edit-event-${event.id}`}
-                      style={s.actionBtn}
-                      onPress={() => router.push({ pathname: '/event-editor', params: { eventId: event.id } })}
-                    >
-                      <MaterialIcons name="edit" size={20} color={C.secondary} />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      testID={`delete-event-${event.id}`}
-                      style={s.actionBtn}
-                      onPress={() => handleDeletePress(event.id, event.title)}
-                    >
-                      <MaterialIcons name="delete" size={20} color={C.error} />
-                    </TouchableOpacity>
-                  </View>
+        }
+        renderItem={({ item: group }) => (
+          <View key={group.date}>
+            <View style={s.dateHeader}>
+              <Text style={s.dateHeaderText}>{group.displayDate}</Text>
+              {group.isToday && (
+                <View style={s.todayBadge}>
+                  <Text style={s.todayBadgeText}>Today</Text>
                 </View>
-              ))}
+              )}
             </View>
-          ))
+
+            {group.events.map((event) => (
+              <View key={event.id} testID={`event-card-${event.id}`} style={s.eventCard}>
+                <View style={s.eventTimeCol}>
+                  <Text style={s.timeStart}>{formatEventTime(event.start_time)}</Text>
+                  <Text style={s.timeEnd}>{formatEventTime(event.end_time)}</Text>
+                </View>
+
+                <View style={s.eventBody}>
+                  <Text style={s.eventTitle} numberOfLines={1}>{event.title}</Text>
+                  {event.description ? (
+                    <Text style={s.eventDesc} numberOfLines={1}>{event.description}</Text>
+                  ) : null}
+                  {event.reminder_minutes ? (
+                    <View style={s.reminderRow}>
+                      <MaterialIcons name="notifications" size={14} color={C.primary} />
+                      <Text style={s.reminderText}>{formatReminderMinutes(event.reminder_minutes)}</Text>
+                    </View>
+                  ) : null}
+                </View>
+
+                <View style={s.actions}>
+                  <TouchableOpacity
+                    testID={`edit-event-${event.id}`}
+                    style={s.actionBtn}
+                    onPress={() => router.push({ pathname: '/event-editor', params: { eventId: event.id } })}
+                  >
+                    <MaterialIcons name="edit" size={20} color={C.secondary} />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    testID={`delete-event-${event.id}`}
+                    style={s.actionBtn}
+                    onPress={() => handleDeletePress(event.id, event.title)}
+                  >
+                    <MaterialIcons name="delete" size={20} color={C.error} />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ))}
+          </View>
         )}
-        <View style={{ height: 100 }} />
-      </ScrollView>
+        ListFooterComponent={<View style={{ height: 100 }} />}
+      />
 
       {/* FAB - Animated */}
       <Animated.View style={[s.fab, { width: fabWidth }]}>
