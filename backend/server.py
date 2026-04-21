@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException, Query
+from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException, Query, Depends
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -26,6 +26,9 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Import get_current_user for authentication
+from auth.router import get_current_user
 
 
 # ---- Models ----
@@ -55,6 +58,7 @@ class NoteResponse(BaseModel):
     tags: List[Tag]
     is_pinned: bool
     linked_event_id: Optional[str] = None
+    user_id: Optional[str] = None
     created_at: str
     updated_at: str
 
@@ -85,14 +89,16 @@ class EventResponse(BaseModel):
     linked_note_ids: List[str]
     reminder_minutes: Optional[int] = None
     device_calendar_event_id: Optional[str] = None
+    user_id: Optional[str] = None
     created_at: str
 
 
 # ---- Notes Endpoints ----
 
 @api_router.post("/notes", response_model=NoteResponse)
-async def create_note(note: NoteCreate):
+async def create_note(note: NoteCreate, current_user: dict = Depends(get_current_user)):
     now = datetime.now(timezone.utc).isoformat()
+    user_id = current_user.get("id") or str(current_user.get("_id", ""))
     doc = {
         "id": str(uuid.uuid4()),
         "title": note.title,
@@ -100,6 +106,7 @@ async def create_note(note: NoteCreate):
         "tags": [t.model_dump() for t in note.tags],
         "is_pinned": note.is_pinned,
         "linked_event_id": note.linked_event_id,
+        "user_id": user_id,
         "created_at": now,
         "updated_at": now,
     }
@@ -109,14 +116,18 @@ async def create_note(note: NoteCreate):
 
 
 @api_router.get("/notes", response_model=List[NoteResponse])
-async def get_notes(search: Optional[str] = Query(None)):
-    query = {}
+async def get_notes(search: Optional[str] = Query(None), current_user: dict = Depends(get_current_user)):
+    user_id = current_user.get("id") or str(current_user.get("_id", ""))
+    query = {"user_id": user_id}
     if search:
         query = {
-            "$or": [
-                {"title": {"$regex": search, "$options": "i"}},
-                {"content": {"$regex": search, "$options": "i"}},
-                {"tags.name": {"$regex": search, "$options": "i"}},
+            "$and": [
+                {"user_id": user_id},
+                {"$or": [
+                    {"title": {"$regex": search, "$options": "i"}},
+                    {"content": {"$regex": search, "$options": "i"}},
+                    {"tags.name": {"$regex": search, "$options": "i"}},
+                ]}
             ]
         }
     # Optimized query with field projection and pagination
@@ -128,6 +139,7 @@ async def get_notes(search: Optional[str] = Query(None)):
         "tags": 1, 
         "is_pinned": 1, 
         "linked_event_id": 1,
+        "user_id": 1,
         "created_at": 1, 
         "updated_at": 1
     }).sort(
@@ -137,15 +149,17 @@ async def get_notes(search: Optional[str] = Query(None)):
 
 
 @api_router.get("/notes/{note_id}", response_model=NoteResponse)
-async def get_note(note_id: str):
-    note = await db.notes.find_one({"id": note_id}, {"_id": 0})
+async def get_note(note_id: str, current_user: dict = Depends(get_current_user)):
+    user_id = current_user.get("id") or str(current_user.get("_id", ""))
+    note = await db.notes.find_one({"id": note_id, "user_id": user_id}, {"_id": 0})
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
     return NoteResponse(**note)
 
 
 @api_router.put("/notes/{note_id}", response_model=NoteResponse)
-async def update_note(note_id: str, update: NoteUpdate):
+async def update_note(note_id: str, update: NoteUpdate, current_user: dict = Depends(get_current_user)):
+    user_id = current_user.get("id") or str(current_user.get("_id", ""))
     updates = {}
     for k, v in update.model_dump(exclude_unset=True).items():
         if v is not None:
@@ -154,42 +168,45 @@ async def update_note(note_id: str, update: NoteUpdate):
             else:
                 updates[k] = v
     updates["updated_at"] = datetime.now(timezone.utc).isoformat()
-    result = await db.notes.update_one({"id": note_id}, {"$set": updates})
+    result = await db.notes.update_one({"id": note_id, "user_id": user_id}, {"$set": updates})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Note not found")
-    note = await db.notes.find_one({"id": note_id}, {"_id": 0})
+    note = await db.notes.find_one({"id": note_id, "user_id": user_id}, {"_id": 0})
     return NoteResponse(**note)
 
 
 @api_router.delete("/notes/{note_id}")
-async def delete_note(note_id: str):
-    result = await db.notes.delete_one({"id": note_id})
+async def delete_note(note_id: str, current_user: dict = Depends(get_current_user)):
+    user_id = current_user.get("id") or str(current_user.get("_id", ""))
+    result = await db.notes.delete_one({"id": note_id, "user_id": user_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Note not found")
     return {"message": "Note deleted"}
 
 
 @api_router.post("/notes/{note_id}/toggle-pin", response_model=NoteResponse)
-async def toggle_pin(note_id: str):
-    note = await db.notes.find_one({"id": note_id}, {"_id": 0})
+async def toggle_pin(note_id: str, current_user: dict = Depends(get_current_user)):
+    user_id = current_user.get("id") or str(current_user.get("_id", ""))
+    note = await db.notes.find_one({"id": note_id, "user_id": user_id}, {"_id": 0})
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
     new_pin = not note.get("is_pinned", False)
     await db.notes.update_one(
-        {"id": note_id},
+        {"id": note_id, "user_id": user_id},
         {"$set": {
             "is_pinned": new_pin,
             "updated_at": datetime.now(timezone.utc).isoformat()
         }}
     )
-    note = await db.notes.find_one({"id": note_id}, {"_id": 0})
+    note = await db.notes.find_one({"id": note_id, "user_id": user_id}, {"_id": 0})
     return NoteResponse(**note)
 
 
 # ---- Events Endpoints ----
 
 @api_router.post("/events", response_model=EventResponse)
-async def create_event(event: EventCreate):
+async def create_event(event: EventCreate, current_user: dict = Depends(get_current_user)):
+    user_id = current_user.get("id") or str(current_user.get("_id", ""))
     doc = {
         "id": str(uuid.uuid4()),
         "title": event.title,
@@ -199,6 +216,7 @@ async def create_event(event: EventCreate):
         "linked_note_ids": event.linked_note_ids,
         "reminder_minutes": event.reminder_minutes,
         "device_calendar_event_id": event.device_calendar_event_id,
+        "user_id": user_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.events.insert_one(doc)
@@ -210,15 +228,17 @@ async def create_event(event: EventCreate):
 async def get_events(
     month: Optional[int] = Query(None),
     year: Optional[int] = Query(None),
+    current_user: dict = Depends(get_current_user),
 ):
-    query = {}
+    user_id = current_user.get("id") or str(current_user.get("_id", ""))
+    query = {"user_id": user_id}
     if month is not None and year is not None:
         start = f"{year:04d}-{month:02d}-01"
         if month == 12:
             end = f"{year + 1:04d}-01-01"
         else:
             end = f"{year:04d}-{month + 1:02d}-01"
-        query = {"start_time": {"$gte": start, "$lt": end}}
+        query = {"user_id": user_id, "start_time": {"$gte": start, "$lt": end}}
     # Optimized query with field projection
     events = await db.events.find(query, {
         "_id": 0, 
@@ -230,35 +250,39 @@ async def get_events(
         "linked_note_ids": 1, 
         "reminder_minutes": 1, 
         "device_calendar_event_id": 1, 
+        "user_id": 1,
         "created_at": 1
     }).sort("start_time", 1).to_list(100)  # Reduced limit
     return [EventResponse(**e) for e in events]
 
 
 @api_router.get("/events/{event_id}", response_model=EventResponse)
-async def get_event(event_id: str):
-    event = await db.events.find_one({"id": event_id}, {"_id": 0})
+async def get_event(event_id: str, current_user: dict = Depends(get_current_user)):
+    user_id = current_user.get("id") or str(current_user.get("_id", ""))
+    event = await db.events.find_one({"id": event_id, "user_id": user_id}, {"_id": 0})
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
     return EventResponse(**event)
 
 
 @api_router.put("/events/{event_id}", response_model=EventResponse)
-async def update_event(event_id: str, update: EventUpdate):
+async def update_event(event_id: str, update: EventUpdate, current_user: dict = Depends(get_current_user)):
+    user_id = current_user.get("id") or str(current_user.get("_id", ""))
     updates = {}
     for k, v in update.model_dump(exclude_unset=True).items():
         if v is not None:
             updates[k] = v
-    result = await db.events.update_one({"id": event_id}, {"$set": updates})
+    result = await db.events.update_one({"id": event_id, "user_id": user_id}, {"$set": updates})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Event not found")
-    event = await db.events.find_one({"id": event_id}, {"_id": 0})
+    event = await db.events.find_one({"id": event_id, "user_id": user_id}, {"_id": 0})
     return EventResponse(**event)
 
 
 @api_router.delete("/events/{event_id}")
-async def delete_event(event_id: str):
-    result = await db.events.delete_one({"id": event_id})
+async def delete_event(event_id: str, current_user: dict = Depends(get_current_user)):
+    user_id = current_user.get("id") or str(current_user.get("_id", ""))
+    result = await db.events.delete_one({"id": event_id, "user_id": user_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Event not found")
     return {"message": "Event deleted"}
