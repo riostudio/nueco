@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+import re
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field
@@ -120,13 +121,14 @@ async def get_notes(search: Optional[str] = Query(None), current_user: dict = De
     user_id = current_user.get("id") or str(current_user.get("_id", ""))
     query = {"user_id": user_id}
     if search:
+        escaped_search = re.escape(search)
         query = {
             "$and": [
                 {"user_id": user_id},
                 {"$or": [
-                    {"title": {"$regex": search, "$options": "i"}},
-                    {"content": {"$regex": search, "$options": "i"}},
-                    {"tags.name": {"$regex": search, "$options": "i"}},
+                    {"title": {"$regex": escaped_search, "$options": "i"}},
+                    {"content": {"$regex": escaped_search, "$options": "i"}},
+                    {"tags.name": {"$regex": escaped_search, "$options": "i"}},
                 ]}
             ]
         }
