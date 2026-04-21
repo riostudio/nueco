@@ -416,7 +416,7 @@ class TextProcessRequest(BaseModel):
 async def process_text(request: TextProcessRequest):
     """Process text using AI - organize or summarize"""
     try:
-        from emergentintegrations.llm.openai import OpenAILLM
+        from emergentintegrations.llm.openai import LlmChat
         
         api_key = os.getenv("EMERGENT_LLM_KEY")
         if not api_key:
@@ -424,7 +424,7 @@ async def process_text(request: TextProcessRequest):
                 status_code=500, detail="AI service not configured"
             )
         
-        llm = OpenAILLM(api_key=api_key)
+        llm = LlmChat(api_key=api_key)
         
         if request.action == "organize":
             prompt = f"""Please organize and structure the following text to make it easier to read. 
