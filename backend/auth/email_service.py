@@ -1,20 +1,15 @@
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 import os
 import logging
+import requests
 from dotenv import load_dotenv
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-def get_smtp_config():
+def get_resend_config():
     return {
-        "host": os.getenv("SMTP_HOST", "smtp.resend.com"),
-        "port": int(os.getenv("SMTP_PORT", "587")),
-        "user": os.getenv("SMTP_USER", ""),
-        "password": os.getenv("SMTP_PASS", ""),
+        "api_key": os.getenv("SMTP_PASS", ""),  # Resend API key
         "from_email": os.getenv("SMTP_FROM", "noreply@memopad.app")
     }
 
@@ -25,28 +20,35 @@ def get_base_url():
     return base_url
 
 def send_email(to_email: str, subject: str, html_content: str) -> bool:
-    """Send email via SMTP"""
-    config = get_smtp_config()
+    """Send email via Resend API"""
+    config = get_resend_config()
     
-    if not config["user"] or not config["password"]:
-        logger.warning(f"SMTP not configured. Would send email to {to_email}: {subject}")
+    if not config["api_key"]:
+        logger.warning(f"Resend not configured. Would send email to {to_email}: {subject}")
         return True  # Return true in dev mode
     
     try:
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"] = f"MemoPad <{config['from_email']}>"
-        msg["To"] = to_email
+        response = requests.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {config['api_key']}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "from": f"MemoPad <{config['from_email']}>",
+                "to": [to_email],
+                "subject": subject,
+                "html": html_content
+            }
+        )
         
-        msg.attach(MIMEText(html_content, "html"))
-        
-        with smtplib.SMTP(config["host"], config["port"]) as server:
-            server.starttls()
-            server.login(config["user"], config["password"])
-            server.sendmail(config["from_email"], to_email, msg.as_string())
-        
-        logger.info(f"Email sent to {to_email}: {subject}")
-        return True
+        if response.status_code == 200:
+            result = response.json()
+            logger.info(f"Email sent to {to_email}: {subject} (id: {result.get('id', 'unknown')})")
+            return True
+        else:
+            logger.error(f"Failed to send email to {to_email}: {response.status_code} - {response.text}")
+            return False
     except Exception as e:
         logger.error(f"Failed to send email to {to_email}: {e}")
         return False
