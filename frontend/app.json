@@ -53,7 +53,8 @@
         {
           "calendarPermission": "Save events to your calendar"
         }
-      ]
+      ],
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true
