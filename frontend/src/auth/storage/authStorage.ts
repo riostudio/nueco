@@ -6,6 +6,8 @@ const KEYS = {
   ACCESS_TOKEN: 'access_token',
   REFRESH_TOKEN: 'refresh_token',
   USER: 'user_data',
+  MODAL_DISMISSED: 'signup_modal_dismissed',
+  FIRST_NOTE_SAVED: 'first_note_saved',
 };
 
 // Use SecureStore on native, AsyncStorage on web
@@ -76,6 +78,51 @@ export const authStorage = {
       await SecureStore.deleteItemAsync(KEYS.ACCESS_TOKEN);
       await SecureStore.deleteItemAsync(KEYS.REFRESH_TOKEN);
       await SecureStore.deleteItemAsync(KEYS.USER);
+    }
+  },
+
+  // Modal dismissed state (for signup prompts)
+  isModalDismissed: async (): Promise<boolean> => {
+    try {
+      if (isWeb) {
+        const value = await AsyncStorage.getItem(KEYS.MODAL_DISMISSED);
+        return value === 'true';
+      }
+      const value = await SecureStore.getItemAsync(KEYS.MODAL_DISMISSED);
+      return value === 'true';
+    } catch {
+      return false;
+    }
+  },
+
+  setModalDismissed: async (dismissed: boolean): Promise<void> => {
+    const value = dismissed ? 'true' : 'false';
+    if (isWeb) {
+      await AsyncStorage.setItem(KEYS.MODAL_DISMISSED, value);
+    } else {
+      await SecureStore.setItemAsync(KEYS.MODAL_DISMISSED, value);
+    }
+  },
+
+  // First note saved state (for signup prompts)
+  setFirstNoteSaved: async (): Promise<void> => {
+    if (isWeb) {
+      await AsyncStorage.setItem(KEYS.FIRST_NOTE_SAVED, 'true');
+    } else {
+      await SecureStore.setItemAsync(KEYS.FIRST_NOTE_SAVED, 'true');
+    }
+  },
+
+  isFirstNoteSaved: async (): Promise<boolean> => {
+    try {
+      if (isWeb) {
+        const value = await AsyncStorage.getItem(KEYS.FIRST_NOTE_SAVED);
+        return value === 'true';
+      }
+      const value = await SecureStore.getItemAsync(KEYS.FIRST_NOTE_SAVED);
+      return value === 'true';
+    } catch {
+      return false;
     }
   },
 };
