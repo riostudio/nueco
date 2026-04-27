@@ -90,6 +90,7 @@ export default function EditorScreen() {
   const tagsRef = useRef(tags);
   const isPinnedRef = useRef(isPinned);
   const linkedEventIdRef = useRef<string | null>(linkedEventId);
+  const imagesRef = useRef<string[]>(images);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   // State to track if note exists (for UI rendering like delete button)
@@ -100,6 +101,7 @@ export default function EditorScreen() {
   useEffect(() => { tagsRef.current = tags; }, [tags]);
   useEffect(() => { isPinnedRef.current = isPinned; }, [isPinned]);
   useEffect(() => { linkedEventIdRef.current = linkedEventId; }, [linkedEventId]);
+  useEffect(() => { imagesRef.current = images; }, [images]);
 
   useEffect(() => {
     if (!isNew && noteId) loadNote(noteId);
@@ -113,6 +115,7 @@ export default function EditorScreen() {
       setTags(note.tags);
       setIsPinned(note.is_pinned);
       setLinkedEventId(note.linked_event_id);
+      setImages(note.images || []);
       noteIdRef.current = note.id;
       isCreatedRef.current = true;
       setNoteExists(true);
@@ -222,6 +225,7 @@ export default function EditorScreen() {
             tags: tagsRef.current,
             is_pinned: isPinnedRef.current,
             linked_event_id: linkedEventIdRef.current,
+            images: imagesRef.current,
           }));
           noteIdRef.current = created.id;
           isCreatedRef.current = true;
@@ -233,6 +237,7 @@ export default function EditorScreen() {
             tags: tagsRef.current,
             is_pinned: isPinnedRef.current,
             linked_event_id: linkedEventIdRef.current,
+            images: imagesRef.current,
           }));
         }
         setSaveStatus('All changes saved');
@@ -250,13 +255,14 @@ export default function EditorScreen() {
   const handleBack = useCallback(async () => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     try {
-      if (!isCreatedRef.current && (titleRef.current || contentRef.current || linkedEventIdRef.current)) {
+      if (!isCreatedRef.current && (titleRef.current || contentRef.current || linkedEventIdRef.current || imagesRef.current.length > 0)) {
         await retryOperation(() => notesApi.create({
           title: titleRef.current,
           content: contentRef.current,
           tags: tagsRef.current,
           is_pinned: isPinnedRef.current,
           linked_event_id: linkedEventIdRef.current,
+          images: imagesRef.current,
         }));
       } else if (isCreatedRef.current && noteIdRef.current) {
         await retryOperation(() => notesApi.update(noteIdRef.current, {
@@ -265,6 +271,7 @@ export default function EditorScreen() {
           tags: tagsRef.current,
           is_pinned: isPinnedRef.current,
           linked_event_id: linkedEventIdRef.current,
+          images: imagesRef.current,
         }));
       }
     } catch (e) {
@@ -599,9 +606,13 @@ export default function EditorScreen() {
     });
 
     if (!result.canceled && result.assets[0]) {
-      const imageUri = result.assets[0].uri;
-      setImages(prev => [...prev, imageUri]);
-      triggerAutoSave();
+      // Store as base64 data URI for persistence
+      const base64Data = result.assets[0].base64;
+      if (base64Data) {
+        const dataUri = `data:image/jpeg;base64,${base64Data}`;
+        setImages(prev => [...prev, dataUri]);
+        triggerAutoSave();
+      }
     }
   };
 
@@ -621,12 +632,18 @@ export default function EditorScreen() {
       quality: 0.7,
       allowsMultipleSelection: true,
       selectionLimit: 5,
+      base64: true,
     });
 
     if (!result.canceled && result.assets.length > 0) {
-      const newImages = result.assets.map(asset => asset.uri);
-      setImages(prev => [...prev, ...newImages]);
-      triggerAutoSave();
+      // Store as base64 data URIs for persistence
+      const newImages = result.assets
+        .filter(asset => asset.base64)
+        .map(asset => `data:image/jpeg;base64,${asset.base64}`);
+      if (newImages.length > 0) {
+        setImages(prev => [...prev, ...newImages]);
+        triggerAutoSave();
+      }
     }
   };
 

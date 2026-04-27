@@ -44,6 +44,7 @@ class NoteCreate(BaseModel):
     tags: List[Tag] = []
     is_pinned: bool = False
     linked_event_id: Optional[str] = None
+    images: List[str] = []  # Base64 encoded images
 
 class NoteUpdate(BaseModel):
     title: Optional[str] = None
@@ -51,6 +52,7 @@ class NoteUpdate(BaseModel):
     tags: Optional[List[Tag]] = None
     is_pinned: Optional[bool] = None
     linked_event_id: Optional[str] = None
+    images: Optional[List[str]] = None  # Base64 encoded images
 
 class NoteResponse(BaseModel):
     id: str
@@ -59,6 +61,7 @@ class NoteResponse(BaseModel):
     tags: List[Tag]
     is_pinned: bool
     linked_event_id: Optional[str] = None
+    images: List[str] = []  # Base64 encoded images
     user_id: Optional[str] = None
     created_at: str
     updated_at: str
@@ -107,6 +110,7 @@ async def create_note(note: NoteCreate, current_user: dict = Depends(get_current
         "tags": [t.model_dump() for t in note.tags],
         "is_pinned": note.is_pinned,
         "linked_event_id": note.linked_event_id,
+        "images": note.images,
         "user_id": user_id,
         "created_at": now,
         "updated_at": now,
@@ -141,6 +145,7 @@ async def get_notes(search: Optional[str] = Query(None), current_user: dict = De
         "tags": 1, 
         "is_pinned": 1, 
         "linked_event_id": 1,
+        "images": 1,
         "user_id": 1,
         "created_at": 1, 
         "updated_at": 1
