@@ -418,7 +418,7 @@ class TextProcessRequest(BaseModel):
 async def process_text(request: TextProcessRequest):
     """Process text using AI - organize or summarize"""
     try:
-        from emergentintegrations.llm.openai import LlmChat
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
         
         api_key = os.getenv("EMERGENT_LLM_KEY")
         if not api_key:
@@ -426,9 +426,8 @@ async def process_text(request: TextProcessRequest):
                 status_code=500, detail="AI service not configured"
             )
         
-        llm = LlmChat(api_key=api_key)
-        
         if request.action == "organize":
+            system_message = "You are a helpful assistant that organizes and structures text to make it easier to read."
             prompt = f"""Please organize and structure the following text to make it easier to read. 
 Add appropriate formatting like:
 - Clear paragraphs
@@ -443,6 +442,7 @@ Keep the original meaning intact. Here's the text:
 Return only the organized text, no explanations."""
         
         elif request.action == "summarize":
+            system_message = "You are a helpful assistant that summarizes text concisely while keeping key points."
             prompt = f"""Please summarize the following text concisely while keeping the key points.
 Make it clear and easy to read.
 
@@ -457,16 +457,18 @@ Return only the summary, no explanations."""
         
         logger.info(f"Processing text with action: {request.action}, text length: {len(request.text)}")
         
-        response = await llm.chat_completion(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant that processes text to make it clearer and more readable."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.3,
-        )
+        # Initialize LlmChat with required parameters
+        chat = LlmChat(
+            api_key=api_key,
+            session_id=f"process-text-{uuid.uuid4()}",
+            system_message=system_message
+        ).with_model("openai", "gpt-4o-mini")
         
-        processed_text = response.choices[0].message.content.strip()
+        # Create user message and send
+        user_message = UserMessage(text=prompt)
+        response = await chat.send_message(user_message)
+        
+        processed_text = response.strip()
         logger.info(f"Text processing successful, result length: {len(processed_text)}")
         
         return {"text": processed_text}
