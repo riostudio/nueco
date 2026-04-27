@@ -1,13 +1,24 @@
 import * as FileSystem from 'expo-file-system';
+import { authStorage } from './auth/storage/authStorage';
 
 const BASE_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
 
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const accessToken = await authStorage.getAccessToken();
+  if (accessToken) {
+    return { 'Authorization': `Bearer ${accessToken}` };
+  }
+  return {};
+}
+
 async function fetchApi(path: string, options?: RequestInit) {
   const url = `${BASE_URL}/api${path}`;
+  const authHeaders = await getAuthHeaders();
   const res = await fetch(url, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      ...authHeaders,
       ...(options?.headers || {}),
     },
   });
