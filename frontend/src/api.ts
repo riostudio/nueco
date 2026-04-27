@@ -68,12 +68,15 @@ export const transcribeApi = {
     console.log('BASE_URL:', BASE_URL);
 
     try {
-      // Read file as base64
+      // Read file as base64 - use string 'base64' directly to avoid undefined EncodingType issue
       const base64 = await FileSystem.readAsStringAsync(fileUri, {
-        encoding: FileSystem.EncodingType.Base64,
+        encoding: 'base64' as FileSystem.EncodingType,
       });
       
       console.log('File read successfully, base64 length:', base64.length);
+      
+      // Get auth headers for the request
+      const authHeaders = await getAuthHeaders();
       
       // Send base64 to backend for processing
       const uploadUrl = `${BASE_URL}/api/transcribe-base64`;
@@ -83,6 +86,7 @@ export const transcribeApi = {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...authHeaders,
         },
         body: JSON.stringify({
           audio_base64: base64,
