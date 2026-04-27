@@ -1,4 +1,4 @@
-import * as FileSystem from 'expo-file-system';
+import * as LegacyFileSystem from 'expo-file-system/legacy';
 import { authStorage } from './auth/storage/authStorage';
 
 const BASE_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
@@ -68,9 +68,9 @@ export const transcribeApi = {
     console.log('BASE_URL:', BASE_URL);
 
     try {
-      // Read file as base64 - use string 'base64' directly to avoid undefined EncodingType issue
-      const base64 = await FileSystem.readAsStringAsync(fileUri, {
-        encoding: 'base64' as FileSystem.EncodingType,
+      // Read file as base64 using legacy FileSystem API
+      const base64 = await LegacyFileSystem.readAsStringAsync(fileUri, {
+        encoding: LegacyFileSystem.EncodingType.Base64,
       });
       
       console.log('File read successfully, base64 length:', base64.length);
