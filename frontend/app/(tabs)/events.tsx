@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList,
   RefreshControl, ActivityIndicator, Alert, Animated,
@@ -123,6 +123,18 @@ export default function EventsScreen() {
   }, []);
 
   useFocusEffect(useCallback(() => { loadEvents(); }, [loadEvents]));
+
+  // Polling for sync across devices - check for updates every 30 seconds
+  useEffect(() => {
+    const pollInterval = setInterval(() => {
+      // Only poll if not currently refreshing and screen is focused
+      if (!refreshing && !loading) {
+        loadEvents();
+      }
+    }, 30000); // 30 seconds
+
+    return () => clearInterval(pollInterval);
+  }, [loadEvents, refreshing, loading]);
 
   const handleDeletePress = (eventId: string, eventTitle: string) => {
     setEventToDelete({ id: eventId, title: eventTitle || 'Untitled Event' });

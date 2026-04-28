@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ActivityIndicator,
 } from 'react-native';
@@ -45,6 +45,17 @@ export default function CalendarScreen() {
   }, [month, year]);
 
   useFocusEffect(useCallback(() => { loadEvents(); }, [loadEvents]));
+
+  // Polling for sync across devices - check for updates every 30 seconds
+  useEffect(() => {
+    const pollInterval = setInterval(() => {
+      if (!loading) {
+        loadEvents();
+      }
+    }, 30000); // 30 seconds
+
+    return () => clearInterval(pollInterval);
+  }, [loadEvents, loading]);
 
   const firstDay = new Date(year, month, 1).getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();

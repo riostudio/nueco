@@ -139,6 +139,18 @@ export default function NotesScreen() {
     }, [debouncedSearch, loadNotes])
   );
 
+  // Polling for sync across devices - check for updates every 30 seconds
+  useEffect(() => {
+    const pollInterval = setInterval(() => {
+      // Only poll if not currently refreshing and screen is focused
+      if (!refreshing && !loading) {
+        loadNotes(debouncedSearch || undefined);
+      }
+    }, 30000); // 30 seconds
+
+    return () => clearInterval(pollInterval);
+  }, [debouncedSearch, loadNotes, refreshing, loading]);
+
   const pinnedNotes = notes.filter((n) => n.is_pinned);
   const otherNotes = notes.filter((n) => !n.is_pinned);
 
