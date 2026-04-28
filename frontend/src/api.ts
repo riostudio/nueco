@@ -11,7 +11,43 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
   return {};
 }
 
-async function fetchApi(path: string, options?: RequestInit) {
+// Refresh the access token using the refresh token
+async function refreshAccessToken(): Promise<boolean> {
+  try {
+    const refreshToken = await authStorage.getRefreshToken();
+    if (!refreshToken) {
+      console.log('No refresh token available');
+      return false;
+    }
+
+    console.log('Attempting to refresh access token...');
+    const response = await fetch(`${BASE_URL}/api/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+
+    if (!response.ok) {
+      console.error('Token refresh failed:', response.status);
+      // Clear tokens if refresh fails - user needs to login again
+      await authStorage.clearAll();
+      return false;
+    }
+
+    const result = await response.json();
+    await authStorage.setAccessToken(result.access_token);
+    if (result.user) {
+      await authStorage.setUser(result.user);
+    }
+    console.log('Access token refreshed successfully');
+    return true;
+  } catch (error) {
+    console.error('Token refresh error:', error);
+    return false;
+  }
+}
+
+async function fetchApi(path: string, options?: RequestInit, retryCount: number = 0) {
   const url = `${BASE_URL}/api${path}`;
   const authHeaders = await getAuthHeaders();
   const res = await fetch(url, {
@@ -22,6 +58,19 @@ async function fetchApi(path: string, options?: RequestInit) {
       ...(options?.headers || {}),
     },
   });
+  
+  // Handle 401 Unauthorized - try to refresh token
+  if (res.status === 401 && retryCount < 1) {
+    console.log('Got 401, attempting token refresh...');
+    const refreshed = await refreshAccessToken();
+    if (refreshed) {
+      // Retry the request with the new token
+      return fetchApi(path, options, retryCount + 1);
+    }
+    // If refresh failed, throw error with helpful message
+    throw new Error('Session expired. Please log in again.');
+  }
+  
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`API Error ${res.status}: ${text}`);
