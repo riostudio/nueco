@@ -5,7 +5,7 @@ import { Platform, Dimensions } from 'react-native';
 
 // PostHog configuration
 const POSTHOG_API_KEY = process.env.EXPO_PUBLIC_POSTHOG_KEY || '';
-const POSTHOG_HOST = 'https://us.i.posthog.com';
+const POSTHOG_HOST = process.env.EXPO_PUBLIC_POSTHOG_HOST || 'https://us.i.posthog.com';
 
 // Initialize PostHog instance
 let posthogInstance: PostHog | null = null;

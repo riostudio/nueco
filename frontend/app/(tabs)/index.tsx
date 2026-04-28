@@ -9,6 +9,7 @@ import { useRouter, useFocusEffect } from 'expo-router';
 import { notesApi, eventsApi } from '../../src/api';
 import { Note, CalendarEvent } from '../../src/types';
 import { UserAvatar, useAuth } from '../../src/auth';
+import { trackNoteSearched, trackNoteDeleted } from '../../src/analytics';
 
 const C = {
   primary: '#D84315',
@@ -71,6 +72,10 @@ export default function NotesScreen() {
     if (searchTimer.current) clearTimeout(searchTimer.current);
     searchTimer.current = setTimeout(() => {
       setDebouncedSearch(search);
+      // Track search event when user performs a search
+      if (search.trim().length > 0) {
+        trackNoteSearched(search.length);
+      }
     }, 400);
     return () => { if (searchTimer.current) clearTimeout(searchTimer.current); };
   }, [search]);
@@ -173,6 +178,8 @@ export default function NotesScreen() {
     setDeleting(true);
     try {
       await notesApi.delete(noteToDelete.id);
+      // Track note deletion
+      trackNoteDeleted();
       loadNotes(debouncedSearch || undefined);
       setDeleteModalVisible(false);
       setNoteToDelete(null);

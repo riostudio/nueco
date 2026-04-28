@@ -17,6 +17,18 @@ import {
   useAuth,
   UserAvatar,
 } from '../src/auth';
+import {
+  trackNoteCreated,
+  trackNoteEdited,
+  trackNoteDeleted,
+  trackNoteEventScheduled,
+  trackNoteImageAttached,
+  trackNoteShared,
+  trackVoiceRecordingStarted,
+  trackVoiceRecordingCompleted,
+  trackVoiceRecordingCancelled,
+  trackVoiceTranscriptionInserted,
+} from '../src/analytics';
 
 const C = {
   primary: '#D84315',
@@ -54,6 +66,10 @@ export default function EditorScreen() {
   const [images, setImages] = useState<string[]>([]);
   const [showImagePicker, setShowImagePicker] = useState(false);
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  
+  // Recording duration tracking for analytics
+  const recordingStartTime = useRef<number | null>(null);
+  const lastRecordingDuration = useRef<number>(0);
 
   const [showTagPicker, setShowTagPicker] = useState(false);
   const [newTagName, setNewTagName] = useState('');
@@ -159,6 +175,10 @@ export default function EditorScreen() {
           if (pendingEventId) {
             // Clear it immediately
             await AsyncStorage.removeItem('pendingLinkedEventId');
+            // Track event scheduling if this is a new linked event
+            if (!linkedEventIdRef.current) {
+              trackNoteEventScheduled();
+            }
             // Set the linked event ID
             setLinkedEventId(pendingEventId);
             // Fetch the event details
@@ -175,6 +195,10 @@ export default function EditorScreen() {
           try {
             const note = await notesApi.get(noteIdRef.current);
             if (note.linked_event_id) {
+              // Track event scheduling if this is a new linked event
+              if (!linkedEventIdRef.current && note.linked_event_id) {
+                trackNoteEventScheduled();
+              }
               setLinkedEventId(note.linked_event_id);
               // Fetch the event details
               const event = await eventsApi.get(note.linked_event_id);
@@ -230,6 +254,12 @@ export default function EditorScreen() {
           noteIdRef.current = created.id;
           isCreatedRef.current = true;
           setNoteExists(true);
+          // Track note creation
+          trackNoteCreated({
+            has_scheduled_event: !!linkedEventIdRef.current,
+            has_image_attached: imagesRef.current.length > 0,
+            is_shared: false,
+          });
         } else if (noteIdRef.current) {
           await retryOperation(() => notesApi.update(noteIdRef.current, {
             title: titleRef.current,
@@ -239,6 +269,8 @@ export default function EditorScreen() {
             linked_event_id: linkedEventIdRef.current,
             images: imagesRef.current,
           }));
+          // Track note edit
+          trackNoteEdited();
         }
         setSaveStatus('All changes saved');
       } catch (e: any) {
@@ -494,9 +526,22 @@ export default function EditorScreen() {
       });
 
       if (result.action === Share.sharedAction) {
-        if (result.activityType) {
-          console.log('Shared via:', result.activityType);
+        // Track the share event
+        const shareMethod = result.activityType || 'other';
+        let method: 'link' | 'email' | 'message' | 'social' | 'other' = 'other';
+        
+        if (shareMethod.includes('mail') || shareMethod.includes('email')) {
+          method = 'email';
+        } else if (shareMethod.includes('message') || shareMethod.includes('sms') || shareMethod.includes('chat')) {
+          method = 'message';
+        } else if (shareMethod.includes('facebook') || shareMethod.includes('twitter') || shareMethod.includes('instagram') || shareMethod.includes('social')) {
+          method = 'social';
+        } else if (shareMethod.includes('link') || shareMethod.includes('copy')) {
+          method = 'link';
         }
+        
+        trackNoteShared(method);
+        console.log('Shared via:', result.activityType);
       }
     } catch (error) {
       console.error('Share error:', error);
@@ -521,6 +566,10 @@ export default function EditorScreen() {
       await audioRecorder.prepareToRecordAsync();
       audioRecorder.record();
       setIsRecording(true);
+      // Track recording start time for duration calculation
+      recordingStartTime.current = Date.now();
+      // Track voice recording started event
+      trackVoiceRecordingStarted();
     } catch (e) {
       console.error('Recording start failed:', e);
       Alert.alert('Error', 'Could not start recording.');
@@ -533,6 +582,16 @@ export default function EditorScreen() {
       await audioRecorder.stop();
       const uri = audioRecorder.uri;
       console.log('Recording stopped. URI:', uri);
+      
+      // Calculate recording duration
+      const recordingDuration = recordingStartTime.current 
+        ? Math.round((Date.now() - recordingStartTime.current) / 1000)
+        : 0;
+      recordingStartTime.current = null;
+      lastRecordingDuration.current = recordingDuration; // Store for transcription inserted tracking
+      
+      // Track voice recording completed
+      trackVoiceRecordingCompleted(recordingDuration);
       
       if (!uri) {
         console.error('No recording URI available');
@@ -560,10 +619,17 @@ export default function EditorScreen() {
   const handleAiProcess = async (action: 'organize' | 'summarize' | 'keep') => {
     setShowAiSuggestion(false);
     
+    // Helper function to track and insert transcription
+    const insertTranscription = (textToInsert: string) => {
+      const wordCount = textToInsert.split(/\s+/).filter(Boolean).length;
+      trackVoiceTranscriptionInserted(lastRecordingDuration.current, wordCount);
+    };
+    
     if (action === 'keep') {
       // Just add the transcribed text as-is
       const newContent = content + (content ? ' ' : '') + transcribedText;
       setContent(newContent);
+      insertTranscription(transcribedText);
       triggerAutoSave();
       return;
     }
@@ -573,6 +639,7 @@ export default function EditorScreen() {
       const result = await textProcessApi.processText(transcribedText, action);
       const newContent = content + (content ? '\n\n' : '') + result.text;
       setContent(newContent);
+      insertTranscription(result.text);
       triggerAutoSave();
     } catch (e) {
       console.error('Text processing failed:', e);
@@ -580,6 +647,7 @@ export default function EditorScreen() {
       // Fallback to original text
       const newContent = content + (content ? ' ' : '') + transcribedText;
       setContent(newContent);
+      insertTranscription(transcribedText);
       triggerAutoSave();
     } finally {
       setIsProcessingText(false);
@@ -610,7 +678,10 @@ export default function EditorScreen() {
       const base64Data = result.assets[0].base64;
       if (base64Data) {
         const dataUri = `data:image/jpeg;base64,${base64Data}`;
-        setImages(prev => [...prev, dataUri]);
+        const newImages = [...images, dataUri];
+        setImages(newImages);
+        // Track image attachment
+        trackNoteImageAttached(newImages.length);
         triggerAutoSave();
       }
     }
@@ -637,11 +708,14 @@ export default function EditorScreen() {
 
     if (!result.canceled && result.assets.length > 0) {
       // Store as base64 data URIs for persistence
-      const newImages = result.assets
+      const newImageUris = result.assets
         .filter(asset => asset.base64)
         .map(asset => `data:image/jpeg;base64,${asset.base64}`);
-      if (newImages.length > 0) {
-        setImages(prev => [...prev, ...newImages]);
+      if (newImageUris.length > 0) {
+        const newImages = [...images, ...newImageUris];
+        setImages(newImages);
+        // Track image attachment (total count after adding)
+        trackNoteImageAttached(newImages.length);
         triggerAutoSave();
       }
     }
@@ -756,6 +830,8 @@ export default function EditorScreen() {
             
             if (idToDelete) {
               await notesApi.delete(idToDelete);
+              // Track note deletion
+              trackNoteDeleted();
               console.log('Note deleted successfully');
             } else {
               console.log('No note ID to delete');
