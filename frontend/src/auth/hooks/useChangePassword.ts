@@ -1,6 +1,5 @@
 import { useState, useCallback } from 'react';
 import { authApi } from '../api/authApi';
-import { authStorage } from '../storage/authStorage';
 import { Result } from '../types/auth.types';
 
 export function useChangePassword() {
@@ -12,15 +11,10 @@ export function useChangePassword() {
   ): Promise<Result<string>> => {
     setIsLoading(true);
     try {
-      const deviceId = await authStorage.getDeviceId();
-      if (!deviceId) {
-        return { success: false, error: 'Device not registered', code: 0 };
-      }
-
       const response = await authApi.changePassword({
-        device_id: deviceId,
         current_password: currentPassword,
         new_password: newPassword,
+        confirm_password: newPassword,
       });
 
       return { success: true, data: response.message };
