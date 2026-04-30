@@ -114,21 +114,31 @@ export default function NotesScreen() {
       
       if (eventIds.length > 0) {
         const uniqueIds = [...new Set(eventIds)];
-        const eventsData: Record<string, CalendarEvent> = {};
         
-        // Fetch each event (in parallel)
-        await Promise.all(
-          uniqueIds.map(async (eventId) => {
-            try {
-              const event = await eventsApi.get(eventId);
-              eventsData[eventId] = event;
-            } catch (e) {
-              console.error('Failed to load event:', eventId, e);
-            }
-          })
-        );
-        
-        setEventsMap(eventsData);
+        // Use batch API to fetch all events in one request (fixes N+1 query)
+        try {
+          const events = await eventsApi.getBatch(uniqueIds);
+          const eventsData: Record<string, CalendarEvent> = {};
+          events.forEach((event: CalendarEvent) => {
+            eventsData[event.id] = event;
+          });
+          setEventsMap(eventsData);
+        } catch (e) {
+          console.error('Failed to batch load events:', e);
+          // Fallback to individual requests if batch fails
+          const eventsData: Record<string, CalendarEvent> = {};
+          await Promise.all(
+            uniqueIds.map(async (eventId) => {
+              try {
+                const event = await eventsApi.get(eventId);
+                eventsData[eventId] = event;
+              } catch (err) {
+                console.error('Failed to load event:', eventId, err);
+              }
+            })
+          );
+          setEventsMap(eventsData);
+        }
       }
     } catch (e) {
       console.error('Failed to load notes:', e);

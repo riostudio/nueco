@@ -1,9 +1,11 @@
 import os
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException, Header, Request
 from fastapi.responses import HTMLResponse
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from typing import Optional
 from dotenv import load_dotenv
+from collections import defaultdict
+import time
 
 from .service import AuthService
 from .schemas import (
@@ -15,6 +17,77 @@ from .schemas import (
 load_dotenv()
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+# ---- Rate Limiting for Auth ----
+class AuthRateLimiter:
+    def __init__(self):
+        self.login_attempts = defaultdict(list)
+        self.signup_attempts = defaultdict(list)
+        self.reset_attempts = defaultdict(list)
+    
+    def _cleanup_old_attempts(self, attempts_list: list, window_seconds: int) -> list:
+        now = time.time()
+        return [t for t in attempts_list if now - t < window_seconds]
+    
+    def check_login_limit(self, ip: str, email: str) -> bool:
+        """5 login attempts per email per minute, 10 per IP per minute"""
+        now = time.time()
+        
+        # Per email limit (5/min)
+        self.login_attempts[f"email:{email}"] = self._cleanup_old_attempts(
+            self.login_attempts[f"email:{email}"], 60
+        )
+        if len(self.login_attempts[f"email:{email}"]) >= 5:
+            return False
+        
+        # Per IP limit (10/min)
+        self.login_attempts[f"ip:{ip}"] = self._cleanup_old_attempts(
+            self.login_attempts[f"ip:{ip}"], 60
+        )
+        if len(self.login_attempts[f"ip:{ip}"]) >= 10:
+            return False
+        
+        self.login_attempts[f"email:{email}"].append(now)
+        self.login_attempts[f"ip:{ip}"].append(now)
+        return True
+    
+    def check_signup_limit(self, ip: str) -> bool:
+        """3 signups per IP per hour"""
+        now = time.time()
+        self.signup_attempts[ip] = self._cleanup_old_attempts(self.signup_attempts[ip], 3600)
+        if len(self.signup_attempts[ip]) >= 3:
+            return False
+        self.signup_attempts[ip].append(now)
+        return True
+    
+    def check_reset_limit(self, ip: str, email: str) -> bool:
+        """3 password resets per email per hour, 5 per IP per hour"""
+        now = time.time()
+        
+        self.reset_attempts[f"email:{email}"] = self._cleanup_old_attempts(
+            self.reset_attempts[f"email:{email}"], 3600
+        )
+        if len(self.reset_attempts[f"email:{email}"]) >= 3:
+            return False
+        
+        self.reset_attempts[f"ip:{ip}"] = self._cleanup_old_attempts(
+            self.reset_attempts[f"ip:{ip}"], 3600
+        )
+        if len(self.reset_attempts[f"ip:{ip}"]) >= 5:
+            return False
+        
+        self.reset_attempts[f"email:{email}"].append(now)
+        self.reset_attempts[f"ip:{ip}"].append(now)
+        return True
+
+auth_rate_limiter = AuthRateLimiter()
+
+def get_client_ip(request: Request) -> str:
+    """Get client IP from request, handling proxies"""
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
 
 # Dependency to get database
 async def get_db():
@@ -40,8 +113,13 @@ async def get_current_user(authorization: Optional[str] = Header(None), db: Asyn
     return user
 
 @router.post("/signup", response_model=MessageResponse)
-async def signup(request: SignUpRequest, db: AsyncIOMotorDatabase = Depends(get_db)):
+async def signup(request: SignUpRequest, req: Request, db: AsyncIOMotorDatabase = Depends(get_db)):
     """Create a new account"""
+    # Rate limiting
+    client_ip = get_client_ip(req)
+    if not auth_rate_limiter.check_signup_limit(client_ip):
+        raise HTTPException(status_code=429, detail="Too many signup attempts. Please try again later.")
+    
     if request.password != request.confirm_password:
         raise HTTPException(status_code=400, detail="Passwords do not match")
     
@@ -57,8 +135,13 @@ async def signup(request: SignUpRequest, db: AsyncIOMotorDatabase = Depends(get_
     return MessageResponse(message="Account created! Please check your email to verify your account.", success=True)
 
 @router.post("/login", response_model=AuthResponse)
-async def login(request: LoginRequest, db: AsyncIOMotorDatabase = Depends(get_db)):
+async def login(request: LoginRequest, req: Request, db: AsyncIOMotorDatabase = Depends(get_db)):
     """Log in to existing account"""
+    # Rate limiting
+    client_ip = get_client_ip(req)
+    if not auth_rate_limiter.check_login_limit(client_ip, request.email):
+        raise HTTPException(status_code=429, detail="Too many login attempts. Please try again later.")
+    
     service = AuthService(db)
     success, message, data = await service.login(
         request.email, 
@@ -151,8 +234,13 @@ async def resend_verification(request: ResendVerificationRequest, db: AsyncIOMot
     return MessageResponse(message=message, success=success)
 
 @router.post("/forgot-password", response_model=MessageResponse)
-async def forgot_password(request: ForgotPasswordRequest, db: AsyncIOMotorDatabase = Depends(get_db)):
+async def forgot_password(request: ForgotPasswordRequest, req: Request, db: AsyncIOMotorDatabase = Depends(get_db)):
     """Request password reset"""
+    # Rate limiting
+    client_ip = get_client_ip(req)
+    if not auth_rate_limiter.check_reset_limit(client_ip, request.email):
+        raise HTTPException(status_code=429, detail="Too many password reset attempts. Please try again later.")
+    
     service = AuthService(db)
     success, message = await service.forgot_password(request.email)
     return MessageResponse(message=message, success=success)

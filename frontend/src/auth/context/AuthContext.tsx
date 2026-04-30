@@ -40,8 +40,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const storedUser = await authStorage.getUser();
         if (storedUser) {
           setUser(storedUser as User);
-          // Try to refresh token in background
-          refreshAuth();
+          // Try to refresh token in background (with proper error handling)
+          refreshAuth().catch(err => {
+            console.warn('Background token refresh failed:', err);
+            // Don't clear user state - token might still be valid
+          });
         }
       } catch (error) {
         console.error('Auth init error:', error);

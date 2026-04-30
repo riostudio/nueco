@@ -16,6 +16,24 @@ export const colors = {
   overlay: 'rgba(0, 0, 0, 0.7)',
 };
 
+// Shorthand color constants for easier use in components
+export const C = {
+  primary: '#D84315',
+  primaryLight: '#FF7043',
+  bg: '#FDFBF7',
+  cardBg: '#FFFFFF',
+  textMain: '#121212',
+  textSec: '#37474F',
+  border: '#E0E0E0',
+  borderDark: '#121212',
+  success: '#4CAF50',
+  error: '#C62828',
+  warning: '#FF9800',
+  divider: '#F0F0F0',
+  icon: '#546E7A',
+  placeholder: '#9E9E9E',
+};
+
 export const typography = {
   h1: { fontSize: 34, lineHeight: 42, fontWeight: '700' as const },
   h2: { fontSize: 28, lineHeight: 36, fontWeight: '700' as const },

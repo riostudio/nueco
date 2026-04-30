@@ -104,6 +104,9 @@ export const eventsApi = {
     fetchApi(`/events/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   delete: (id: string) =>
     fetchApi(`/events/${id}`, { method: 'DELETE' }),
+  // Batch fetch to fix N+1 query issue
+  getBatch: (eventIds: string[]) =>
+    fetchApi('/events/batch', { method: 'POST', body: JSON.stringify({ event_ids: eventIds }) }),
 };
 
 export const transcribeApi = {
@@ -165,10 +168,14 @@ export const textProcessApi = {
   processText: async (text: string, action: 'organize' | 'summarize'): Promise<{ text: string }> => {
     console.log(`Processing text with action: ${action}, length: ${text.length}`);
     
+    // Get auth headers for the request
+    const authHeaders = await getAuthHeaders();
+    
     const response = await fetch(`${BASE_URL}/api/process-text`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...authHeaders,
       },
       body: JSON.stringify({ text, action }),
     });

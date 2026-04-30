@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { AuthProvider, useAuth } from '../src/auth';
 import { PostHogProvider } from '../src/analytics';
+import { ErrorBoundary } from '../src/components';
 
 // Inner component that has access to auth context for user ID
 function AppWithAnalytics() {
@@ -30,10 +31,12 @@ function AppWithAnalytics() {
 
 export default function RootLayout() {
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <AuthProvider>
-        <AppWithAnalytics />
-      </AuthProvider>
-    </GestureHandlerRootView>
+    <ErrorBoundary>
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <AuthProvider>
+          <AppWithAnalytics />
+        </AuthProvider>
+      </GestureHandlerRootView>
+    </ErrorBoundary>
   );
 }

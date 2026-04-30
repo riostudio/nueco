@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException, Query, Depends
+from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException, Query, Depends, Request
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -11,6 +11,8 @@ from typing import List, Optional
 import uuid
 from datetime import datetime, timezone
 import tempfile
+from collections import defaultdict
+import time
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -27,6 +29,31 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# ---- Rate Limiting ----
+class RateLimiter:
+    def __init__(self):
+        self.requests = defaultdict(list)
+    
+    def is_allowed(self, key: str, max_requests: int, window_seconds: int) -> bool:
+        now = time.time()
+        # Clean old requests
+        self.requests[key] = [t for t in self.requests[key] if now - t < window_seconds]
+        
+        if len(self.requests[key]) >= max_requests:
+            return False
+        
+        self.requests[key].append(now)
+        return True
+
+rate_limiter = RateLimiter()
+
+def get_client_ip(request: Request) -> str:
+    """Get client IP from request, handling proxies"""
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
 
 # Import get_current_user for authentication
 from auth.router import get_current_user
@@ -96,6 +123,25 @@ class EventResponse(BaseModel):
     user_id: Optional[str] = None
     created_at: str
 
+# Paginated response models
+class PaginatedNotesResponse(BaseModel):
+    notes: List[NoteResponse]
+    total: int
+    page: int
+    page_size: int
+    has_more: bool
+
+class PaginatedEventsResponse(BaseModel):
+    events: List[EventResponse]
+    total: int
+    page: int
+    page_size: int
+    has_more: bool
+
+# Batch request model for N+1 fix
+class BatchEventIds(BaseModel):
+    event_ids: List[str]
+
 
 # ---- Notes Endpoints ----
 
@@ -121,7 +167,12 @@ async def create_note(note: NoteCreate, current_user: dict = Depends(get_current
 
 
 @api_router.get("/notes", response_model=List[NoteResponse])
-async def get_notes(search: Optional[str] = Query(None), current_user: dict = Depends(get_current_user)):
+async def get_notes(
+    search: Optional[str] = Query(None),
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(50, ge=1, le=100, description="Items per page"),
+    current_user: dict = Depends(get_current_user)
+):
     user_id = current_user.get("id") or str(current_user.get("_id", ""))
     query = {"user_id": user_id}
     if search:
@@ -136,6 +187,10 @@ async def get_notes(search: Optional[str] = Query(None), current_user: dict = De
                 ]}
             ]
         }
+    
+    # Calculate skip for pagination
+    skip = (page - 1) * page_size
+    
     # Optimized query with field projection and pagination
     notes = await db.notes.find(query, {
         "_id": 0, 
@@ -151,7 +206,8 @@ async def get_notes(search: Optional[str] = Query(None), current_user: dict = De
         "updated_at": 1
     }).sort(
         [("is_pinned", -1), ("updated_at", -1)]
-    ).to_list(100)  # Reduced limit for better performance
+    ).skip(skip).limit(page_size).to_list(page_size)
+    
     return [NoteResponse(**n) for n in notes]
 
 
@@ -272,6 +328,29 @@ async def get_event(event_id: str, current_user: dict = Depends(get_current_user
     return EventResponse(**event)
 
 
+# Batch endpoint to fix N+1 query issue
+@api_router.post("/events/batch", response_model=List[EventResponse])
+async def get_events_batch(
+    batch_request: BatchEventIds,
+    current_user: dict = Depends(get_current_user)
+):
+    """Fetch multiple events by IDs in a single request (fixes N+1 query)"""
+    user_id = current_user.get("id") or str(current_user.get("_id", ""))
+    
+    if not batch_request.event_ids:
+        return []
+    
+    # Limit batch size to prevent abuse
+    event_ids = batch_request.event_ids[:50]
+    
+    events = await db.events.find(
+        {"id": {"$in": event_ids}, "user_id": user_id},
+        {"_id": 0}
+    ).to_list(50)
+    
+    return [EventResponse(**e) for e in events]
+
+
 @api_router.put("/events/{event_id}", response_model=EventResponse)
 async def update_event(event_id: str, update: EventUpdate, current_user: dict = Depends(get_current_user)):
     user_id = current_user.get("id") or str(current_user.get("_id", ""))
@@ -302,8 +381,8 @@ class TranscribeBase64Request(BaseModel):
     file_extension: str = "m4a"
 
 @api_router.post("/transcribe-base64")
-async def transcribe_audio_base64(request: TranscribeBase64Request):
-    """Transcribe audio from base64 encoded data"""
+async def transcribe_audio_base64(request: TranscribeBase64Request, current_user: dict = Depends(get_current_user)):
+    """Transcribe audio from base64 encoded data (requires authentication)"""
     try:
         import base64
         from emergentintegrations.llm.openai import OpenAISpeechToText
@@ -362,7 +441,8 @@ async def transcribe_audio_base64(request: TranscribeBase64Request):
         )
 
 @api_router.post("/transcribe")
-async def transcribe_audio(file: UploadFile = File(...)):
+async def transcribe_audio(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
+    """Transcribe uploaded audio file (requires authentication)"""
     try:
         logger.info(f"Received transcription request. Filename: {file.filename}, Content-Type: {file.content_type}")
         
@@ -420,8 +500,8 @@ class TextProcessRequest(BaseModel):
     action: str  # "organize" or "summarize"
 
 @api_router.post("/process-text")
-async def process_text(request: TextProcessRequest):
-    """Process text using AI - organize or summarize"""
+async def process_text(request: TextProcessRequest, current_user: dict = Depends(get_current_user)):
+    """Process text using AI - organize or summarize (requires authentication)"""
     try:
         from emergentintegrations.llm.chat import LlmChat, UserMessage
         
@@ -500,13 +580,48 @@ api_router.include_router(auth_router)
 
 app.include_router(api_router)
 
+# ---- CORS Configuration ----
+# For production, specify exact origins instead of ["*"]
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "").split(",") if os.getenv("ALLOWED_ORIGINS") else []
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=ALLOWED_ORIGINS if ALLOWED_ORIGINS and ALLOWED_ORIGINS[0] else ["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
 )
+
+
+# ---- Database Indexes ----
+@app.on_event("startup")
+async def create_indexes():
+    """Create database indexes for optimal query performance"""
+    try:
+        # Notes indexes
+        await db.notes.create_index([("user_id", 1), ("updated_at", -1)])
+        await db.notes.create_index([("user_id", 1), ("is_pinned", -1)])
+        await db.notes.create_index([("user_id", 1), ("id", 1)])
+        
+        # Events indexes
+        await db.events.create_index([("user_id", 1), ("start_time", 1)])
+        await db.events.create_index([("user_id", 1), ("id", 1)])
+        await db.events.create_index("id")
+        
+        # Users indexes
+        await db.users.create_index("email", unique=True, sparse=True)
+        await db.users.create_index("id", unique=True, sparse=True)
+        
+        # Sessions indexes with TTL
+        await db.sessions.create_index("expires_at", expireAfterSeconds=0)
+        await db.sessions.create_index("user_id")
+        
+        # Devices indexes
+        await db.devices.create_index("user_id")
+        
+        logger.info("Database indexes created successfully")
+    except Exception as e:
+        logger.warning(f"Could not create indexes (may already exist): {e}")
 
 
 @app.on_event("shutdown")
