@@ -9,9 +9,10 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { useAudioRecorder, AudioModule, RecordingPresets, setAudioModeAsync } from 'expo-audio';
 import * as ImagePicker from 'expo-image-picker';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { notesApi, eventsApi, transcribeApi, textProcessApi } from '../src/api';
 import { Tag, CalendarEvent } from '../src/types';
-import { TAG_COLORS } from '../src/theme';
+import { TAG_COLORS, C } from '../src/theme';
 import { 
   authStorage, 
   useAuth,
@@ -29,20 +30,6 @@ import {
   trackVoiceRecordingCancelled,
   trackVoiceTranscriptionInserted,
 } from '../src/analytics';
-
-const C = {
-  primary: '#D84315',
-  primaryFg: '#FFFFFF',
-  secondary: '#1565C0',
-  bg: '#FDFBF7',
-  surface: '#FFFFFF',
-  text: '#121212',
-  textSec: '#37474F',
-  border: '#121212',
-  borderSub: '#78909C',
-  success: '#2E7D32',
-  error: '#C62828',
-};
 
 export default function EditorScreen() {
   const router = useRouter();
@@ -170,7 +157,6 @@ export default function EditorScreen() {
       const refreshData = async () => {
         // Check for pending event ID from AsyncStorage (for new notes)
         try {
-          const AsyncStorage = require('@react-native-async-storage/async-storage').default;
           const pendingEventId = await AsyncStorage.getItem('pendingLinkedEventId');
           if (pendingEventId) {
             // Clear it immediately

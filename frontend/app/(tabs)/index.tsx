@@ -8,21 +8,12 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { notesApi, eventsApi } from '../../src/api';
 import { Note, CalendarEvent } from '../../src/types';
+import { C } from '../../src/theme';
 import { UserAvatar, useAuth } from '../../src/auth';
 import { trackNoteSearched, trackNoteDeleted } from '../../src/analytics';
 
-const C = {
-  primary: '#D84315',
-  primaryFg: '#FFFFFF',
-  bg: '#FDFBF7',
-  surface: '#FFFFFF',
-  surfaceHi: '#FFF8E1',
-  text: '#121212',
-  textSec: '#37474F',
-  border: '#121212',
-  borderSub: '#78909C',
-  error: '#C62828',
-};
+// Extend C with surfaceHi for this screen
+const Colors = { ...C, surfaceHi: '#FFF8E1' };
 
 function formatTime(dateStr: string): string {
   const d = new Date(dateStr);
@@ -491,7 +482,7 @@ const s = StyleSheet.create({
     backgroundColor: C.surface, borderRadius: 10, padding: 12,
     borderWidth: 2, borderColor: C.borderSub, marginBottom: 10,
   },
-  pinnedCard: { borderColor: C.primary, backgroundColor: C.surfaceHi },
+  pinnedCard: { borderColor: C.primary, backgroundColor: Colors.surfaceHi },
   cardHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
   cardActions: {
     flexDirection: 'row',
