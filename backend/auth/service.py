@@ -82,7 +82,18 @@ class AuthService:
         # Check if email already exists
         existing = await self.users.find_one({"email": email})
         if existing:
-            return False, "An account with this email already exists. Want to log in instead?", None
+            # If existing user is unverified and token expired, allow re-registration
+            if not existing.get("email_verified", False):
+                token_expiry = existing.get("verification_token_expiry")
+                if token_expiry and token_expiry < datetime.utcnow():
+                    # Token expired - delete the unverified account and allow re-registration
+                    await self.users.delete_one({"email": email})
+                    logger.info(f"Deleted expired unverified account: {email}")
+                else:
+                    # Token not expired - user can still verify or request new token
+                    return False, "An account with this email exists but is not verified. Check your email or request a new verification link.", {"needs_verification": True, "email": email}
+            else:
+                return False, "An account with this email already exists. Want to log in instead?", None
 
         # Create user
         user_id = str(uuid4())
@@ -107,6 +118,57 @@ class AuthService:
         
         logger.info(f"New user created: {email}")
         return True, "Account created successfully", {"user_id": user_id, "email": email, "name": name}
+
+    async def delete_unverified_account(self, email: str) -> Tuple[bool, str]:
+        """Delete an unverified account so user can start over. Returns (success, message)"""
+        email = email.lower()
+        
+        user = await self.users.find_one({"email": email})
+        if not user:
+            return False, "No account found with this email address."
+        
+        if user.get("email_verified", False):
+            return False, "This account is already verified. Please log in or use forgot password."
+        
+        # Delete the unverified account
+        await self.users.delete_one({"email": email})
+        logger.info(f"Deleted unverified account by user request: {email}")
+        
+        return True, "Unverified account deleted. You can now sign up again with this email."
+
+    async def resend_verification(self, email: str) -> Tuple[bool, str]:
+        """Resend verification email with new token. Returns (success, message)"""
+        email = email.lower()
+        
+        user = await self.users.find_one({"email": email})
+        if not user:
+            # Don't reveal if email exists for security
+            return True, "If an account exists with this email, a new verification link has been sent."
+        
+        if user.get("email_verified", False):
+            return False, "This account is already verified. Please log in."
+        
+        # Generate new verification token
+        verification_token = secrets.token_urlsafe(32)
+        await self.users.update_one(
+            {"email": email},
+            {
+                "$set": {
+                    "verification_token": verification_token,
+                    "verification_token_expiry": datetime.utcnow() + timedelta(hours=24)
+                }
+            }
+        )
+        
+        # Send new verification email
+        try:
+            send_verification_email(email, user.get("name", "User"), verification_token)
+            logger.info(f"Resent verification email to: {email}")
+        except Exception as e:
+            logger.warning(f"Could not resend verification email to {email}: {e}")
+            return False, "Failed to send verification email. Please try again later."
+        
+        return True, "A new verification link has been sent to your email."
 
     async def login(
         self, 

@@ -34,6 +34,9 @@ class RefreshTokenRequest(BaseModel):
 class ResendVerificationRequest(BaseModel):
     email: EmailStr
 
+class DeleteUnverifiedRequest(BaseModel):
+    email: EmailStr
+
 # Response schemas
 class UserResponse(BaseModel):
     id: str

@@ -11,7 +11,7 @@ from .service import AuthService
 from .schemas import (
     SignUpRequest, LoginRequest, ForgotPasswordRequest, ResetPasswordRequest,
     ChangePasswordRequest, RefreshTokenRequest, ResendVerificationRequest,
-    AuthResponse, MessageResponse, UserResponse, SyncStatusResponse
+    DeleteUnverifiedRequest, AuthResponse, MessageResponse, UserResponse, SyncStatusResponse
 )
 
 load_dotenv()
@@ -261,6 +261,31 @@ async def reset_password(request: ResetPasswordRequest, db: AsyncIOMotorDatabase
         raise HTTPException(status_code=400, detail=message)
     
     return MessageResponse(message=message, success=True)
+
+
+@router.post("/resend-verification", response_model=MessageResponse)
+async def resend_verification(request: ResendVerificationRequest, db: AsyncIOMotorDatabase = Depends(get_db)):
+    """Resend verification email with new token"""
+    service = AuthService(db)
+    success, message = await service.resend_verification(request.email)
+    
+    if not success:
+        raise HTTPException(status_code=400, detail=message)
+    
+    return MessageResponse(message=message, success=success)
+
+
+@router.post("/delete-unverified", response_model=MessageResponse)
+async def delete_unverified_account(request: DeleteUnverifiedRequest, db: AsyncIOMotorDatabase = Depends(get_db)):
+    """Delete an unverified account so the user can sign up again with the same email"""
+    service = AuthService(db)
+    success, message = await service.delete_unverified_account(request.email)
+    
+    if not success:
+        raise HTTPException(status_code=400, detail=message)
+    
+    return MessageResponse(message=message, success=success)
+
 
 @router.post("/change-password", response_model=MessageResponse)
 async def change_password(
