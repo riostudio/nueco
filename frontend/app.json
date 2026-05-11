@@ -1,15 +1,16 @@
 {
   "expo": {
-    "name": "frontend",
-    "slug": "frontend",
+    "name": "MemoPad",
+    "slug": "memopad",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "frontend",
+    "scheme": "memopad",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
+      "bundleIdentifier": "com.riostudio.memopad",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Record voice notes hands-free",
         "NSCalendarsUsageDescription": "Link notes to calendar events",
@@ -18,9 +19,10 @@
       }
     },
     "android": {
+      "package": "com.riostudio.memopad",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#000"
+        "backgroundColor": "#FDFBF7"
       },
       "edgeToEdgeEnabled": true,
       "permissions": [
@@ -44,7 +46,7 @@
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#000"
+          "backgroundColor": "#FDFBF7"
         }
       ],
       "expo-audio",
