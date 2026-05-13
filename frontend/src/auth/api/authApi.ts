@@ -2,8 +2,7 @@ import { Platform } from 'react-native';
 import * as Device from 'expo-device';
 import { User, AuthResponse, MessageResponse, SyncStatus, SignUpData, LoginData, ChangePasswordData } from '../types/auth.types';
 import { authStorage } from '../storage/authStorage';
-
-const BASE_URL = process.env.EXPO_PUBLIC_BACKEND_URL || '';
+import { BACKEND_API_BASE_URL } from '../../backendBaseUrl';
 
 class AuthApiService {
   private async getHeaders(includeAuth: boolean = false): Promise<Record<string, string>> {
@@ -29,7 +28,7 @@ class AuthApiService {
   }
 
   async signup(data: SignUpData): Promise<MessageResponse> {
-    const response = await fetch(`${BASE_URL}/api/auth/signup`, {
+    const response = await fetch(`${BACKEND_API_BASE_URL}/auth/signup`, {
       method: 'POST',
       headers: await this.getHeaders(),
       body: JSON.stringify(data),
@@ -46,7 +45,7 @@ class AuthApiService {
     const deviceInfo = this.getDeviceInfo();
     
     try {
-      const response = await fetch(`${BASE_URL}/api/auth/login`, {
+      const response = await fetch(`${BACKEND_API_BASE_URL}/auth/login`, {
         method: 'POST',
         headers: await this.getHeaders(),
         body: JSON.stringify({
@@ -92,7 +91,7 @@ class AuthApiService {
     try {
       const refreshToken = await authStorage.getRefreshToken();
       if (refreshToken) {
-        await fetch(`${BASE_URL}/api/auth/logout`, {
+        await fetch(`${BACKEND_API_BASE_URL}/auth/logout`, {
           method: 'POST',
           headers: await this.getHeaders(),
           body: JSON.stringify({ refresh_token: refreshToken }),
@@ -108,7 +107,7 @@ class AuthApiService {
     if (!refreshToken) return null;
 
     try {
-      const response = await fetch(`${BASE_URL}/api/auth/refresh`, {
+      const response = await fetch(`${BACKEND_API_BASE_URL}/auth/refresh`, {
         method: 'POST',
         headers: await this.getHeaders(),
         body: JSON.stringify({ refresh_token: refreshToken }),
@@ -130,7 +129,7 @@ class AuthApiService {
   }
 
   async getMe(): Promise<User> {
-    const response = await fetch(`${BASE_URL}/api/auth/me`, {
+    const response = await fetch(`${BACKEND_API_BASE_URL}/auth/me`, {
       headers: await this.getHeaders(true),
     });
 
@@ -142,7 +141,7 @@ class AuthApiService {
   }
 
   async forgotPassword(email: string): Promise<MessageResponse> {
-    const response = await fetch(`${BASE_URL}/api/auth/forgot-password`, {
+    const response = await fetch(`${BACKEND_API_BASE_URL}/auth/forgot-password`, {
       method: 'POST',
       headers: await this.getHeaders(),
       body: JSON.stringify({ email }),
@@ -152,7 +151,7 @@ class AuthApiService {
   }
 
   async resetPassword(token: string, newPassword: string, confirmPassword: string): Promise<MessageResponse> {
-    const response = await fetch(`${BASE_URL}/api/auth/reset-password`, {
+    const response = await fetch(`${BACKEND_API_BASE_URL}/auth/reset-password`, {
       method: 'POST',
       headers: await this.getHeaders(),
       body: JSON.stringify({
@@ -170,7 +169,7 @@ class AuthApiService {
   }
 
   async changePassword(data: ChangePasswordData): Promise<MessageResponse> {
-    const response = await fetch(`${BASE_URL}/api/auth/change-password`, {
+    const response = await fetch(`${BACKEND_API_BASE_URL}/auth/change-password`, {
       method: 'POST',
       headers: await this.getHeaders(true),
       body: JSON.stringify(data),
@@ -184,7 +183,7 @@ class AuthApiService {
   }
 
   async resendVerification(email: string): Promise<MessageResponse> {
-    const response = await fetch(`${BASE_URL}/api/auth/resend-verification`, {
+    const response = await fetch(`${BACKEND_API_BASE_URL}/auth/resend-verification`, {
       method: 'POST',
       headers: await this.getHeaders(),
       body: JSON.stringify({ email }),
@@ -194,7 +193,7 @@ class AuthApiService {
   }
 
   async getSyncStatus(): Promise<SyncStatus> {
-    const response = await fetch(`${BASE_URL}/api/auth/sync-status`, {
+    const response = await fetch(`${BACKEND_API_BASE_URL}/auth/sync-status`, {
       headers: await this.getHeaders(true),
     });
 

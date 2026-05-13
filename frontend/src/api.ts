@@ -1,7 +1,6 @@
 import * as LegacyFileSystem from 'expo-file-system/legacy';
 import { authStorage } from './auth/storage/authStorage';
-
-const BASE_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
+import { BACKEND_API_BASE_URL, BACKEND_BASE_URL } from './backendBaseUrl';
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const accessToken = await authStorage.getAccessToken();
@@ -21,7 +20,7 @@ async function refreshAccessToken(): Promise<boolean> {
     }
 
     console.log('Attempting to refresh access token...');
-    const response = await fetch(`${BASE_URL}/api/auth/refresh`, {
+    const response = await fetch(`${BACKEND_API_BASE_URL}/auth/refresh`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ refresh_token: refreshToken }),
@@ -48,7 +47,7 @@ async function refreshAccessToken(): Promise<boolean> {
 }
 
 async function fetchApi(path: string, options?: RequestInit, retryCount: number = 0) {
-  const url = `${BASE_URL}/api${path}`;
+  const url = `${BACKEND_API_BASE_URL}${path}`;
   const authHeaders = await getAuthHeaders();
   const res = await fetch(url, {
     ...options,
@@ -117,7 +116,7 @@ export const transcribeApi = {
     const extension = fileUri.split('.').pop()?.toLowerCase() || 'm4a';
     
     console.log('File extension:', extension);
-    console.log('BASE_URL:', BASE_URL);
+    console.log('BACKEND_BASE_URL:', BACKEND_BASE_URL);
 
     try {
       // Read file as base64 using legacy FileSystem API
@@ -131,7 +130,7 @@ export const transcribeApi = {
       const authHeaders = await getAuthHeaders();
       
       // Send base64 to backend for processing
-      const uploadUrl = `${BASE_URL}/api/transcribe-base64`;
+      const uploadUrl = `${BACKEND_API_BASE_URL}/transcribe-base64`;
       console.log('Uploading to:', uploadUrl);
       
       const response = await fetch(uploadUrl, {
@@ -171,7 +170,7 @@ export const textProcessApi = {
     // Get auth headers for the request
     const authHeaders = await getAuthHeaders();
     
-    const response = await fetch(`${BASE_URL}/api/process-text`, {
+    const response = await fetch(`${BACKEND_API_BASE_URL}/process-text`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
