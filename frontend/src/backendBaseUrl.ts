@@ -1,4 +1,4 @@
-const DEFAULT_BACKEND_ORIGIN = 'https://note-builder-10.preview.emergentagent.com';
+const DEFAULT_BACKEND_ORIGIN = 'https://web-production-a3258.up.railway.app';
 
 function trimTrailingSlash(url: string): string {
   return url.replace(/\/$/, '');
