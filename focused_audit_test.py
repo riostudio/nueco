@@ -9,7 +9,7 @@ import json
 import time
 
 # Backend URL from environment
-BACKEND_URL = "https://note-builder-10.preview.emergentagent.com/api"
+BACKEND_URL = "https://web-production-a3258.up.railway.app/api"
 
 class FocusedAuditTest:
     def __init__(self):

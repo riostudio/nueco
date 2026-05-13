@@ -10,7 +10,7 @@ import time
 from datetime import datetime
 
 # Use the production URL from frontend/.env
-BASE_URL = "https://note-builder-10.preview.emergentagent.com/api"
+BASE_URL = "https://web-production-a3258.up.railway.app/api"
 
 class DeleteNoteTester:
     def __init__(self):

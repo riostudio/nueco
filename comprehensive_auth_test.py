@@ -8,7 +8,7 @@ import json
 import time
 from datetime import datetime, timezone
 
-BASE_URL = "https://note-builder-10.preview.emergentagent.com/api"
+BASE_URL = "https://web-production-a3258.up.railway.app/api"
 
 def test_with_verified_user():
     """Create a user and test login functionality"""

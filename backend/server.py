@@ -583,6 +583,12 @@ app.add_middleware(
 async def create_indexes():
     """Create database indexes for optimal query performance"""
     try:
+        # Drop problematic indexes first
+        try:
+            await db.users.drop_index("email_1")
+        except:
+            pass
+
         # Notes indexes
         await db.notes.create_index([("user_id", 1), ("updated_at", -1)])
         await db.notes.create_index([("user_id", 1), ("is_pinned", -1)])
