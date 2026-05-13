@@ -5,6 +5,30 @@ import { authStorage } from '../storage/authStorage';
 import { BACKEND_API_BASE_URL } from '../../backendBaseUrl';
 
 class AuthApiService {
+  private async parseJsonResponse<T>(response: Response, context: string): Promise<T> {
+    const rawText = await response.text();
+
+    if (!rawText) {
+      console.error(`[${context}] Empty response body`, {
+        status: response.status,
+        contentType: response.headers.get('content-type'),
+      });
+      throw new Error('Server returned an empty response. Please try again.');
+    }
+
+    try {
+      return JSON.parse(rawText) as T;
+    } catch (parseError) {
+      console.error(`[${context}] Failed to parse JSON response`, {
+        status: response.status,
+        contentType: response.headers.get('content-type'),
+        bodyPreview: rawText.substring(0, 500),
+        parseError,
+      });
+      throw new Error('Server returned an invalid response. Please try again.');
+    }
+  }
+
   private async getHeaders(includeAuth: boolean = false): Promise<Record<string, string>> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -34,7 +58,7 @@ class AuthApiService {
       body: JSON.stringify(data),
     });
 
-    const result = await response.json();
+    const result = await this.parseJsonResponse<MessageResponse & { detail?: string }>(response, 'signup');
     if (!response.ok) {
       throw new Error(result.detail || 'Signup failed');
     }
@@ -55,15 +79,7 @@ class AuthApiService {
         }),
       });
 
-      // Check if response is JSON
-      const contentType = response.headers.get('content-type');
-      if (!contentType || !contentType.includes('application/json')) {
-        const text = await response.text();
-        console.error('Non-JSON response:', text.substring(0, 200));
-        throw new Error('Server returned an invalid response. Please try again.');
-      }
-
-      const result = await response.json();
+      const result = await this.parseJsonResponse<AuthResponse & { detail?: string }>(response, 'login');
       if (!response.ok) {
         throw new Error(result.detail || 'Login failed');
       }
@@ -78,10 +94,6 @@ class AuthApiService {
       // Handle network errors
       if (error.message === 'Network request failed') {
         throw new Error('Unable to connect to server. Please check your internet connection.');
-      }
-      // Handle JSON parse errors
-      if (error.message?.includes('JSON')) {
-        throw new Error('Server returned an invalid response. Please try again.');
       }
       throw error;
     }
