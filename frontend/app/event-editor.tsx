@@ -490,22 +490,23 @@ export default function EventEditorScreen() {
   };
 
   const handleDeletePress = () => {
-    if (!isEditing || !params.eventId) return;
+    if (!eventIdRef.current) return;
     setDeleteModalVisible(true);
   };
 
   const confirmDelete = async () => {
-    if (!params.eventId) return;
+    const idToDelete = params.eventId || eventIdRef.current;
+    if (!idToDelete) return;
     setDeleting(true);
     try {
-      await eventsApi.delete(params.eventId);
+      await eventsApi.delete(idToDelete);
       setDeleteModalVisible(false);
       router.back();
     } catch (e) {
       console.error('Delete failed:', e);
       setDeleting(false);
     }
-  };
+};
 
   const cancelDelete = () => {
     setDeleteModalVisible(false);
