@@ -315,7 +315,8 @@ export default function NotesScreen() {
           onLogout={() => setLogoutModalVisible(true)}
         />
       </View>
-
+      
+      <OfflineBanner online={online} isSyncing={isSyncing} pendingCount={pendingCount} />
       <View style={s.searchBox}>
         <MaterialIcons name="search" size={24} color={C.textSec} />
         <TextInput
