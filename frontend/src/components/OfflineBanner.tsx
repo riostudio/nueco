@@ -1,13 +1,12 @@
 /**
  * OfflineBanner.tsx
- * Shows a banner when the user is offline or syncing
- *
- * Usage:
- *   <OfflineBanner online={online} isSyncing={isSyncing} pendingCount={pendingCount} />
+ * - Shows blue "Syncing..." banner once when coming back online
+ * - Disappears as soon as sync is complete
+ * - No banner when offline
+ * - Silent during background syncs
  */
-
-import React, { useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, Animated } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { Text, StyleSheet, Animated } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 
 interface Props {
@@ -18,7 +17,30 @@ interface Props {
 
 export default function OfflineBanner({ online, isSyncing, pendingCount }: Props) {
   const translateY = useRef(new Animated.Value(-60)).current;
-  const visible = !online || isSyncing;
+  const [showSyncBanner, setShowSyncBanner] = useState(false);
+  const prevOnline = useRef(online);
+
+  // Detect coming back online — show banner
+  useEffect(() => {
+    if (!prevOnline.current && online) {
+      setShowSyncBanner(true);
+    }
+    prevOnline.current = online;
+  }, [online]);
+
+  // Hide banner as soon as sync completes
+  useEffect(() => {
+    if (showSyncBanner && !isSyncing) {
+      // Small delay so user sees "Synced!" briefly
+      const timer = setTimeout(() => setShowSyncBanner(false), 1500);
+      return () => clearTimeout(timer);
+    }
+  }, [showSyncBanner, isSyncing]);
+
+  const visible = showSyncBanner && online;
+  const message = isSyncing
+    ? `Syncing${pendingCount ? ` ${pendingCount} item${pendingCount > 1 ? 's' : ''}` : ''}...`
+    : '✓ Synced';
 
   useEffect(() => {
     Animated.spring(translateY, {
@@ -28,17 +50,11 @@ export default function OfflineBanner({ online, isSyncing, pendingCount }: Props
     }).start();
   }, [visible]);
 
-  if (!visible && !isSyncing) return null;
-
-  const bgColor = isSyncing ? '#1565C0' : '#C62828';
-  const icon = isSyncing ? 'sync' : 'wifi-off';
-  const message = isSyncing
-    ? `Syncing${pendingCount ? ` ${pendingCount} item${pendingCount > 1 ? 's' : ''}` : ''}...`
-    : `Offline${pendingCount ? ` · ${pendingCount} change${pendingCount > 1 ? 's' : ''} pending` : ' · Changes will sync when reconnected'}`;
+  if (!visible) return null;
 
   return (
-    <Animated.View style={[s.banner, { backgroundColor: bgColor, transform: [{ translateY }] }]}>
-      <MaterialIcons name={icon} size={16} color="#fff" />
+    <Animated.View style={[s.banner, { backgroundColor: isSyncing ? '#1565C0' : '#2E7D32', transform: [{ translateY }] }]}>
+      <MaterialIcons name={isSyncing ? 'sync' : 'check-circle'} size={16} color="#fff" />
       <Text style={s.text}>{message}</Text>
     </Animated.View>
   );
