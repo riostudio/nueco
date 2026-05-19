@@ -11,6 +11,9 @@ import { Note, CalendarEvent } from '../../src/types';
 import { C } from '../../src/theme';
 import { UserAvatar, useAuth } from '../../src/auth';
 import { trackNoteSearched, trackNoteDeleted } from '../../src/analytics';
+import { useOfflineNotes } from '../../src/useOfflineNotes';
+import OfflineBanner from '../../src/components/OfflineBanner';
+import { getSyncQueue } from '../../src/offlineSync';
 
 // Extend C with surfaceHi for this screen
 const Colors = { ...C, surfaceHi: '#FFF8E1' };
@@ -37,7 +40,8 @@ function stripMd(text: string): string {
 export default function NotesScreen() {
   const router = useRouter();
   const { user, logout } = useAuth();
-  const [notes, setNotes] = useState<Note[]>([]);
+  const { notes, online, isSyncing, syncAndReload, deleteNote } = useOfflineNotes();
+  const [pendingCount, setPendingCount] = useState(0);
   const [eventsMap, setEventsMap] = useState<Record<string, CalendarEvent>>({});
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -95,8 +99,10 @@ export default function NotesScreen() {
 
   const loadNotes = useCallback(async (query?: string) => {
     try {
-      const data = await notesApi.getAll(query || undefined);
-      setNotes(data);
+      await syncAndReload();
+      const queue = await getSyncQueue();
+      setPendingCount(queue.length);
+      const data = notes;
       
       // Fetch events for notes that have linked_event_id
       const eventIds = data
@@ -137,7 +143,7 @@ export default function NotesScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [notes, syncAndReload]);
 
   useFocusEffect(
     useCallback(() => {
@@ -178,7 +184,7 @@ export default function NotesScreen() {
     if (!noteToDelete) return;
     setDeleting(true);
     try {
-      await notesApi.delete(noteToDelete.id);
+      await deleteNote(noteToDelete.id);
       // Track note deletion
       trackNoteDeleted();
       loadNotes(debouncedSearch || undefined);

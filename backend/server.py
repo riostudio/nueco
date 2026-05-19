@@ -561,7 +561,9 @@ async def health_check():
 
 # Include auth router
 from auth.router import router as auth_router
+from auth.reset_password_page import router as reset_password_router
 api_router.include_router(auth_router)
+app.include_router(reset_password_router)
 
 app.include_router(api_router)
 

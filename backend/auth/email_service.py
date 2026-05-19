@@ -84,7 +84,7 @@ def send_verification_email(email: str, name: str, token: str) -> bool:
 def send_password_reset_email(email: str, name: str, token: str) -> bool:
     """Send password reset link"""
     base_url = get_base_url()
-    reset_url = f"{base_url}/reset-password?token={token}"
+    reset_url = f"https://web-production-a3258.up.railway.app/reset-password?token={token}"
     
     html = f"""
     <!DOCTYPE html>
