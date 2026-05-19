@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
-  FlatList, RefreshControl, ActivityIndicator, Alert, Modal, Platform,
+  FlatList, RefreshControl, ActivityIndicator, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -315,7 +315,7 @@ export default function NotesScreen() {
           onLogout={() => setLogoutModalVisible(true)}
         />
       </View>
-      
+
       <OfflineBanner online={online} isSyncing={isSyncing} pendingCount={pendingCount} />
       <View style={s.searchBox}>
         <MaterialIcons name="search" size={24} color={C.textSec} />
