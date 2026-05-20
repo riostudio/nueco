@@ -39,7 +39,7 @@ export default function OfflineBanner({ online, isSyncing, pendingCount }: Props
 
   const visible = showSyncBanner && online;
   const message = isSyncing
-    ? `🔄 Syncing${pendingCount ? ` ${pendingCount} item${pendingCount > 1 ? 's' : ''}` : ''}...`
+    ? `Syncing${pendingCount ? ` ${pendingCount} item${pendingCount > 1 ? 's' : ''}` : ''}...`
     : '✓ Synced';
 
   useEffect(() => {

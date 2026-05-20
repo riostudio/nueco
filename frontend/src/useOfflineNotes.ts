@@ -96,9 +96,9 @@ export function useOfflineNotes() {
     };
 
     // Always save locally first
-await upsertLocalNote(note);
+    await upsertLocalNote(note);
 
-const online = await checkOnline();
+    const online = await checkOnline();
     if (online) {
       // Try to sync immediately
       await enqueueOperation({
@@ -149,7 +149,11 @@ const online = await checkOnline();
 
     const online = await checkOnline();
     if (online) {
-      await processSyncQueue();
+      try {
+        await processSyncQueue();
+      } catch (e) {
+        // Sync failed but note is already saved locally
+      }
       await loadNotes();
     }
   }, [loadNotes]);
@@ -177,7 +181,11 @@ const online = await checkOnline();
 
       const online = await checkOnline();
       if (online) {
-        await processSyncQueue();
+        try {
+          await processSyncQueue();
+        } catch (e) {
+          // Sync failed but delete is queued locally
+        }
         await deleteLocalNote(id);
       }
     }
@@ -237,6 +245,7 @@ export function useOfflineEvents() {
       _isLocal: true,
     };
 
+    // Always save locally first
     await upsertLocalEvent(event);
     await loadEvents();
 
@@ -250,7 +259,11 @@ export function useOfflineEvents() {
 
     const online = await checkOnline();
     if (online) {
-      await processSyncQueue();
+      try {
+        await processSyncQueue();
+      } catch (e) {
+        // Sync failed but event is already saved locally
+      }
       await loadEvents();
     }
 
@@ -276,7 +289,11 @@ export function useOfflineEvents() {
 
     const online = await checkOnline();
     if (online) {
-      await processSyncQueue();
+      try {
+        await processSyncQueue();
+      } catch (e) {
+        // Sync failed but event is already saved locally
+      }
       await loadEvents();
     }
   }, [loadEvents]);
@@ -302,7 +319,11 @@ export function useOfflineEvents() {
 
       const online = await checkOnline();
       if (online) {
-        await processSyncQueue();
+        try {
+          await processSyncQueue();
+        } catch (e) {
+          // Sync failed but delete is queued locally
+        }
         await deleteLocalEvent(id);
       }
     }
