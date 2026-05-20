@@ -95,10 +95,10 @@ export function useOfflineNotes() {
       _isLocal: true,
     };
 
-    await upsertLocalNote(note);
-    await loadNotes();
+    // Always save locally first
+await upsertLocalNote(note);
 
-    const online = await checkOnline();
+const online = await checkOnline();
     if (online) {
       // Try to sync immediately
       await enqueueOperation({
@@ -108,7 +108,11 @@ export function useOfflineNotes() {
         payload: data,
         timestamp: now,
       });
-      await processSyncQueue();
+      try {
+        await processSyncQueue();
+      } catch (e) {
+        // Sync failed but note is already saved locally
+      }
       await loadNotes();
     } else {
       // Queue for later
@@ -119,6 +123,7 @@ export function useOfflineNotes() {
         payload: data,
         timestamp: now,
       });
+      await loadNotes();
     }
 
     return note;
