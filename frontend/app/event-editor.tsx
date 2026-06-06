@@ -2,7 +2,7 @@ import React, { useState, useEffect, createElement, useRef, useCallback } from '
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   ScrollView, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
-  Switch, Modal,
+  Switch, Modal, Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -433,14 +433,49 @@ export default function EventEditorScreen() {
       }
     }
 
-    // Navigate based on where user came from
-    if (params.noteId) {
-      // Came from note editor - go back to the note
-      router.back();
+   // Sync to calendar on first creation if toggle is on
+   // Sync to calendar if toggle is on
+if (addToDeviceCal && !isWeb && titleRef.current.trim()) {
+  if (isEditing && Platform.OS === 'android') {
+    // Ask user if they want to update Google Calendar
+    await new Promise<void>((resolve) => {
+      Alert.alert(
+        'Update Google Calendar?',
+        'Would you like to update this event in Google Calendar?',
+        [
+          { text: 'Skip', style: 'cancel', onPress: () => resolve() },
+          { text: 'Update', onPress: async () => {
+            await syncToGoogleCalendar();
+            resolve();
+          }},
+        ]
+      );
+    });
+  } else if (!isEditing) {
+    if (Platform.OS === 'android') {
+      await syncToGoogleCalendar();
     } else {
-      // Came from events list - go to events tab
-      router.replace('/(tabs)/events');
+      const st = new Date(dateRef.current);
+      st.setHours(startTimeRef.current.getHours(), startTimeRef.current.getMinutes(), 0, 0);
+      const et = new Date(dateRef.current);
+      et.setHours(endTimeRef.current.getHours(), endTimeRef.current.getMinutes(), 0, 0);
+      await writeToDeviceCalendar(
+        titleRef.current.trim(),
+        descriptionRef.current.trim(),
+        st,
+        et,
+        deviceCalendarEventIdRef.current
+      );
     }
+  }
+}
+
+  // Navigate based on where user came from
+  if (params.noteId) {
+    router.back();
+  } else {
+    router.replace('/(tabs)/events');
+  }
   }, [params.noteId, router]);
 
   // Trigger auto-save when fields change
@@ -499,6 +534,15 @@ export default function EventEditorScreen() {
     if (!idToDelete) return;
     setDeleting(true);
     try {
+      // Delete from device calendar first
+      if (ExpoCalendar && deviceCalendarEventIdRef.current && !isWeb) {
+        try {
+          await ExpoCalendar.deleteEventAsync(deviceCalendarEventIdRef.current);
+        } catch (e) {
+          // Calendar event may already be deleted
+          console.log('Could not delete from device calendar:', e);
+        }
+      }
       await eventsApi.delete(idToDelete);
       setDeleteModalVisible(false);
       router.back();
@@ -596,6 +640,33 @@ export default function EventEditorScreen() {
       console.error('Device calendar write error:', e);
       Alert.alert('Calendar Error', 'Could not sync event with device calendar.');
       return null;
+    }
+  };
+
+  const syncToGoogleCalendar = async () => {
+    try {
+      const formatGoogleDate = (d: Date) =>
+        d.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+  
+      const st = new Date(date);
+      st.setHours(startTime.getHours(), startTime.getMinutes(), 0, 0);
+      const et = new Date(date);
+      et.setHours(endTime.getHours(), endTime.getMinutes(), 0, 0);
+  
+      const url = `https://calendar.google.com/calendar/render?action=TEMPLATE` +
+        `&text=${encodeURIComponent(title)}` +
+        `&dates=${formatGoogleDate(st)}/${formatGoogleDate(et)}` +
+        `&details=${encodeURIComponent(description || '')}`;
+  
+      const supported = await Linking.canOpenURL(url);
+      if (supported) {
+        await Linking.openURL(url);
+      } else {
+        Alert.alert('Error', 'Could not open Google Calendar.');
+      }
+    } catch (e) {
+      console.error('Failed to open Google Calendar:', e);
+      Alert.alert('Calendar Error', 'Could not sync to Google Calendar. Please try again.');
     }
   };
 
@@ -982,7 +1053,9 @@ export default function EventEditorScreen() {
                     {Platform.OS === 'ios' ? 'Sync to Apple Calendar' : 'Sync to Google Calendar'}
                   </Text>
                   <Text style={s.calendarToggleSubtitle}>
-                    Auto-sync with your device calendar
+                  {Platform.OS === 'ios'
+  ? 'Syncs directly to your Apple Calendar'
+  : 'Opens Google Calendar to save event'}
                   </Text>
                 </View>
               </View>
