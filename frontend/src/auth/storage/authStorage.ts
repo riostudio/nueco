@@ -19,7 +19,13 @@ export const authStorage = {
     if (isWeb) {
       await AsyncStorage.setItem(KEYS.ACCESS_TOKEN, token);
     } else {
-      await SecureStore.setItemAsync(KEYS.ACCESS_TOKEN, token);
+      try {
+        await SecureStore.setItemAsync(KEYS.ACCESS_TOKEN, token);
+      } catch (e) {
+        console.error('SecureStore setAccessToken failed, falling back to AsyncStorage:', e);
+      }
+      // Always write to AsyncStorage as fallback
+      await AsyncStorage.setItem(KEYS.ACCESS_TOKEN, token);
     }
   },
 
@@ -27,7 +33,15 @@ export const authStorage = {
     if (isWeb) {
       return await AsyncStorage.getItem(KEYS.ACCESS_TOKEN);
     }
-    return await SecureStore.getItemAsync(KEYS.ACCESS_TOKEN);
+    try {
+      const token = await SecureStore.getItemAsync(KEYS.ACCESS_TOKEN);
+      if (token) return token;
+      // Fallback to AsyncStorage if SecureStore returns null
+      return await AsyncStorage.getItem(KEYS.ACCESS_TOKEN);
+    } catch (e) {
+      console.error('SecureStore getAccessToken failed, falling back to AsyncStorage:', e);
+      return await AsyncStorage.getItem(KEYS.ACCESS_TOKEN);
+    }
   },
 
   // Refresh token - stored securely
