@@ -373,6 +373,23 @@ export default function EventEditorScreen() {
               console.error('Failed to store pending event ID:', e);
             }
           }
+// Prompt to sync to Google Calendar after first save
+if (addToDeviceCal && !isWeb && Platform.OS === 'android') {
+  Alert.alert(
+    'Sync to Google Calendar?',
+    'Your event has been saved. Would you like to add it to Google Calendar?',
+    [
+      {
+        text: 'Add to Google Calendar',
+        onPress: () => syncToGoogleCalendar(),
+      },
+      {
+        text: 'Not Now',
+        style: 'cancel',
+      },
+    ]
+  );
+}
         } else if (eventIdRef.current) {
           await retryOperation(() => eventsApi.update(eventIdRef.current, eventData));
         }
@@ -645,28 +662,80 @@ if (addToDeviceCal && !isWeb && titleRef.current.trim()) {
 
   const syncToGoogleCalendar = async () => {
     try {
-      const formatGoogleDate = (d: Date) =>
-        d.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
+      const formatGoogleDate = (d: Date) => {
+        const pad = (n: number) => n.toString().padStart(2, '0');
+        return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}` +
+          `T${pad(d.getHours())}${pad(d.getMinutes())}00`;
+      };
   
-      const st = new Date(date);
-      st.setHours(startTime.getHours(), startTime.getMinutes(), 0, 0);
-      const et = new Date(date);
-      et.setHours(endTime.getHours(), endTime.getMinutes(), 0, 0);
+      const st = new Date(dateRef.current);
+      st.setHours(startTimeRef.current.getHours(), startTimeRef.current.getMinutes(), 0, 0);
+      const et = new Date(dateRef.current);
+      et.setHours(endTimeRef.current.getHours(), endTimeRef.current.getMinutes(), 0, 0);
   
-      const url = `https://calendar.google.com/calendar/render?action=TEMPLATE` +
-        `&text=${encodeURIComponent(title)}` +
-        `&dates=${formatGoogleDate(st)}/${formatGoogleDate(et)}` +
-        `&details=${encodeURIComponent(description || '')}`;
+      const dates = `${formatGoogleDate(st)}/${formatGoogleDate(et)}`;
+      const titleEncoded = encodeURIComponent(titleRef.current.trim());
+      const detailsEncoded = encodeURIComponent(descriptionRef.current.trim() || '');
   
-      const supported = await Linking.canOpenURL(url);
-      if (supported) {
-        await Linking.openURL(url);
+      // Web URL always prefills correctly
+      const webUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE` +
+        `&text=${titleEncoded}` +
+        `&dates=${dates}` +
+        `&details=${detailsEncoded}`;
+  
+      // Native app intent for Android — also prefills
+      const intentUrl = `intent://calendar.google.com/calendar/render?action=TEMPLATE` +
+        `&text=${titleEncoded}` +
+        `&dates=${dates}` +
+        `&details=${detailsEncoded}` +
+        `#Intent;scheme=https;package=com.google.android.calendar;end`;
+  
+      const nativeSupported = await Linking.canOpenURL(intentUrl);
+      if (nativeSupported) {
+        // Opens native Google Calendar app with prefilled details
+        await Linking.openURL(intentUrl);
       } else {
-        Alert.alert('Error', 'Could not open Google Calendar.');
+        // Google Calendar not installed
+        Alert.alert(
+          'Google Calendar Not Found',
+          'Would you like to install Google Calendar or open in browser?',
+          [
+            {
+              text: 'Install Google Calendar',
+              onPress: () => Linking.openURL('market://details?id=com.google.android.calendar'),
+            },
+            {
+              text: 'Open in Browser',
+              onPress: () => Linking.openURL(webUrl),
+            },
+            {
+              text: 'Cancel',
+              style: 'cancel',
+            },
+          ]
+        );
       }
     } catch (e) {
       console.error('Failed to open Google Calendar:', e);
-      Alert.alert('Calendar Error', 'Could not sync to Google Calendar. Please try again.');
+      // Fallback to web URL
+      try {
+        const formatGoogleDate = (d: Date) => {
+          const pad = (n: number) => n.toString().padStart(2, '0');
+          return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}` +
+            `T${pad(d.getHours())}${pad(d.getMinutes())}00`;
+        };
+        const st = new Date(dateRef.current);
+        st.setHours(startTimeRef.current.getHours(), startTimeRef.current.getMinutes(), 0, 0);
+        const et = new Date(dateRef.current);
+        et.setHours(endTimeRef.current.getHours(), endTimeRef.current.getMinutes(), 0, 0);
+        const webUrl = `https://calendar.google.com/calendar/render?action=TEMPLATE` +
+          `&text=${encodeURIComponent(titleRef.current.trim())}` +
+          `&dates=${formatGoogleDate(st)}/${formatGoogleDate(et)}` +
+          `&details=${encodeURIComponent(descriptionRef.current.trim() || '')}`;
+        await Linking.openURL(webUrl);
+      } catch (err) {
+        Alert.alert('Calendar Error', 'Could not sync to Google Calendar. Please try again.');
+      }
     }
   };
 
