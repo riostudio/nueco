@@ -58,6 +58,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (email: string, password: string) => {
     const result = await authApi.login(email, password);
+    // Token is now saved — sync notes immediately before navigating
+    try {
+      const { fullSync } = require('../offlineSync');
+      await fullSync();
+    } catch (e) {
+      console.warn('Post-login sync failed:', e);
+    }
     setUser(result.user);
   }, []);
 
