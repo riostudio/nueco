@@ -58,6 +58,16 @@ export default function NotesScreen() {
   const [logoutModalVisible, setLogoutModalVisible] = useState(false);
 
   const handleLogout = async () => {
+    const queue = await getSyncQueue();
+    if (!online && queue.length > 0) {
+      setLogoutModalVisible(false);
+      Alert.alert(
+        'Unsynced Notes',
+        `You have ${queue.length} note(s) that haven't synced yet. Please connect to the internet before logging out to avoid losing data.`,
+        [{ text: 'OK' }]
+      );
+      return;
+    }
     await logout();
     setLogoutModalVisible(false);
     router.replace('/welcome');
