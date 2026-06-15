@@ -5,7 +5,7 @@
  * Usage:
  *   const { notes, createNote, updateNote, deleteNote, isOnline, isSyncing } = useOfflineNotes();
  */
-
+import { authStorage } from './auth/storage/authStorage';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { AppState, AppStateStatus } from 'react-native';
 import uuid from 'react-native-uuid';
@@ -39,12 +39,18 @@ export function useOfflineNotes() {
   // Load notes from local storage
   const loadNotes = useCallback(async () => {
     const local = await getLocalNotes();
+    console.log('loadNotes — local count:', local.length);
     // Filter out pending deletes for display
     setNotes(local.filter(n => !n._pendingDelete));
   }, []);
 
   // Sync and reload
   const syncAndReload = useCallback(async () => {
+    const token = await authStorage.getAccessToken();
+    if (!token) {
+      await loadNotes();
+      return;
+    }
     const online = await checkOnline();
     setOnline(online);
     if (online) {

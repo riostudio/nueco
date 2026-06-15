@@ -29,12 +29,15 @@ async function refreshAccessToken(): Promise<boolean> {
     if (!response.ok) {
       console.error('Token refresh failed:', response.status);
       // Clear tokens if refresh fails - user needs to login again
-      await authStorage.clearAll();
+
       return false;
     }
 
     const result = await response.json();
     await authStorage.setAccessToken(result.access_token);
+    if (result.refresh_token) {
+      await authStorage.setRefreshToken(result.refresh_token);
+    }
     if (result.user) {
       await authStorage.setUser(result.user);
     }
