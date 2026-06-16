@@ -7,7 +7,7 @@ import requests
 import json
 import time
 
-BASE_URL = "https://note-builder-10.preview.emergentagent.com/api"
+BASE_URL = "https://web-production-a3258.up.railway.app/api"
 
 def test_auth_signup_detailed():
     """Test signup with detailed error checking"""

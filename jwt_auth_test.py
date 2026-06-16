@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timezone
 
 # Use the production URL from frontend/.env
-BASE_URL = "https://note-builder-10.preview.emergentagent.com/api"
+BASE_URL = "https://web-production-a3258.up.railway.app/api"
 
 class JWTAuthTester:
     def __init__(self):

@@ -1,8 +1,10 @@
+
 import os
 import secrets
 import bcrypt
 import jwt
 import logging
+import hashlib
 from datetime import datetime, timedelta
 from typing import Optional, Tuple
 from uuid import uuid4
@@ -22,7 +24,7 @@ JWT_SECRET = os.getenv("JWT_SECRET")
 if not JWT_SECRET:
     raise ValueError("JWT_SECRET environment variable is required but not set")
 JWT_ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 15
+ACCESS_TOKEN_EXPIRE_MINUTES = 1440
 REFRESH_TOKEN_EXPIRE_DAYS = 30
 MAX_FAILED_ATTEMPTS = 5
 LOCKOUT_DURATION_MINUTES = 30
@@ -54,10 +56,10 @@ class AuthService:
         return secrets.token_urlsafe(64)
 
     def _hash_token(self, token: str) -> str:
-        return bcrypt.hashpw(token.encode(), bcrypt.gensalt(rounds=10)).decode()
+        return hashlib.sha256(token.encode()).hexdigest()
 
     def _verify_token_hash(self, token: str, hashed: str) -> bool:
-        return bcrypt.checkpw(token.encode(), hashed.encode())
+        return hashlib.sha256(token.encode()).hexdigest() == hashed
 
     def _get_user_id(self, user: dict) -> str:
         """Get user ID with fallback to _id for legacy users"""
@@ -364,19 +366,11 @@ class AuthService:
         return True, "Password changed successfully"
 
     async def refresh_access_token(self, refresh_token: str) -> Tuple[bool, str, Optional[dict]]:
-        """Refresh access token. Returns (success, message, tokens)"""
-        # Find session with this refresh token
-        sessions = await self.sessions.find().to_list(length=1000)
-        
-        valid_session = None
-        for session in sessions:
-            if self._verify_token_hash(refresh_token, session["refresh_token"]):
-                valid_session = session
-                break
-        
+        token_hash = self._hash_token(refresh_token)
+        valid_session = await self.sessions.find_one({"refresh_token": token_hash})
+    
         if not valid_session:
             return False, "Invalid refresh token", None
-
         if valid_session["expires_at"] < datetime.utcnow():
             await self.sessions.delete_one({"id": valid_session["id"]})
             return False, "Session expired. Please log in again.", None
@@ -401,16 +395,13 @@ class AuthService:
         }
 
     async def logout(self, refresh_token: str) -> Tuple[bool, str]:
-        """Logout and invalidate session"""
-        sessions = await self.sessions.find().to_list(length=1000)
-        
-        for session in sessions:
-            if self._verify_token_hash(refresh_token, session["refresh_token"]):
-                await self.sessions.delete_one({"id": session["id"]})
-                logger.info(f"User logged out, session deleted")
-                return True, "Logged out successfully"
-        
-        return True, "Logged out"  # Still return success even if token not found
+        token_hash = self._hash_token(refresh_token)
+        session = await self.sessions.find_one({"refresh_token": token_hash})
+        if session:
+            await self.sessions.delete_one({"id": session["id"]})
+            logger.info("User logged out, session deleted")
+            return True, "Logged out successfully"
+        return True, "Logged out"
 
     async def get_user_by_id(self, user_id: str) -> Optional[dict]:
         """Get user by ID"""

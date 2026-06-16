@@ -10,7 +10,7 @@ import sys
 from datetime import datetime, timezone
 
 # Backend URL from environment configuration
-BACKEND_URL = "https://note-builder-10.preview.emergentagent.com/api"
+BACKEND_URL = "hhttps://web-production-a3258.up.railway.app/api"
 
 # Test credentials as specified in review request
 TEST_EMAIL = "riobudiman@gmail.com"

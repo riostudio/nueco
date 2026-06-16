@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
-  FlatList, RefreshControl, ActivityIndicator, Alert, Modal, Platform,
+  FlatList, RefreshControl, ActivityIndicator, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -11,6 +11,9 @@ import { Note, CalendarEvent } from '../../src/types';
 import { C } from '../../src/theme';
 import { UserAvatar, useAuth } from '../../src/auth';
 import { trackNoteSearched, trackNoteDeleted } from '../../src/analytics';
+import { useOfflineNotes } from '../../src/useOfflineNotes';
+import OfflineBanner from '../../src/components/OfflineBanner';
+import { getSyncQueue, getLocalNotes } from '../../src/offlineSync';
 
 // Extend C with surfaceHi for this screen
 const Colors = { ...C, surfaceHi: '#FFF8E1' };
@@ -36,8 +39,9 @@ function stripMd(text: string): string {
 
 export default function NotesScreen() {
   const router = useRouter();
-  const { user, logout } = useAuth();
-  const [notes, setNotes] = useState<Note[]>([]);
+  const { user, logout, isSyncReady } = useAuth();
+  const { notes, online, isSyncing, syncAndReload, deleteNote } = useOfflineNotes();
+  const [pendingCount, setPendingCount] = useState(0);
   const [eventsMap, setEventsMap] = useState<Record<string, CalendarEvent>>({});
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -54,6 +58,16 @@ export default function NotesScreen() {
   const [logoutModalVisible, setLogoutModalVisible] = useState(false);
 
   const handleLogout = async () => {
+    const queue = await getSyncQueue();
+    if (!online && queue.length > 0) {
+      setLogoutModalVisible(false);
+      Alert.alert(
+        'Unsynced Notes',
+        `You have ${queue.length} note(s) that haven't synced yet. Please connect to the internet before logging out to avoid losing data.`,
+        [{ text: 'OK' }]
+      );
+      return;
+    }
     await logout();
     setLogoutModalVisible(false);
     router.replace('/welcome');
@@ -95,13 +109,17 @@ export default function NotesScreen() {
 
   const loadNotes = useCallback(async (query?: string) => {
     try {
-      const data = await notesApi.getAll(query || undefined);
-      setNotes(data);
+      await syncAndReload();
+      const queue = await getSyncQueue();
+      setPendingCount(queue.length);
       
-      // Fetch events for notes that have linked_event_id
-      const eventIds = data
-        .filter((n: Note) => n.linked_event_id)
-        .map((n: Note) => n.linked_event_id as string);
+      // Fetch events for notes that have linked_event_id.
+      // Read fresh notes from AsyncStorage — the `notes` closure is stale here
+      // because setNotes() was called asynchronously inside syncAndReload().
+      const freshNotes = await getLocalNotes();
+      const eventIds = freshNotes
+        .filter((n) => n.linked_event_id)
+        .map((n) => n.linked_event_id as string);
       
       if (eventIds.length > 0) {
         const uniqueIds = [...new Set(eventIds)];
@@ -137,7 +155,14 @@ export default function NotesScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [syncAndReload]);
+
+  // Re-load notes when post-login sync completes
+  useEffect(() => {
+    if (isSyncReady) {
+      loadNotes(debouncedSearch || undefined);
+    }
+  }, [isSyncReady]);
 
   useFocusEffect(
     useCallback(() => {
@@ -157,8 +182,14 @@ export default function NotesScreen() {
     return () => clearInterval(pollInterval);
   }, [debouncedSearch, loadNotes, refreshing, loading]);
 
-  const pinnedNotes = notes.filter((n) => n.is_pinned);
-  const otherNotes = notes.filter((n) => !n.is_pinned);
+  const filteredNotes = debouncedSearch
+    ? notes.filter((n) =>
+        n.title?.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
+        n.content?.toLowerCase().includes(debouncedSearch.toLowerCase())
+      )
+    : notes;
+  const pinnedNotes = filteredNotes.filter((n) => n.is_pinned);
+  const otherNotes = filteredNotes.filter((n) => !n.is_pinned);
 
   const handleTogglePin = async (noteId: string) => {
     try {
@@ -178,7 +209,7 @@ export default function NotesScreen() {
     if (!noteToDelete) return;
     setDeleting(true);
     try {
-      await notesApi.delete(noteToDelete.id);
+      await deleteNote(noteToDelete.id);
       // Track note deletion
       trackNoteDeleted();
       loadNotes(debouncedSearch || undefined);
@@ -310,6 +341,7 @@ export default function NotesScreen() {
         />
       </View>
 
+      <OfflineBanner online={online} isSyncing={isSyncing} pendingCount={pendingCount} />
       <View style={s.searchBox}>
         <MaterialIcons name="search" size={24} color={C.textSec} />
         <TextInput
@@ -331,7 +363,7 @@ export default function NotesScreen() {
       <FlatList
         style={s.scroll}
         contentContainerStyle={s.scrollContent}
-        data={notes}
+        data={filteredNotes}
         keyExtractor={(item) => item.id}
         refreshControl={
           <RefreshControl

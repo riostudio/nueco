@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 import tempfile
 from collections import defaultdict
 import time
+from openai import AsyncOpenAI
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -47,6 +48,14 @@ class RateLimiter:
         return True
 
 rate_limiter = RateLimiter()
+
+
+def get_openai_client() -> AsyncOpenAI:
+    """Create an OpenAI client from environment configuration."""
+    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("EMERGENT_LLM_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="OpenAI API key not configured")
+    return AsyncOpenAI(api_key=api_key)
 
 def get_client_ip(request: Request) -> str:
     """Get client IP from request, handling proxies"""
@@ -174,6 +183,9 @@ async def get_notes(
     current_user: dict = Depends(get_current_user)
 ):
     user_id = current_user.get("id") or str(current_user.get("_id", ""))
+    logger.info(f"get_notes called for user_id: {user_id}")
+    count_check = await db.notes.count_documents({"user_id": user_id})
+    logger.info(f"Total notes found for user: {count_check}")
     query = {"user_id": user_id}
     if search:
         escaped_search = re.escape(search)
@@ -385,17 +397,9 @@ async def transcribe_audio_base64(request: TranscribeBase64Request, current_user
     """Transcribe audio from base64 encoded data (requires authentication)"""
     try:
         import base64
-        from emergentintegrations.llm.openai import OpenAISpeechToText
 
         logger.info(f"Received base64 transcription request. Extension: {request.file_extension}, Base64 length: {len(request.audio_base64)}")
-        
-        api_key = os.getenv("EMERGENT_LLM_KEY")
-        if not api_key:
-            raise HTTPException(
-                status_code=500, detail="Transcription service not configured"
-            )
-
-        stt = OpenAISpeechToText(api_key=api_key)
+        client = get_openai_client()
         
         # Decode base64 to bytes
         try:
@@ -422,14 +426,14 @@ async def transcribe_audio_base64(request: TranscribeBase64Request, current_user
 
         try:
             with open(tmp_path, "rb") as audio_file:
-                response = await stt.transcribe(
-                    file=audio_file,
+                response = await client.audio.transcriptions.create(
                     model="whisper-1",
-                    response_format="json",
-                    language="en",
+                    file=audio_file,
+                    # language removed - Whisper auto-detects
                 )
-            logger.info(f"Transcription successful: {response.text[:100] if response.text else 'empty'}...")
-            return {"text": response.text}
+            transcription_text = response.text or ""
+            logger.info(f"Transcription successful: {transcription_text[:100] if transcription_text else 'empty'}...")
+            return {"text": transcription_text}
         finally:
             os.unlink(tmp_path)
     except HTTPException:
@@ -445,16 +449,7 @@ async def transcribe_audio(file: UploadFile = File(...), current_user: dict = De
     """Transcribe uploaded audio file (requires authentication)"""
     try:
         logger.info(f"Received transcription request. Filename: {file.filename}, Content-Type: {file.content_type}")
-        
-        from emergentintegrations.llm.openai import OpenAISpeechToText
-
-        api_key = os.getenv("EMERGENT_LLM_KEY")
-        if not api_key:
-            raise HTTPException(
-                status_code=500, detail="Transcription service not configured"
-            )
-
-        stt = OpenAISpeechToText(api_key=api_key)
+        client = get_openai_client()
         
         # Get extension from filename or default to m4a
         original_filename = file.filename or "recording.m4a"
@@ -474,14 +469,14 @@ async def transcribe_audio(file: UploadFile = File(...), current_user: dict = De
 
         try:
             with open(tmp_path, "rb") as audio_file:
-                response = await stt.transcribe(
-                    file=audio_file,
+                response = await client.audio.transcriptions.create(
                     model="whisper-1",
-                    response_format="json",
-                    language="en",
+                    file=audio_file,
+                    # language removed - Whisper auto-detects
                 )
-            logger.info(f"Transcription successful: {response.text[:100]}...")
-            return {"text": response.text}
+            transcription_text = response.text or ""
+            logger.info(f"Transcription successful: {transcription_text[:100]}...")
+            return {"text": transcription_text}
         finally:
             os.unlink(tmp_path)
     except HTTPException:
@@ -503,13 +498,7 @@ class TextProcessRequest(BaseModel):
 async def process_text(request: TextProcessRequest, current_user: dict = Depends(get_current_user)):
     """Process text using AI - organize or summarize (requires authentication)"""
     try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        
-        api_key = os.getenv("EMERGENT_LLM_KEY")
-        if not api_key:
-            raise HTTPException(
-                status_code=500, detail="AI service not configured"
-            )
+        client = get_openai_client()
         
         if request.action == "organize":
             system_message = "You are a helpful assistant that organizes and structures text to make it easier to read."
@@ -541,19 +530,18 @@ Return only the summary, no explanations."""
             raise HTTPException(status_code=400, detail="Invalid action. Use 'organize' or 'summarize'")
         
         logger.info(f"Processing text with action: {request.action}, text length: {len(request.text)}")
-        
-        # Initialize LlmChat with required parameters
-        chat = LlmChat(
-            api_key=api_key,
-            session_id=f"process-text-{uuid.uuid4()}",
-            system_message=system_message
-        ).with_model("openai", "gpt-4o-mini")
-        
-        # Create user message and send
-        user_message = UserMessage(text=prompt)
-        response = await chat.send_message(user_message)
-        
-        processed_text = response.strip()
+
+        response = await client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.2,
+        )
+        processed_text = (response.choices[0].message.content or "").strip()
+        if not processed_text:
+            raise HTTPException(status_code=500, detail="AI service returned an empty response")
         logger.info(f"Text processing successful, result length: {len(processed_text)}")
         
         return {"text": processed_text}
@@ -576,7 +564,9 @@ async def health_check():
 
 # Include auth router
 from auth.router import router as auth_router
+from auth.reset_password_page import router as reset_password_router
 api_router.include_router(auth_router)
+app.include_router(reset_password_router)
 
 app.include_router(api_router)
 
@@ -598,6 +588,12 @@ app.add_middleware(
 async def create_indexes():
     """Create database indexes for optimal query performance"""
     try:
+        # Drop problematic indexes first
+        try:
+            await db.users.drop_index("email_1")
+        except:
+            pass
+
         # Notes indexes
         await db.notes.create_index([("user_id", 1), ("updated_at", -1)])
         await db.notes.create_index([("user_id", 1), ("is_pinned", -1)])
