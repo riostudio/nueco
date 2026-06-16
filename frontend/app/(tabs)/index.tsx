@@ -12,7 +12,6 @@ import { C } from '../../src/theme';
 import { UserAvatar, useAuth } from '../../src/auth';
 import { trackNoteSearched, trackNoteDeleted } from '../../src/analytics';
 import { useOfflineNotes } from '../../src/useOfflineNotes';
-import { useAuth } from '../../src/auth';
 import OfflineBanner from '../../src/components/OfflineBanner';
 import { getSyncQueue } from '../../src/offlineSync';
 
@@ -40,9 +39,8 @@ function stripMd(text: string): string {
 
 export default function NotesScreen() {
   const router = useRouter();
-  const { user, logout } = useAuth();
+  const { user, logout, isSyncReady } = useAuth();
   const { notes, online, isSyncing, syncAndReload, deleteNote } = useOfflineNotes();
-  const { isSyncReady } = useAuth();
   const [pendingCount, setPendingCount] = useState(0);
   const [eventsMap, setEventsMap] = useState<Record<string, CalendarEvent>>({});
   const [search, setSearch] = useState('');
