@@ -12,6 +12,7 @@ import { C } from '../../src/theme';
 import { UserAvatar, useAuth } from '../../src/auth';
 import { trackNoteSearched, trackNoteDeleted } from '../../src/analytics';
 import { useOfflineNotes } from '../../src/useOfflineNotes';
+import { useAuth } from '../../src/auth';
 import OfflineBanner from '../../src/components/OfflineBanner';
 import { getSyncQueue } from '../../src/offlineSync';
 
@@ -41,6 +42,7 @@ export default function NotesScreen() {
   const router = useRouter();
   const { user, logout } = useAuth();
   const { notes, online, isSyncing, syncAndReload, deleteNote } = useOfflineNotes();
+  const { isSyncReady } = useAuth();
   const [pendingCount, setPendingCount] = useState(0);
   const [eventsMap, setEventsMap] = useState<Record<string, CalendarEvent>>({});
   const [search, setSearch] = useState('');
@@ -153,6 +155,13 @@ export default function NotesScreen() {
       setRefreshing(false);
     }
   }, [syncAndReload]);
+
+  // Re-load notes when post-login sync completes
+  useEffect(() => {
+    if (isSyncReady) {
+      loadNotes(debouncedSearch || undefined);
+    }
+  }, [isSyncReady]);
 
   useFocusEffect(
     useCallback(() => {

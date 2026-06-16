@@ -8,6 +8,7 @@
 import { authStorage } from './auth/storage/authStorage';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { AppState, AppStateStatus } from 'react-native';
+import { useAuth } from './auth/context/AuthContext';
 import uuid from 'react-native-uuid';
 import {
   getLocalNotes,
@@ -35,6 +36,7 @@ export function useOfflineNotes() {
   const [online, setOnline] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
   const appState = useRef(AppState.currentState);
+  const { isSyncReady } = useAuth();
 
   // Load notes from local storage
   const loadNotes = useCallback(async () => {
@@ -46,11 +48,7 @@ export function useOfflineNotes() {
 
   // Sync and reload
   const syncAndReload = useCallback(async () => {
-    let token = await authStorage.getAccessToken();
-    if (!token) {
-      await new Promise(r => setTimeout(r, 800));
-      token = await authStorage.getAccessToken();
-    }
+    const token = await authStorage.getAccessToken();
     if (!token) {
       await loadNotes();
       return;
@@ -69,7 +67,7 @@ export function useOfflineNotes() {
   }, [loadNotes]);
 
   useEffect(() => {
-    // Initial load
+    // Initial load - only sync when auth is ready
     syncAndReload();
 
     // Start background sync listener
