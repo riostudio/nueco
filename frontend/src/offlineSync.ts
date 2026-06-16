@@ -192,6 +192,7 @@ export async function deleteLocalEvent(id: string): Promise<void> {
 // ---- Sync Engine ----
 
 let _isSyncing = false;
+let _isFullSyncing = false;
 
 export async function processSyncQueue(): Promise<void> {
   if (_isSyncing) {
@@ -292,8 +293,8 @@ async function processEventOperation(item: SyncQueueItem): Promise<void> {
 // ---- Full Sync (pull from server + merge local) ----
 
 export async function fullSync(): Promise<void> {
-  // Reset sync lock in case it got stuck
-  _isSyncing = false;
+  if (_isFullSyncing) return;
+  _isFullSyncing = true;
   try {
     // 1. Push pending local changes first
     await processSyncQueue();
@@ -309,13 +310,13 @@ export async function fullSync(): Promise<void> {
     const mergedNotes: LocalNote[] = [...serverNotes.map((n: any) => ({ ...n, _isLocal: false }))];
 
     for (const local of localNotes) {
-      if (local._isLocal || local._pendingDelete) continue; // skip unsynced
-      const serverVersion = mergedNotes.find(n => n.id === local.id);
-      if (!serverVersion) {
-        // Deleted on server — remove locally
+      if (local._pendingDelete) continue; // will be deleted once queue processes
+      if (local._isLocal) {
+        // Not yet on server — preserve it so it isn't lost before the queue syncs it
+        mergedNotes.push(local);
         continue;
       }
-      // Already handled by server pull
+      // Server already has this note; server pull above already handled it
     }
 
     await saveLocalNotes(mergedNotes);
@@ -326,6 +327,8 @@ export async function fullSync(): Promise<void> {
 
   } catch (e) {
     console.warn('Full sync failed (offline?):', e);
+  } finally {
+    _isFullSyncing = false;
   }
 }
 

@@ -13,7 +13,7 @@ import { UserAvatar, useAuth } from '../../src/auth';
 import { trackNoteSearched, trackNoteDeleted } from '../../src/analytics';
 import { useOfflineNotes } from '../../src/useOfflineNotes';
 import OfflineBanner from '../../src/components/OfflineBanner';
-import { getSyncQueue } from '../../src/offlineSync';
+import { getSyncQueue, getLocalNotes } from '../../src/offlineSync';
 
 // Extend C with surfaceHi for this screen
 const Colors = { ...C, surfaceHi: '#FFF8E1' };
@@ -113,10 +113,13 @@ export default function NotesScreen() {
       const queue = await getSyncQueue();
       setPendingCount(queue.length);
       
-      // Fetch events for notes that have linked_event_id
-      const eventIds = data
-        .filter((n: Note) => n.linked_event_id)
-        .map((n: Note) => n.linked_event_id as string);
+      // Fetch events for notes that have linked_event_id.
+      // Read fresh notes from AsyncStorage — the `notes` closure is stale here
+      // because setNotes() was called asynchronously inside syncAndReload().
+      const freshNotes = await getLocalNotes();
+      const eventIds = freshNotes
+        .filter((n) => n.linked_event_id)
+        .map((n) => n.linked_event_id as string);
       
       if (eventIds.length > 0) {
         const uniqueIds = [...new Set(eventIds)];

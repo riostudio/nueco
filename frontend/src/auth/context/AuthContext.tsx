@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { User } from '../types/auth.types';
 import { authApi } from '../api/authApi';
 import { authStorage } from '../storage/authStorage';
+import { fullSync } from '../../offlineSync';
 
 interface AuthContextType {
   user: User | null;
@@ -27,7 +28,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(result.user);
         return true;
       }
-      setUser(null);
+      // null means either 401/403 (tokens cleared) or network error (tokens kept).
+      // Only log out if tokens were actually cleared by the server rejecting them.
+      const stillHasToken = await authStorage.getAccessToken();
+      if (!stillHasToken) {
+        setUser(null);
+      }
       return false;
     } catch {
       setUser(null);
@@ -65,12 +71,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsSyncReady(false);
     // Run fullSync after tokens are saved
     try {
-      const { fullSync } = require('../offlineSync');
       await fullSync();
     } catch (e) {
       console.warn('Post-login sync failed:', e);
     } finally {
-      // Signal that sync is complete and notes screen can loa      setIsSyncReady(true);
+      // Signal that sync is complete so the notes screen can reload from AsyncStorage
+      setIsSyncReady(true);
     }
   }, []);
 

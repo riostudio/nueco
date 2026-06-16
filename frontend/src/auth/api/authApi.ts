@@ -126,7 +126,11 @@ class AuthApiService {
       });
 
       if (!response.ok) {
-        await authStorage.clearAll();
+        // Only clear tokens when the server explicitly rejects the refresh token.
+        // Do NOT clear on 5xx or network issues — that would wipe valid tokens.
+        if (response.status === 401 || response.status === 403) {
+          await authStorage.clearAll();
+        }
         return null;
       }
 
@@ -135,7 +139,7 @@ class AuthApiService {
       await authStorage.setUser(result.user);
       return result;
     } catch {
-      await authStorage.clearAll();
+      // Network error — leave tokens intact so the app can retry when online
       return null;
     }
   }
