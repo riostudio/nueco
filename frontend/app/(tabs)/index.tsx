@@ -366,7 +366,7 @@ export default function NotesScreen() {
           <View style={s.empty}>
             <MaterialIcons name="note-add" size={72} color={C.borderSub} />
             <Text style={s.emptyTitle}>
-              {search ? 'No notes found' : `No notes yet (${notes.length} in state)`}
+              {search ? 'No notes found' : 'No notes yet'}
             </Text>
             <Text style={s.emptySub}>
               {search ? 'Try a different search term' : 'Tap the button below to create your first note!'}

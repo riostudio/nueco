@@ -16,48 +16,54 @@ const isWeb = Platform.OS === 'web';
 export const authStorage = {
   // Access token - stored in memory on native, AsyncStorage on web
   setAccessToken: async (token: string): Promise<void> => {
-    if (isWeb) {
-      await AsyncStorage.setItem(KEYS.ACCESS_TOKEN, token);
-    } else {
+    await AsyncStorage.setItem(KEYS.ACCESS_TOKEN, token);
+    if (!isWeb) {
       try {
         await SecureStore.setItemAsync(KEYS.ACCESS_TOKEN, token);
       } catch (e) {
-        console.error('SecureStore setAccessToken failed, falling back to AsyncStorage:', e);
+        console.error('SecureStore setAccessToken failed, using AsyncStorage only:', e);
       }
-      // Always write to AsyncStorage as fallback
-      await AsyncStorage.setItem(KEYS.ACCESS_TOKEN, token);
     }
   },
 
   getAccessToken: async (): Promise<string | null> => {
-    if (isWeb) {
-      return await AsyncStorage.getItem(KEYS.ACCESS_TOKEN);
+    const asyncToken = await AsyncStorage.getItem(KEYS.ACCESS_TOKEN);
+    if (asyncToken) return asyncToken;
+    if (!isWeb) {
+      try {
+        return await SecureStore.getItemAsync(KEYS.ACCESS_TOKEN);
+      } catch (e) {
+        console.error('SecureStore getAccessToken failed:', e);
+        return null;
+      }
     }
-    try {
-      const token = await SecureStore.getItemAsync(KEYS.ACCESS_TOKEN);
-      if (token) return token;
-      // Fallback to AsyncStorage if SecureStore returns null
-      return await AsyncStorage.getItem(KEYS.ACCESS_TOKEN);
-    } catch (e) {
-      console.error('SecureStore getAccessToken failed, falling back to AsyncStorage:', e);
-      return await AsyncStorage.getItem(KEYS.ACCESS_TOKEN);
-    }
+    return null;
   },
 
   // Refresh token - stored securely
   setRefreshToken: async (token: string): Promise<void> => {
-    if (isWeb) {
-      await AsyncStorage.setItem(KEYS.REFRESH_TOKEN, token);
-    } else {
-      await SecureStore.setItemAsync(KEYS.REFRESH_TOKEN, token);
+    await AsyncStorage.setItem(KEYS.REFRESH_TOKEN, token);
+    if (!isWeb) {
+      try {
+        await SecureStore.setItemAsync(KEYS.REFRESH_TOKEN, token);
+      } catch (e) {
+        console.error('SecureStore setRefreshToken failed, using AsyncStorage only:', e);
+      }
     }
   },
 
   getRefreshToken: async (): Promise<string | null> => {
-    if (isWeb) {
-      return await AsyncStorage.getItem(KEYS.REFRESH_TOKEN);
+    const asyncToken = await AsyncStorage.getItem(KEYS.REFRESH_TOKEN);
+    if (asyncToken) return asyncToken;
+    if (!isWeb) {
+      try {
+        return await SecureStore.getItemAsync(KEYS.REFRESH_TOKEN);
+      } catch (e) {
+        console.error('SecureStore getRefreshToken failed:', e);
+        return null;
+      }
     }
-    return await SecureStore.getItemAsync(KEYS.REFRESH_TOKEN);
+    return null;
   },
 
   // User data
