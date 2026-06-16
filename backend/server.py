@@ -183,6 +183,9 @@ async def get_notes(
     current_user: dict = Depends(get_current_user)
 ):
     user_id = current_user.get("id") or str(current_user.get("_id", ""))
+    logger.info(f"get_notes called for user_id: {user_id}")
+    count_check = await db.notes.count_documents({"user_id": user_id})
+    logger.info(f"Total notes found for user: {count_check}")
     query = {"user_id": user_id}
     if search:
         escaped_search = re.escape(search)
@@ -426,7 +429,7 @@ async def transcribe_audio_base64(request: TranscribeBase64Request, current_user
                 response = await client.audio.transcriptions.create(
                     model="whisper-1",
                     file=audio_file,
-                    language="en",
+                    # language removed - Whisper auto-detects
                 )
             transcription_text = response.text or ""
             logger.info(f"Transcription successful: {transcription_text[:100] if transcription_text else 'empty'}...")
@@ -469,7 +472,7 @@ async def transcribe_audio(file: UploadFile = File(...), current_user: dict = De
                 response = await client.audio.transcriptions.create(
                     model="whisper-1",
                     file=audio_file,
-                    language="en",
+                    # language removed - Whisper auto-detects
                 )
             transcription_text = response.text or ""
             logger.info(f"Transcription successful: {transcription_text[:100]}...")

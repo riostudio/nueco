@@ -92,6 +92,7 @@ export const authStorage = {
       await SecureStore.deleteItemAsync(KEYS.ACCESS_TOKEN);
       await SecureStore.deleteItemAsync(KEYS.REFRESH_TOKEN);
       await SecureStore.deleteItemAsync(KEYS.USER);
+      await AsyncStorage.multiRemove([KEYS.ACCESS_TOKEN, KEYS.REFRESH_TOKEN, KEYS.USER]);
     }
   },
 

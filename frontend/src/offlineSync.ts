@@ -194,7 +194,10 @@ export async function deleteLocalEvent(id: string): Promise<void> {
 let _isSyncing = false;
 
 export async function processSyncQueue(): Promise<void> {
-  if (_isSyncing) return;
+  if (_isSyncing) {
+    console.warn('processSyncQueue already running, skipping');
+    return;
+  }
   _isSyncing = true;
 
   try {
@@ -289,6 +292,8 @@ async function processEventOperation(item: SyncQueueItem): Promise<void> {
 // ---- Full Sync (pull from server + merge local) ----
 
 export async function fullSync(): Promise<void> {
+  // Reset sync lock in case it got stuck
+  _isSyncing = false;
   try {
     // 1. Push pending local changes first
     await processSyncQueue();
@@ -314,7 +319,7 @@ export async function fullSync(): Promise<void> {
     }
 
     await saveLocalNotes(mergedNotes);
-
+    console.log('fullSync saved notes count:', mergedNotes.length);
     // 4. Merge server events
     const mergedEvents: LocalEvent[] = serverEvents.map((e: any) => ({ ...e, _isLocal: false }));
     await saveLocalEvents(mergedEvents);

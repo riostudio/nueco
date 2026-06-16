@@ -20,7 +20,7 @@ export function useChangePassword() {
       return { success: true, data: response.message };
     } catch (error: any) {
       console.error('Change password error:', error);
-      const code = error.status || 0;
+      const code = error.code || error.status || 0;
       return { success: false, error: error.message || String(error), code };
     } finally {
       setIsLoading(false);

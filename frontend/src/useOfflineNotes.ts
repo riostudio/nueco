@@ -46,7 +46,11 @@ export function useOfflineNotes() {
 
   // Sync and reload
   const syncAndReload = useCallback(async () => {
-    const token = await authStorage.getAccessToken();
+    let token = await authStorage.getAccessToken();
+    if (!token) {
+      await new Promise(r => setTimeout(r, 800));
+      token = await authStorage.getAccessToken();
+    }
     if (!token) {
       await loadNotes();
       return;

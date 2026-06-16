@@ -112,7 +112,6 @@ export default function NotesScreen() {
       await syncAndReload();
       const queue = await getSyncQueue();
       setPendingCount(queue.length);
-      const data = notes;
       
       // Fetch events for notes that have linked_event_id
       const eventIds = data
@@ -153,7 +152,7 @@ export default function NotesScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [notes, syncAndReload]);
+  }, [syncAndReload]);
 
   useFocusEffect(
     useCallback(() => {
@@ -173,8 +172,14 @@ export default function NotesScreen() {
     return () => clearInterval(pollInterval);
   }, [debouncedSearch, loadNotes, refreshing, loading]);
 
-  const pinnedNotes = notes.filter((n) => n.is_pinned);
-  const otherNotes = notes.filter((n) => !n.is_pinned);
+  const filteredNotes = debouncedSearch
+    ? notes.filter((n) =>
+        n.title?.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
+        n.content?.toLowerCase().includes(debouncedSearch.toLowerCase())
+      )
+    : notes;
+  const pinnedNotes = filteredNotes.filter((n) => n.is_pinned);
+  const otherNotes = filteredNotes.filter((n) => !n.is_pinned);
 
   const handleTogglePin = async (noteId: string) => {
     try {
@@ -348,7 +353,7 @@ export default function NotesScreen() {
       <FlatList
         style={s.scroll}
         contentContainerStyle={s.scrollContent}
-        data={notes}
+        data={filteredNotes}
         keyExtractor={(item) => item.id}
         refreshControl={
           <RefreshControl
@@ -361,7 +366,7 @@ export default function NotesScreen() {
           <View style={s.empty}>
             <MaterialIcons name="note-add" size={72} color={C.borderSub} />
             <Text style={s.emptyTitle}>
-              {search ? 'No notes found' : 'No notes yet'}
+              {search ? 'No notes found' : `No notes yet (${notes.length} in state)`}
             </Text>
             <Text style={s.emptySub}>
               {search ? 'Try a different search term' : 'Tap the button below to create your first note!'}
