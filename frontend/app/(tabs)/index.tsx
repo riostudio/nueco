@@ -40,7 +40,7 @@ function stripMd(text: string): string {
 export default function NotesScreen() {
   const router = useRouter();
   const { user, logout, isSyncReady } = useAuth();
-  const { notes, online, isSyncing, syncAndReload, deleteNote } = useOfflineNotes();
+  const { notes, online, isSyncing, syncError, syncAndReload, deleteNote } = useOfflineNotes();
   const [pendingCount, setPendingCount] = useState(0);
   const [eventsMap, setEventsMap] = useState<Record<string, CalendarEvent>>({});
   const [search, setSearch] = useState('');
@@ -379,7 +379,11 @@ export default function NotesScreen() {
               {search ? 'No notes found' : 'No notes yet'}
             </Text>
             <Text style={s.emptySub}>
-              {search ? 'Try a different search term' : 'Tap the button below to create your first note!'}
+              {search
+                ? 'Try a different search term'
+                : syncError
+                  ? `Sync error: ${syncError}`
+                  : 'Tap the button below to create your first note!'}
             </Text>
           </View>
         }

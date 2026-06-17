@@ -299,34 +299,43 @@ export async function fullSync(): Promise<void> {
     // 1. Push pending local changes first
     await processSyncQueue();
 
-    // 2. Pull latest from server
-    const [serverNotes, serverEvents] = await Promise.all([
+    // 2. Pull latest from server — notes and events are independent; don't let
+    //    a broken events response block notes from being saved.
+    const [notesResult, eventsResult] = await Promise.allSettled([
       notesApi.getAll(),
       eventsApi.getAll(),
     ]);
 
     // 3. Merge server notes with local (timestamp wins)
-    const localNotes = await getLocalNotes();
-    const mergedNotes: LocalNote[] = [...serverNotes.map((n: any) => ({ ...n, _isLocal: false }))];
+    if (notesResult.status === 'fulfilled') {
+      const serverNotes = notesResult.value;
+      const localNotes = await getLocalNotes();
+      const mergedNotes: LocalNote[] = [...serverNotes.map((n: any) => ({ ...n, _isLocal: false }))];
 
-    for (const local of localNotes) {
-      if (local._pendingDelete) continue; // will be deleted once queue processes
-      if (local._isLocal) {
-        // Not yet on server — preserve it so it isn't lost before the queue syncs it
-        mergedNotes.push(local);
-        continue;
+      for (const local of localNotes) {
+        if (local._pendingDelete) continue;
+        if (local._isLocal) {
+          mergedNotes.push(local);
+          continue;
+        }
       }
-      // Server already has this note; server pull above already handled it
+
+      await saveLocalNotes(mergedNotes);
+      console.log('fullSync saved notes count:', mergedNotes.length);
+    } else {
+      console.warn('fullSync: notes fetch failed:', notesResult.reason);
     }
 
-    await saveLocalNotes(mergedNotes);
-    console.log('fullSync saved notes count:', mergedNotes.length);
-    // 4. Merge server events
-    const mergedEvents: LocalEvent[] = serverEvents.map((e: any) => ({ ...e, _isLocal: false }));
-    await saveLocalEvents(mergedEvents);
+    // 4. Merge server events (independently — a failure here won't lose notes)
+    if (eventsResult.status === 'fulfilled') {
+      const mergedEvents: LocalEvent[] = eventsResult.value.map((e: any) => ({ ...e, _isLocal: false }));
+      await saveLocalEvents(mergedEvents);
+    } else {
+      console.warn('fullSync: events fetch failed:', eventsResult.reason);
+    }
 
   } catch (e) {
-    console.warn('Full sync failed (offline?):', e);
+    console.warn('Full sync failed:', e);
   } finally {
     _isFullSyncing = false;
   }
@@ -360,5 +369,7 @@ export function stopBackgroundSync(): void {
 
 export async function isOnline(): Promise<boolean> {
   const state = await NetInfo.fetch();
-  return !!(state.isConnected && state.isInternetReachable);
+  // isInternetReachable can be null on Android while determining connectivity.
+  // Only treat as offline when we KNOW internet is unreachable (false), not uncertain (null).
+  return !!(state.isConnected && state.isInternetReachable !== false);
 }

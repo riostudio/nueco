@@ -35,6 +35,7 @@ export function useOfflineNotes() {
   const [notes, setNotes] = useState<LocalNote[]>([]);
   const [online, setOnline] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const appState = useRef(AppState.currentState);
   const { isSyncReady } = useAuth();
 
@@ -57,8 +58,11 @@ export function useOfflineNotes() {
     setOnline(online);
     if (online) {
       setIsSyncing(true);
+      setSyncError(null);
       try {
         await fullSync();
+      } catch (e: any) {
+        setSyncError(e?.message || 'Sync failed');
       } finally {
         setIsSyncing(false);
       }
@@ -211,6 +215,7 @@ export function useOfflineNotes() {
     notes,
     online,
     isSyncing,
+    syncError,
     loadNotes,
     syncAndReload,
     createNote,
