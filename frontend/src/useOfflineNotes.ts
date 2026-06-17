@@ -66,8 +66,14 @@ export function useOfflineNotes() {
     await loadNotes();
   }, [loadNotes]);
 
+  // Re-run syncAndReload when isSyncReady flips to true (post-login fullSync complete)
+  // so the hook picks up notes that AuthContext just saved to AsyncStorage.
   useEffect(() => {
-    // Initial load - only sync when auth is ready
+    if (isSyncReady) syncAndReload();
+  }, [isSyncReady, syncAndReload]);
+
+  useEffect(() => {
+    // Initial load for returning users (isSyncReady stays false for them)
     syncAndReload();
 
     // Start background sync listener
