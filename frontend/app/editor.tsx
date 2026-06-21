@@ -845,12 +845,12 @@ export default function EditorScreen() {
       try {
         const modalDismissed = await authStorage.isModalDismissed();
         const userHasEmail = authUser?.email;
-        const userVerified = authUser?.email_verified || authUser?.mobile_verified;
-        
+        const userVerified = authUser?.email_verified;
+
         if (!modalDismissed && !userHasEmail && !userVerified) {
           await authStorage.setFirstNoteSaved();
-          setShowLinkSheet(true);
-          return; // Don't navigate yet, show signup sheet
+          router.replace('/signup'); // Prompt guest to create an account
+          return; // Don't navigate to tabs yet
         }
       } catch (e) {
         console.error('Error checking auth state:', e);
@@ -915,16 +915,8 @@ export default function EditorScreen() {
             <Text style={[s.headerBtnLabel, { color: C.primary }]}>Back</Text>
           </TouchableOpacity>
           <View style={s.headerRight}>
-            {/* User Avatar - shows first letter of email when verified */}
-            <UserAvatar 
-              user={authUser} 
-              size={36} 
-              onSignInPress={() => router.push('/login')}
-              onLogout={async () => {
-                // Handle logout from editor - just go back to tabs
-                router.replace('/(tabs)');
-              }}
-            />
+            {/* User Avatar - reads user/logout from auth context internally */}
+            <UserAvatar size={36} />
           </View>
         </View>
 
