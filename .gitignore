@@ -81,3 +81,5 @@ android-sdk/ -e
 # Environment files
 *.env
 *.env.*
+frontend/build-1781994193202.apk
+frontend/build-1781933011822.apk

@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Linking, TouchableOpacity, Modal } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Linking, TouchableOpacity, Modal, Alert, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import * as SecureStore from 'expo-secure-store';
 import { UserAvatar, useAuth } from '../../src/auth';
 
 const C = {
@@ -115,6 +116,26 @@ export default function SettingsScreen() {
             </Text>
           </View>
         </View>
+
+        {__DEV__ && Platform.OS !== 'web' && (
+          <View style={s.section}>
+            <Text style={s.sectionTitle}>Debug (dev only)</Text>
+            <View style={s.card}>
+              <Text style={s.aboutDesc}>
+                Simulates the OS evicting the cached user object from SecureStore while leaving tokens intact. Tap, then reload the app (shake device → Reload) to verify the session and notes recover without a fresh login.
+              </Text>
+              <TouchableOpacity
+                style={[s.modalLogoutBtn, { marginTop: 16 }]}
+                onPress={async () => {
+                  await SecureStore.deleteItemAsync('user_data');
+                  Alert.alert('Done', 'Cached user cleared. Now reload the app to test recovery.');
+                }}
+              >
+                <Text style={s.modalLogoutText}>Simulate cache eviction</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
 
         <View style={{ height: 40 }} />
       </ScrollView>

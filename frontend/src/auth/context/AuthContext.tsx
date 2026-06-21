@@ -53,6 +53,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             console.warn('Background token refresh failed:', err);
             // Don't clear user state - token might still be valid
           });
+        } else {
+          // No cached user, but the tokens are dual-stored (AsyncStorage + SecureStore)
+          // and more resilient than the SecureStore-only cached user object, which some
+          // Android OEMs evict independently. If a token survived, refetch the user
+          // instead of forcing a fresh login (which would orphan local notes).
+          const token = (await authStorage.getAccessToken()) || (await authStorage.getRefreshToken());
+          if (token) {
+            try {
+              const me = await authApi.getMe();
+              setUser(me);
+              await authStorage.setUser(me);
+            } catch (err) {
+              // Access token likely expired - fall back to a full refresh.
+              await refreshAuth();
+            }
+          }
         }
       } catch (error) {
         console.error('Auth init error:', error);

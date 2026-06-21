@@ -10,6 +10,7 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as FileSystem from 'expo-file-system/legacy';
 import NetInfo, { NetInfoState } from '@react-native-community/netinfo';
 import { notesApi, eventsApi } from './api';
 
@@ -67,6 +68,64 @@ const KEYS = {
   LAST_SYNC: 'offline:lastSync',
 };
 
+// ---- File-backed JSON store ----
+// AsyncStorage on Android is backed by SQLite, whose CursorWindow caps a single
+// row read at ~2MB. A user with many notes (especially with embedded images)
+// blows past that: the write succeeds (~6MB cap) but every read throws
+// SQLiteBlobTooBigException, silently yielding an empty list. We persist the
+// large collections to plain JSON files instead — files have no row-size limit.
+
+const FILE_DIR = `${FileSystem.documentDirectory}memopad/`;
+const FILES = {
+  NOTES: `${FILE_DIR}notes.json`,
+  EVENTS: `${FILE_DIR}events.json`,
+  SYNC_QUEUE: `${FILE_DIR}syncQueue.json`,
+};
+
+let _dirReady = false;
+async function ensureDir(): Promise<void> {
+  if (_dirReady) return;
+  const info = await FileSystem.getInfoAsync(FILE_DIR);
+  if (!info.exists) {
+    await FileSystem.makeDirectoryAsync(FILE_DIR, { intermediates: true });
+  }
+  _dirReady = true;
+}
+
+// Reads a JSON file, falling back to (and migrating from) a legacy AsyncStorage
+// key the first time. If the legacy value is unreadable (e.g. the CursorWindow
+// error this fix addresses), we start fresh — fullSync repopulates from server.
+async function readJsonFile<T>(uri: string, fallback: T, legacyKey: string): Promise<T> {
+  try {
+    await ensureDir();
+    const info = await FileSystem.getInfoAsync(uri);
+    if (!info.exists) {
+      try {
+        const legacy = await AsyncStorage.getItem(legacyKey);
+        if (legacy) {
+          await FileSystem.writeAsStringAsync(uri, legacy);
+          await AsyncStorage.removeItem(legacyKey);
+          return JSON.parse(legacy) as T;
+        }
+      } catch {
+        // Legacy value too big to read — drop it and start from the file store.
+        await AsyncStorage.removeItem(legacyKey).catch(() => {});
+      }
+      return fallback;
+    }
+    const raw = await FileSystem.readAsStringAsync(uri);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch (e) {
+    console.warn('readJsonFile failed for', uri, e);
+    return fallback;
+  }
+}
+
+async function writeJsonFile(uri: string, data: unknown): Promise<void> {
+  await ensureDir();
+  await FileSystem.writeAsStringAsync(uri, JSON.stringify(data));
+}
+
 // ---- Helpers ----
 
 function newerTimestamp(a: string, b: string): string {
@@ -80,44 +139,29 @@ function isNewer(incoming: string, existing: string): boolean {
 // ---- Local Storage ----
 
 export async function getLocalNotes(): Promise<LocalNote[]> {
-  try {
-    const raw = await AsyncStorage.getItem(KEYS.NOTES);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
+  return readJsonFile<LocalNote[]>(FILES.NOTES, [], KEYS.NOTES);
 }
 
 export async function saveLocalNotes(notes: LocalNote[]): Promise<void> {
-  await AsyncStorage.setItem(KEYS.NOTES, JSON.stringify(notes));
+  await writeJsonFile(FILES.NOTES, notes);
 }
 
 export async function getLocalEvents(): Promise<LocalEvent[]> {
-  try {
-    const raw = await AsyncStorage.getItem(KEYS.EVENTS);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
+  return readJsonFile<LocalEvent[]>(FILES.EVENTS, [], KEYS.EVENTS);
 }
 
 export async function saveLocalEvents(events: LocalEvent[]): Promise<void> {
-  await AsyncStorage.setItem(KEYS.EVENTS, JSON.stringify(events));
+  await writeJsonFile(FILES.EVENTS, events);
 }
 
 // ---- Sync Queue ----
 
 export async function getSyncQueue(): Promise<SyncQueueItem[]> {
-  try {
-    const raw = await AsyncStorage.getItem(KEYS.SYNC_QUEUE);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
+  return readJsonFile<SyncQueueItem[]>(FILES.SYNC_QUEUE, [], KEYS.SYNC_QUEUE);
 }
 
 export async function saveSyncQueue(queue: SyncQueueItem[]): Promise<void> {
-  await AsyncStorage.setItem(KEYS.SYNC_QUEUE, JSON.stringify(queue));
+  await writeJsonFile(FILES.SYNC_QUEUE, queue);
 }
 
 export async function enqueueOperation(item: Omit<SyncQueueItem, 'retries'>): Promise<void> {
