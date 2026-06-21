@@ -333,12 +333,7 @@ export default function NotesScreen() {
     <SafeAreaView style={s.container} edges={['top']}>
       <View style={s.header}>
         <Text style={s.headerTitle}>My Notes</Text>
-        <UserAvatar 
-          user={user} 
-          size={36} 
-          onSignInPress={() => router.push('/login')}
-          onLogout={() => setLogoutModalVisible(true)}
-        />
+        <UserAvatar size={36} />
       </View>
 
       <OfflineBanner online={online} isSyncing={isSyncing} pendingCount={pendingCount} />

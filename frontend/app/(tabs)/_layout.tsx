@@ -27,18 +27,10 @@ function EventsIcon({ color }: { color: string }) {
   return <MaterialIcons name="event-note" size={22} color={color} />;
 }
 
-function HeaderRight({ onLogout }: { onLogout: () => void }) {
-  const { user } = useAuth();
-  const router = useRouter();
-  
+function HeaderRight() {
   return (
     <View style={styles.headerRight}>
-      <UserAvatar 
-        user={user} 
-        size={36} 
-        onSignInPress={() => router.push('/login')}
-        onLogout={onLogout}
-      />
+      <UserAvatar size={36} />
     </View>
   );
 }

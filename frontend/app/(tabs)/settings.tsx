@@ -33,12 +33,7 @@ export default function SettingsScreen() {
     <SafeAreaView style={s.container} edges={['top']}>
       <View style={s.header}>
         <Text style={s.headerTitle}>Settings</Text>
-        <UserAvatar 
-          user={user} 
-          size={36} 
-          onSignInPress={() => router.push('/login')}
-          onLogout={() => setLogoutModalVisible(true)}
-        />
+        <UserAvatar size={36} />
       </View>
 
       <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent}>
