@@ -83,3 +83,6 @@ android-sdk/ -e
 *.env.*
 frontend/build-1781994193202.apk
 frontend/build-1781933011822.apk
+frontend/prev
+build/build-1781994193202.apk
+build/build-1781933011822.apk

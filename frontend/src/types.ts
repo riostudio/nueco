@@ -3,6 +3,16 @@ export interface Tag {
   color: string;
 }
 
+export interface Attachment {
+  id: string;
+  key: string;
+  url: string;
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  uploaded_at: string;
+}
+
 export interface Note {
   id: string;
   title: string;
@@ -10,6 +20,8 @@ export interface Note {
   tags: Tag[];
   is_pinned: boolean;
   linked_event_id: string | null;
+  attachments?: Attachment[];
+  has_attachments?: boolean;
   created_at: string;
   updated_at: string;
 }
