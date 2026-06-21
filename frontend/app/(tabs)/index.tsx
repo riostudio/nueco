@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
-  FlatList, RefreshControl, ActivityIndicator, Modal, Alert,
+  FlatList, RefreshControl, ActivityIndicator, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -39,7 +39,7 @@ function stripMd(text: string): string {
 
 export default function NotesScreen() {
   const router = useRouter();
-  const { user, logout, isSyncReady } = useAuth();
+  const { isSyncReady } = useAuth();
   const { notes, online, isSyncing, syncError, syncAndReload, deleteNote } = useOfflineNotes();
   const [pendingCount, setPendingCount] = useState(0);
   const [eventsMap, setEventsMap] = useState<Record<string, CalendarEvent>>({});
@@ -54,24 +54,6 @@ export default function NotesScreen() {
   const [noteToDelete, setNoteToDelete] = useState<{ id: string; title: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  // Logout modal state
-  const [logoutModalVisible, setLogoutModalVisible] = useState(false);
-
-  const handleLogout = async () => {
-    const queue = await getSyncQueue();
-    if (!online && queue.length > 0) {
-      setLogoutModalVisible(false);
-      Alert.alert(
-        'Unsynced Notes',
-        `You have ${queue.length} note(s) that haven't synced yet. Please connect to the internet before logging out to avoid losing data.`,
-        [{ text: 'OK' }]
-      );
-      return;
-    }
-    await logout();
-    setLogoutModalVisible(false);
-    router.replace('/welcome');
-  };
 
   useEffect(() => {
     if (searchTimer.current) clearTimeout(searchTimer.current);
@@ -448,39 +430,6 @@ export default function NotesScreen() {
         </View>
       </Modal>
 
-      {/* Logout Confirmation Modal */}
-      <Modal
-        visible={logoutModalVisible}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={() => setLogoutModalVisible(false)}
-      >
-        <View style={s.modalOverlay}>
-          <View style={s.modalContent}>
-            <MaterialIcons name="logout" size={48} color={C.primary} style={{ marginBottom: 16 }} />
-            <Text style={s.modalTitle}>Log Out?</Text>
-            <Text style={s.modalMessage}>
-              Are you sure you want to log out?
-            </Text>
-            <View style={s.modalButtons}>
-              <TouchableOpacity
-                style={s.modalCancelBtn}
-                onPress={() => setLogoutModalVisible(false)}
-                activeOpacity={0.7}
-              >
-                <Text style={s.modalCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[s.modalDeleteBtn, { backgroundColor: C.primary }]}
-                onPress={handleLogout}
-                activeOpacity={0.7}
-              >
-                <Text style={s.modalDeleteText}>Log Out</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }

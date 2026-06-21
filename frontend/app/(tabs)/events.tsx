@@ -10,7 +10,7 @@ import { useRouter, useFocusEffect } from 'expo-router';
 import { eventsApi } from '../../src/api';
 import { CalendarEvent } from '../../src/types';
 import { MONTH_NAMES } from '../../src/theme';
-import { UserAvatar, useAuth } from '../../src/auth';
+import { UserAvatar } from '../../src/auth';
 
 const C = {
   primary: '#D84315',
@@ -86,7 +86,6 @@ function groupEventsByDate(events: CalendarEvent[]): GroupedEvents {
 
 export default function EventsScreen() {
   const router = useRouter();
-  const { user, logout } = useAuth();
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -100,15 +99,6 @@ export default function EventsScreen() {
   const [deleteModalVisible, setDeleteModalVisible] = useState(false);
   const [eventToDelete, setEventToDelete] = useState<{ id: string; title: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
-
-  // Logout modal state
-  const [logoutModalVisible, setLogoutModalVisible] = useState(false);
-
-  const handleLogout = async () => {
-    await logout();
-    setLogoutModalVisible(false);
-    router.replace('/welcome');
-  };
 
   const loadEvents = useCallback(async () => {
     try {
@@ -373,29 +363,6 @@ export default function EventsScreen() {
         </View>
       </Modal>
 
-      {/* Logout Confirmation Modal */}
-      <Modal
-        visible={logoutModalVisible}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={() => setLogoutModalVisible(false)}
-      >
-        <View style={s.modalOverlay}>
-          <View style={s.modalContent}>
-            <MaterialIcons name="logout" size={48} color={C.primary} style={{ marginBottom: 16 }} />
-            <Text style={s.modalTitle}>Log Out?</Text>
-            <Text style={s.modalMessage}>Are you sure you want to log out?</Text>
-            <View style={s.modalButtons}>
-              <TouchableOpacity style={s.modalCancelBtn} onPress={() => setLogoutModalVisible(false)}>
-                <Text style={s.modalCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={s.modalLogoutBtn} onPress={handleLogout}>
-                <Text style={s.modalLogoutText}>Log Out</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }
