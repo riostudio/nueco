@@ -9,9 +9,10 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { useAudioRecorder, AudioModule, RecordingPresets, setAudioModeAsync } from 'expo-audio';
 import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { notesApi, eventsApi, transcribeApi, textProcessApi } from '../src/api';
-import { Tag, CalendarEvent } from '../src/types';
+import { notesApi, eventsApi, transcribeApi, textProcessApi, attachmentsApi, uploadAttachment } from '../src/api';
+import { Tag, CalendarEvent, Attachment } from '../src/types';
 import { TAG_COLORS, C } from '../src/theme';
 import { 
   authStorage, 
@@ -52,6 +53,8 @@ export default function EditorScreen() {
   const [transcribedText, setTranscribedText] = useState('');
   const [images, setImages] = useState<string[]>([]);
   const [showImagePicker, setShowImagePicker] = useState(false);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   
   // Recording duration tracking for analytics
@@ -94,6 +97,7 @@ export default function EditorScreen() {
   const isPinnedRef = useRef(isPinned);
   const linkedEventIdRef = useRef<string | null>(linkedEventId);
   const imagesRef = useRef<string[]>(images);
+  const attachmentsRef = useRef<Attachment[]>(attachments);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   // State to track if note exists (for UI rendering like delete button)
@@ -105,6 +109,7 @@ export default function EditorScreen() {
   useEffect(() => { isPinnedRef.current = isPinned; }, [isPinned]);
   useEffect(() => { linkedEventIdRef.current = linkedEventId; }, [linkedEventId]);
   useEffect(() => { imagesRef.current = images; }, [images]);
+  useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
 
   useEffect(() => {
     if (!isNew && noteId) loadNote(noteId);
@@ -119,6 +124,7 @@ export default function EditorScreen() {
       setIsPinned(note.is_pinned);
       setLinkedEventId(note.linked_event_id);
       setImages(note.images || []);
+      setAttachments(note.attachments || []);
       noteIdRef.current = note.id;
       isCreatedRef.current = true;
       setNoteExists(true);
@@ -236,6 +242,7 @@ export default function EditorScreen() {
             is_pinned: isPinnedRef.current,
             linked_event_id: linkedEventIdRef.current,
             images: imagesRef.current,
+            attachments: attachmentsRef.current,
           }));
           noteIdRef.current = created.id;
           isCreatedRef.current = true;
@@ -254,6 +261,7 @@ export default function EditorScreen() {
             is_pinned: isPinnedRef.current,
             linked_event_id: linkedEventIdRef.current,
             images: imagesRef.current,
+            attachments: attachmentsRef.current,
           }));
           // Track note edit
           trackNoteEdited();
@@ -273,7 +281,7 @@ export default function EditorScreen() {
   const handleBack = useCallback(async () => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     try {
-      if (!isCreatedRef.current && (titleRef.current || contentRef.current || linkedEventIdRef.current || imagesRef.current.length > 0)) {
+      if (!isCreatedRef.current && (titleRef.current || contentRef.current || linkedEventIdRef.current || imagesRef.current.length > 0 || attachmentsRef.current.length > 0)) {
         await retryOperation(() => notesApi.create({
           title: titleRef.current,
           content: contentRef.current,
@@ -281,6 +289,7 @@ export default function EditorScreen() {
           is_pinned: isPinnedRef.current,
           linked_event_id: linkedEventIdRef.current,
           images: imagesRef.current,
+          attachments: attachmentsRef.current,
         }));
       } else if (isCreatedRef.current && noteIdRef.current) {
         await retryOperation(() => notesApi.update(noteIdRef.current, {
@@ -290,6 +299,7 @@ export default function EditorScreen() {
           is_pinned: isPinnedRef.current,
           linked_event_id: linkedEventIdRef.current,
           images: imagesRef.current,
+          attachments: attachmentsRef.current,
         }));
       }
     } catch (e) {
@@ -712,6 +722,55 @@ export default function EditorScreen() {
     triggerAutoSave();
   };
 
+  // File attachment (paperclip) — picks a file, uploads to storage, embeds metadata.
+  // Online-direct, matching the editor's existing save model. Never base64-inlines.
+  const MAX_ATTACHMENT_MB = 25;
+  const pickAttachment = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+      if (result.canceled || !result.assets || result.assets.length === 0) return;
+
+      const asset = result.assets[0];
+      const size = asset.size ?? 0;
+      const name = asset.name || 'file';
+      const mimeType = asset.mimeType || 'application/octet-stream';
+
+      if (size > MAX_ATTACHMENT_MB * 1024 * 1024) {
+        Alert.alert('File too large', `Attachments must be under ${MAX_ATTACHMENT_MB}MB.`);
+        return;
+      }
+
+      setIsUploadingAttachment(true);
+      try {
+        const meta = await uploadAttachment({ uri: asset.uri, name, mimeType, size });
+        setAttachments(prev => [...prev, meta]);
+        triggerAutoSave();
+      } catch (e: any) {
+        const notEnabled = e?.message?.includes('503') || e?.message?.includes('not enabled');
+        Alert.alert(
+          'Upload failed',
+          notEnabled
+            ? 'File attachments aren’t enabled on the server yet.'
+            : 'Could not upload the file. Please check your connection and try again.',
+        );
+      } finally {
+        setIsUploadingAttachment(false);
+      }
+    } catch (e) {
+      console.error('Attachment pick failed:', e);
+    }
+  };
+
+  const removeAttachment = (att: Attachment) => {
+    setAttachments(prev => prev.filter(a => a.id !== att.id));
+    triggerAutoSave();
+    // Best-effort remote cleanup; storage lifecycle/next save reconciles on failure.
+    attachmentsApi.remove(att.key).catch(() => {});
+  };
+
   const addTag = () => {
     if (!newTagName.trim()) return;
     if (tags.length >= 3) {
@@ -786,12 +845,12 @@ export default function EditorScreen() {
       try {
         const modalDismissed = await authStorage.isModalDismissed();
         const userHasEmail = authUser?.email;
-        const userVerified = authUser?.email_verified || authUser?.mobile_verified;
-        
+        const userVerified = authUser?.email_verified;
+
         if (!modalDismissed && !userHasEmail && !userVerified) {
           await authStorage.setFirstNoteSaved();
-          setShowLinkSheet(true);
-          return; // Don't navigate yet, show signup sheet
+          router.replace('/signup'); // Prompt guest to create an account
+          return; // Don't navigate to tabs yet
         }
       } catch (e) {
         console.error('Error checking auth state:', e);
@@ -856,16 +915,8 @@ export default function EditorScreen() {
             <Text style={[s.headerBtnLabel, { color: C.primary }]}>Back</Text>
           </TouchableOpacity>
           <View style={s.headerRight}>
-            {/* User Avatar - shows first letter of email when verified */}
-            <UserAvatar 
-              user={authUser} 
-              size={36} 
-              onSignInPress={() => router.push('/login')}
-              onLogout={async () => {
-                // Handle logout from editor - just go back to tabs
-                router.replace('/(tabs)');
-              }}
-            />
+            {/* User Avatar - reads user/logout from auth context internally */}
+            <UserAvatar size={36} />
           </View>
         </View>
 
@@ -979,7 +1030,41 @@ export default function EditorScreen() {
               autoCorrect={true}
               autoCapitalize="sentences"
             />
+            {/* Paperclip — pinned to the bottom-left of the input box */}
+            <TouchableOpacity
+              testID="attach-file-btn"
+              style={s.attachBtn}
+              onPress={pickAttachment}
+              disabled={isUploadingAttachment}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              {isUploadingAttachment ? (
+                <ActivityIndicator size="small" color={C.secondary} />
+              ) : (
+                <MaterialIcons name="attach-file" size={22} color={C.secondary} />
+              )}
+            </TouchableOpacity>
           </View>
+
+          {/* Attachments Section */}
+          {attachments.length > 0 && (
+            <View style={s.imagesContainer}>
+              <Text style={s.imagesSectionTitle}>Attachments</Text>
+              {attachments.map((att) => (
+                <View key={att.id} style={s.attachmentRow}>
+                  <MaterialIcons name="insert-drive-file" size={22} color={C.secondary} />
+                  <Text style={s.attachmentName} numberOfLines={1}>{att.filename}</Text>
+                  <TouchableOpacity
+                    testID={`remove-attachment-${att.id}`}
+                    onPress={() => removeAttachment(att)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <MaterialIcons name="close" size={20} color={C.error} />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          )}
 
           {/* Images Section */}
           {images.length > 0 && (
@@ -1333,11 +1418,35 @@ const s = StyleSheet.create({
     backgroundColor: C.surface,
     borderRadius: 12,
     padding: 16,
+    paddingBottom: 52, // leave room for the pinned paperclip so text never overlaps it
     borderWidth: 2,
     borderColor: C.borderSub,
     fontSize: 18,
     color: C.text,
     lineHeight: 28,
+  },
+  attachBtn: {
+    position: 'absolute',
+    left: 10,
+    bottom: 10,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: C.bg,
+  },
+  attachmentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+  },
+  attachmentName: {
+    flex: 1,
+    fontSize: 15,
+    color: C.text,
   },
   contentText: {
     fontSize: 18,

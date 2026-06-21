@@ -67,12 +67,52 @@ def get_client_ip(request: Request) -> str:
 # Import get_current_user for authentication
 from auth.router import get_current_user
 
+# ---- Attachment storage (S3) config ----
+import boto3
+from botocore.exceptions import ClientError, BotoCoreError
+
+S3_BUCKET = os.getenv("S3_BUCKET")
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+ATTACHMENT_PREFIX = "note-attachments"
+MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024  # 25 MB
+ALLOWED_ATTACHMENT_MIME = {
+    "image/jpeg", "image/png", "image/gif", "image/webp", "image/heic",
+    "application/pdf", "text/plain", "text/csv",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+}
+ALLOWED_ATTACHMENT_EXT = {
+    "jpg", "jpeg", "png", "gif", "webp", "heic", "pdf", "txt", "csv",
+    "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+}
+
+
+def get_s3_client():
+    """Return a boto3 S3 client, or None if attachment storage isn't configured.
+    Credentials come from the standard AWS env vars / IAM role."""
+    if not S3_BUCKET:
+        return None
+    return boto3.client("s3", region_name=AWS_REGION)
+
 
 # ---- Models ----
 
 class Tag(BaseModel):
     name: str
     color: str
+
+class Attachment(BaseModel):
+    id: str
+    key: str               # storage object key (server-generated)
+    url: str               # download URL
+    filename: str
+    mime_type: str
+    size_bytes: int
+    uploaded_at: str
 
 class NoteCreate(BaseModel):
     title: str = ""
@@ -81,6 +121,7 @@ class NoteCreate(BaseModel):
     is_pinned: bool = False
     linked_event_id: Optional[str] = None
     images: List[str] = []  # Base64 encoded images
+    attachments: List[Attachment] = []
 
 class NoteUpdate(BaseModel):
     title: Optional[str] = None
@@ -89,6 +130,7 @@ class NoteUpdate(BaseModel):
     is_pinned: Optional[bool] = None
     linked_event_id: Optional[str] = None
     images: Optional[List[str]] = None  # Base64 encoded images
+    attachments: Optional[List[Attachment]] = None
 
 class NoteResponse(BaseModel):
     id: str
@@ -98,6 +140,8 @@ class NoteResponse(BaseModel):
     is_pinned: bool
     linked_event_id: Optional[str] = None
     images: List[str] = []  # Base64 encoded images
+    attachments: List[Attachment] = []
+    has_attachments: bool = False
     user_id: Optional[str] = None
     created_at: str
     updated_at: str
@@ -166,6 +210,8 @@ async def create_note(note: NoteCreate, current_user: dict = Depends(get_current
         "is_pinned": note.is_pinned,
         "linked_event_id": note.linked_event_id,
         "images": note.images,
+        "attachments": [a.model_dump() for a in note.attachments],
+        "has_attachments": len(note.attachments) > 0,
         "user_id": user_id,
         "created_at": now,
         "updated_at": now,
@@ -213,8 +259,10 @@ async def get_notes(
         "is_pinned": 1, 
         "linked_event_id": 1,
         "images": 1,
+        "attachments": 1,
+        "has_attachments": 1,
         "user_id": 1,
-        "created_at": 1, 
+        "created_at": 1,
         "updated_at": 1
     }).sort(
         [("is_pinned", -1), ("updated_at", -1)]
@@ -242,6 +290,9 @@ async def update_note(note_id: str, update: NoteUpdate, current_user: dict = Dep
                 updates[k] = [t if isinstance(t, dict) else t for t in v]
             else:
                 updates[k] = v
+    # Keep the denormalized flag in sync whenever attachments are part of the update.
+    if "attachments" in updates:
+        updates["has_attachments"] = len(updates["attachments"]) > 0
     updates["updated_at"] = datetime.now(timezone.utc).isoformat()
     result = await db.notes.update_one({"id": note_id, "user_id": user_id}, {"$set": updates})
     if result.matched_count == 0:
@@ -275,6 +326,82 @@ async def toggle_pin(note_id: str, current_user: dict = Depends(get_current_user
     )
     note = await db.notes.find_one({"id": note_id, "user_id": user_id}, {"_id": 0})
     return NoteResponse(**note)
+
+
+# ---- Attachment Endpoints ----
+
+class PresignRequest(BaseModel):
+    filename: str
+    mime_type: str
+    size: int
+
+
+@api_router.post("/attachments/presign")
+async def presign_attachment(req: PresignRequest, current_user: dict = Depends(get_current_user)):
+    """Validate a file and return a presigned POST for direct-to-S3 upload.
+    The object key is generated server-side under the caller's prefix so a client
+    can never write outside its own namespace."""
+    s3 = get_s3_client()
+    if s3 is None:
+        raise HTTPException(status_code=503, detail="File attachments are not enabled on this server")
+
+    user_id = current_user.get("id") or str(current_user.get("_id", ""))
+
+    if req.size <= 0 or req.size > MAX_ATTACHMENT_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File too large (max {MAX_ATTACHMENT_BYTES // (1024 * 1024)}MB)",
+        )
+
+    ext = (req.filename.rsplit(".", 1)[-1] if "." in req.filename else "").lower()
+    if ext not in ALLOWED_ATTACHMENT_EXT or req.mime_type not in ALLOWED_ATTACHMENT_MIME:
+        raise HTTPException(status_code=400, detail="File type not allowed")
+
+    attachment_id = str(uuid.uuid4())
+    key = f"{ATTACHMENT_PREFIX}/{user_id}/{attachment_id}.{ext}"
+
+    try:
+        presigned = s3.generate_presigned_post(
+            Bucket=S3_BUCKET,
+            Key=key,
+            Fields={"Content-Type": req.mime_type},
+            Conditions=[
+                {"Content-Type": req.mime_type},
+                ["content-length-range", 1, MAX_ATTACHMENT_BYTES],
+            ],
+            ExpiresIn=300,
+        )
+    except (ClientError, BotoCoreError) as e:
+        logger.error(f"Failed to presign attachment: {e}")
+        raise HTTPException(status_code=502, detail="Could not prepare upload")
+
+    file_url = f"https://{S3_BUCKET}.s3.{AWS_REGION}.amazonaws.com/{key}"
+    return {
+        "id": attachment_id,
+        "key": key,
+        "upload_url": presigned["url"],
+        "fields": presigned["fields"],
+        "file_url": file_url,
+    }
+
+
+@api_router.delete("/attachments")
+async def delete_attachment(key: str = Query(...), current_user: dict = Depends(get_current_user)):
+    """Delete a stored attachment. Scoped to the caller's own prefix."""
+    s3 = get_s3_client()
+    if s3 is None:
+        raise HTTPException(status_code=503, detail="File attachments are not enabled on this server")
+
+    user_id = current_user.get("id") or str(current_user.get("_id", ""))
+    if not key.startswith(f"{ATTACHMENT_PREFIX}/{user_id}/"):
+        raise HTTPException(status_code=403, detail="Not allowed to delete this file")
+
+    try:
+        s3.delete_object(Bucket=S3_BUCKET, Key=key)
+    except (ClientError, BotoCoreError) as e:
+        logger.error(f"Failed to delete attachment {key}: {e}")
+        raise HTTPException(status_code=502, detail="Could not delete file")
+    return {"message": "Attachment deleted"}
 
 
 # ---- Events Endpoints ----
@@ -598,6 +725,7 @@ async def create_indexes():
         await db.notes.create_index([("user_id", 1), ("updated_at", -1)])
         await db.notes.create_index([("user_id", 1), ("is_pinned", -1)])
         await db.notes.create_index([("user_id", 1), ("id", 1)])
+        await db.notes.create_index([("user_id", 1), ("has_attachments", 1)])
         
         # Events indexes
         await db.events.create_index([("user_id", 1), ("start_time", 1)])

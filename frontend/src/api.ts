@@ -111,6 +111,67 @@ export const eventsApi = {
     fetchApi('/events/batch', { method: 'POST', body: JSON.stringify({ event_ids: eventIds }) }),
 };
 
+// ---- Attachments ----
+
+export interface AttachmentMeta {
+  id: string;
+  key: string;
+  url: string;
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  uploaded_at: string;
+}
+
+export const attachmentsApi = {
+  presign: (filename: string, mime_type: string, size: number) =>
+    fetchApi('/attachments/presign', {
+      method: 'POST',
+      body: JSON.stringify({ filename, mime_type, size }),
+    }),
+  remove: (key: string) =>
+    fetchApi(`/attachments?key=${encodeURIComponent(key)}`, { method: 'DELETE' }),
+};
+
+/**
+ * Upload a local file to storage via a presigned POST, returning the metadata to
+ * embed in a note. Throws on failure (caller decides how to surface it). Bytes go
+ * straight to object storage — never base64-inlined into the note (that caused the
+ * AsyncStorage CursorWindow bug).
+ */
+export async function uploadAttachment(file: {
+  uri: string;
+  name: string;
+  mimeType: string;
+  size: number;
+}): Promise<AttachmentMeta> {
+  const presign = await attachmentsApi.presign(file.name, file.mimeType, file.size);
+
+  const form = new FormData();
+  // S3 presigned-POST fields must come before the file part.
+  Object.entries(presign.fields as Record<string, string>).forEach(([k, v]) => {
+    form.append(k, v);
+  });
+  // React Native file part shape.
+  form.append('file', { uri: file.uri, name: file.name, type: file.mimeType } as any);
+
+  const res = await fetch(presign.upload_url, { method: 'POST', body: form });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Upload failed: ${res.status} ${text.slice(0, 200)}`);
+  }
+
+  return {
+    id: presign.id,
+    key: presign.key,
+    url: presign.file_url,
+    filename: file.name,
+    mime_type: file.mimeType,
+    size_bytes: file.size,
+    uploaded_at: new Date().toISOString(),
+  };
+}
+
 export const transcribeApi = {
   transcribe: async (fileUri: string): Promise<{ text: string }> => {
     console.log('Transcribing file from URI:', fileUri);

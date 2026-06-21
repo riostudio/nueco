@@ -1,10 +1,9 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Linking, TouchableOpacity, Modal, Alert, Platform } from 'react-native';
+import React from 'react';
+import { View, Text, StyleSheet, ScrollView, Linking, TouchableOpacity, Alert, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
 import * as SecureStore from 'expo-secure-store';
-import { UserAvatar, useAuth } from '../../src/auth';
+import { UserAvatar } from '../../src/auth';
 
 const C = {
   primary: '#D84315',
@@ -19,26 +18,11 @@ const C = {
 };
 
 export default function SettingsScreen() {
-  const router = useRouter();
-  const { user, logout } = useAuth();
-  const [logoutModalVisible, setLogoutModalVisible] = useState(false);
-
-  const handleLogout = async () => {
-    await logout();
-    setLogoutModalVisible(false);
-    router.replace('/welcome');
-  };
-
   return (
     <SafeAreaView style={s.container} edges={['top']}>
       <View style={s.header}>
         <Text style={s.headerTitle}>Settings</Text>
-        <UserAvatar 
-          user={user} 
-          size={36} 
-          onSignInPress={() => router.push('/login')}
-          onLogout={() => setLogoutModalVisible(true)}
-        />
+        <UserAvatar size={36} />
       </View>
 
       <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent}>
@@ -139,30 +123,6 @@ export default function SettingsScreen() {
 
         <View style={{ height: 40 }} />
       </ScrollView>
-
-      {/* Logout Confirmation Modal */}
-      <Modal
-        visible={logoutModalVisible}
-        transparent={true}
-        animationType="fade"
-        onRequestClose={() => setLogoutModalVisible(false)}
-      >
-        <View style={s.modalOverlay}>
-          <View style={s.modalContent}>
-            <MaterialIcons name="logout" size={48} color={C.primary} style={{ marginBottom: 16 }} />
-            <Text style={s.modalTitle}>Log Out?</Text>
-            <Text style={s.modalMessage}>Are you sure you want to log out?</Text>
-            <View style={s.modalButtons}>
-              <TouchableOpacity style={s.modalCancelBtn} onPress={() => setLogoutModalVisible(false)}>
-                <Text style={s.modalCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={s.modalLogoutBtn} onPress={handleLogout}>
-                <Text style={s.modalLogoutText}>Log Out</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }

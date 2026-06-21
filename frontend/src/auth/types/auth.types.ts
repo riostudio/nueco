@@ -45,3 +45,8 @@ export interface ChangePasswordData {
   new_password: string;
   confirm_password: string;
 }
+
+// Discriminated result for hooks that report success/failure without throwing.
+export type Result<T> =
+  | { success: true; data: T }
+  | { success: false; error: string; code?: number };

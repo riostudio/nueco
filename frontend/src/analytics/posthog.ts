@@ -24,8 +24,8 @@ export const initPostHog = async (userId?: string): Promise<PostHog | null> => {
     posthogInstance = new PostHog(POSTHOG_API_KEY, {
       host: POSTHOG_HOST,
       enableSessionReplay: false, // Session replay not supported in Expo Go
-      captureScreenViews: true,
-      autocapture: true,
+      // Note: autocapture/screen-view capture is configured on <PostHogProvider>,
+      // not in constructor options (posthog-react-native v4).
     });
 
     // Register super properties (global properties for all events)
