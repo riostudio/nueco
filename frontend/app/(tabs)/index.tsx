@@ -7,13 +7,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { notesApi, eventsApi } from '../../src/api';
-import { Note, CalendarEvent } from '../../src/types';
+import { CalendarEvent } from '../../src/types';
 import { C } from '../../src/theme';
 import { UserAvatar, useAuth } from '../../src/auth';
 import { trackNoteSearched, trackNoteDeleted } from '../../src/analytics';
 import { useOfflineNotes } from '../../src/useOfflineNotes';
 import OfflineBanner from '../../src/components/OfflineBanner';
-import { getSyncQueue, getLocalNotes } from '../../src/offlineSync';
+import { getSyncQueue, getLocalNotes, LocalNote } from '../../src/offlineSync';
 
 // Extend C with surfaceHi for this screen
 const Colors = { ...C, surfaceHi: '#FFF8E1' };
@@ -209,7 +209,7 @@ export default function NotesScreen() {
     setNoteToDelete(null);
   };
 
-  const renderCard = (note: Note) => {
+  const renderCard = (note: LocalNote) => {
     const linkedEvent = note.linked_event_id ? eventsMap[note.linked_event_id] : null;
     
     return (

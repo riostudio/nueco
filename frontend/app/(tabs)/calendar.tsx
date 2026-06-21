@@ -136,8 +136,8 @@ export default function CalendarScreen() {
                   testID={day ? `cal-day-${day}` : `cal-empty-${ri}-${ci}`}
                   style={[
                     s.dayCell,
-                    day && isSelected(day) && s.selectedDay,
-                    day && isToday(day) && !isSelected(day) && s.todayDay,
+                    day && isSelected(day) ? s.selectedDay : null,
+                    day && isToday(day) && !isSelected(day) ? s.todayDay : null,
                   ]}
                   onPress={() => day && selectDay(day)}
                   disabled={!day}
@@ -148,8 +148,8 @@ export default function CalendarScreen() {
                       <Text
                         style={[
                           s.dayText,
-                          day && isSelected(day) && s.selectedDayText,
-                          day && isToday(day) && !isSelected(day) && s.todayText,
+                          day && isSelected(day) ? s.selectedDayText : null,
+                          day && isToday(day) && !isSelected(day) ? s.todayText : null,
                         ]}
                       >
                         {day}
