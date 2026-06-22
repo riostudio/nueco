@@ -832,6 +832,17 @@ export default function EditorScreen() {
   const handleRemoveLinkedEvent = () => {
     if (!linkedEvent) return;
     const event = linkedEvent;
+
+    // Persist the cleared link to the server BEFORE updating local state. The
+    // focus refresh re-reads the note on every focus/linkedEventId change, so
+    // relying on the debounced autosave would race it and re-link the event
+    // from the still-stale server value.
+    const clearLinkOnServer = async () => {
+      if (noteIdRef.current && isCreatedRef.current) {
+        await notesApi.update(noteIdRef.current, { linked_event_id: null });
+      }
+    };
+
     Alert.alert(
       'Linked Event',
       `"${event.title}"\n\nUnlink keeps the event in your Calendar. Delete removes it everywhere.`,
@@ -840,9 +851,15 @@ export default function EditorScreen() {
         {
           text: 'Unlink',
           onPress: async () => {
+            try {
+              await clearLinkOnServer();
+            } catch (e) {
+              console.error('Unlink failed:', e);
+              Alert.alert('Error', 'Could not unlink the event. Please try again.');
+              return;
+            }
             setLinkedEventId(null);
             setLinkedEvent(null);
-            triggerAutoSave();
             // Best-effort: drop this note from the event's linked_note_ids
             try {
               const remaining = (event.linked_note_ids || []).filter(id => id !== noteIdRef.current);
@@ -854,15 +871,16 @@ export default function EditorScreen() {
           text: 'Delete Event',
           style: 'destructive',
           onPress: async () => {
-            setLinkedEventId(null);
-            setLinkedEvent(null);
-            triggerAutoSave();
             try {
+              await clearLinkOnServer();
               await eventsApi.delete(event.id);
             } catch (e) {
               console.error('Delete event failed:', e);
-              Alert.alert('Error', 'Could not delete the event. It has been unlinked from this note.');
+              Alert.alert('Error', 'Could not delete the event. Please try again.');
+              return;
             }
+            setLinkedEventId(null);
+            setLinkedEvent(null);
           },
         },
       ],
