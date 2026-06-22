@@ -131,6 +131,9 @@ export const attachmentsApi = {
     }),
   remove: (key: string) =>
     fetchApi(`/attachments?key=${encodeURIComponent(key)}`, { method: 'DELETE' }),
+  // Presigned GET URL for viewing/downloading (valid ~7 days); used for tap-to-open and share links.
+  downloadUrl: (key: string): Promise<{ url: string }> =>
+    fetchApi('/attachments/download-url', { method: 'POST', body: JSON.stringify({ key }) }),
 };
 
 /**

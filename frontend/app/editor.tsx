@@ -10,6 +10,7 @@ import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { useAudioRecorder, AudioModule, RecordingPresets, setAudioModeAsync } from 'expo-audio';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
+import * as WebBrowser from 'expo-web-browser';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { notesApi, eventsApi, transcribeApi, textProcessApi, attachmentsApi, uploadAttachment } from '../src/api';
 import { Tag, CalendarEvent, Attachment } from '../src/types';
@@ -515,6 +516,19 @@ export default function EditorScreen() {
       }
     }
 
+    // Append secure download links for attachments (valid ~7 days)
+    if (attachments.length > 0) {
+      shareText += '\n📎 Attachments\n';
+      for (const att of attachments) {
+        try {
+          const { url } = await attachmentsApi.downloadUrl(att.key);
+          shareText += `${att.filename}: ${url}\n`;
+        } catch {
+          shareText += `${att.filename}: (link unavailable)\n`;
+        }
+      }
+    }
+
     try {
       const result = await Share.share({
         message: shareText.trim(),
@@ -724,44 +738,84 @@ export default function EditorScreen() {
 
   // File attachment (paperclip) — picks a file, uploads to storage, embeds metadata.
   // Online-direct, matching the editor's existing save model. Never base64-inlines.
-  const MAX_ATTACHMENT_MB = 25;
+  const MAX_ATTACHMENT_MB = 100;
+  const MAX_PICK_AT_ONCE = 10;
+
+  // Pick up to MAX_PICK_AT_ONCE files at once and upload each (online-direct).
   const pickAttachment = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
         copyToCacheDirectory: true,
-        multiple: false,
+        multiple: true,
       });
       if (result.canceled || !result.assets || result.assets.length === 0) return;
 
-      const asset = result.assets[0];
-      const size = asset.size ?? 0;
-      const name = asset.name || 'file';
-      const mimeType = asset.mimeType || 'application/octet-stream';
-
-      if (size > MAX_ATTACHMENT_MB * 1024 * 1024) {
-        Alert.alert('File too large', `Attachments must be under ${MAX_ATTACHMENT_MB}MB.`);
-        return;
+      let assets = result.assets;
+      if (assets.length > MAX_PICK_AT_ONCE) {
+        Alert.alert('Too many files', `You can attach up to ${MAX_PICK_AT_ONCE} files at once. Adding the first ${MAX_PICK_AT_ONCE}.`);
+        assets = assets.slice(0, MAX_PICK_AT_ONCE);
       }
 
       setIsUploadingAttachment(true);
-      try {
-        const meta = await uploadAttachment({ uri: asset.uri, name, mimeType, size });
-        setAttachments(prev => [...prev, meta]);
+      const uploaded: Attachment[] = [];
+      const failures: string[] = [];
+      let notEnabled = false;
+
+      for (const asset of assets) {
+        const size = asset.size ?? 0;
+        const name = asset.name || 'file';
+        const mimeType = asset.mimeType || 'application/octet-stream';
+
+        if (size > MAX_ATTACHMENT_MB * 1024 * 1024) {
+          failures.push(`${name} (over ${MAX_ATTACHMENT_MB}MB)`);
+          continue;
+        }
+        try {
+          const meta = await uploadAttachment({ uri: asset.uri, name, mimeType, size });
+          uploaded.push(meta);
+        } catch (e: any) {
+          if (e?.message?.includes('503') || e?.message?.includes('not enabled')) notEnabled = true;
+          failures.push(name);
+        }
+      }
+
+      if (uploaded.length > 0) {
+        setAttachments(prev => [...prev, ...uploaded]);
         triggerAutoSave();
-      } catch (e: any) {
-        const notEnabled = e?.message?.includes('503') || e?.message?.includes('not enabled');
+      }
+      setIsUploadingAttachment(false);
+
+      if (failures.length > 0) {
         Alert.alert(
-          'Upload failed',
+          uploaded.length > 0 ? 'Some files were not added' : 'Upload failed',
           notEnabled
             ? 'File attachments aren’t enabled on the server yet.'
-            : 'Could not upload the file. Please check your connection and try again.',
+            : `Couldn’t upload: ${failures.join(', ')}`,
         );
-      } finally {
-        setIsUploadingAttachment(false);
       }
     } catch (e) {
       console.error('Attachment pick failed:', e);
+      setIsUploadingAttachment(false);
     }
+  };
+
+  // Open an attachment (image/video/audio/pdf/doc) via a presigned GET URL.
+  const openAttachment = async (att: Attachment) => {
+    try {
+      const { url } = await attachmentsApi.downloadUrl(att.key);
+      await WebBrowser.openBrowserAsync(url);
+    } catch (e) {
+      console.error('Open attachment failed:', e);
+      Alert.alert('Could not open', 'Unable to open this file right now. Please try again.');
+    }
+  };
+
+  const attachmentIcon = (mime: string): keyof typeof MaterialIcons.glyphMap => {
+    if (mime.startsWith('image/')) return 'image';
+    if (mime.startsWith('video/')) return 'movie';
+    if (mime.startsWith('audio/')) return 'audiotrack';
+    if (mime === 'application/pdf') return 'picture-as-pdf';
+    return 'insert-drive-file';
   };
 
   const removeAttachment = (att: Attachment) => {
@@ -1051,9 +1105,16 @@ export default function EditorScreen() {
             <View style={s.imagesContainer}>
               <Text style={s.imagesSectionTitle}>Attachments</Text>
               {attachments.map((att) => (
-                <View key={att.id} style={s.attachmentRow}>
-                  <MaterialIcons name="insert-drive-file" size={22} color={C.secondary} />
+                <TouchableOpacity
+                  key={att.id}
+                  style={s.attachmentRow}
+                  onPress={() => openAttachment(att)}
+                  activeOpacity={0.7}
+                  testID={`open-attachment-${att.id}`}
+                >
+                  <MaterialIcons name={attachmentIcon(att.mime_type)} size={22} color={C.secondary} />
                   <Text style={s.attachmentName} numberOfLines={1}>{att.filename}</Text>
+                  <MaterialIcons name="open-in-new" size={18} color={C.borderSub} />
                   <TouchableOpacity
                     testID={`remove-attachment-${att.id}`}
                     onPress={() => removeAttachment(att)}
@@ -1061,7 +1122,7 @@ export default function EditorScreen() {
                   >
                     <MaterialIcons name="close" size={20} color={C.error} />
                   </TouchableOpacity>
-                </View>
+                </TouchableOpacity>
               ))}
             </View>
           )}
