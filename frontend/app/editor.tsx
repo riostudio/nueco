@@ -44,6 +44,9 @@ export default function EditorScreen() {
   const [isPinned, setIsPinned] = useState(false);
   const [linkedEventId, setLinkedEventId] = useState<string | null>(null);
   const [linkedEvent, setLinkedEvent] = useState<CalendarEvent | null>(null);
+  const [showEventPicker, setShowEventPicker] = useState(false);
+  const [pickerEvents, setPickerEvents] = useState<CalendarEvent[]>([]);
+  const [loadingPickerEvents, setLoadingPickerEvents] = useState(false);
   const [saveStatus, setSaveStatus] = useState('');
   const [loading, setLoading] = useState(!isNew);
 
@@ -825,6 +828,77 @@ export default function EditorScreen() {
     attachmentsApi.remove(att.key).catch(() => {});
   };
 
+  // Tap the linked-event card's delete control -> choose to unlink or fully delete.
+  const handleRemoveLinkedEvent = () => {
+    if (!linkedEvent) return;
+    const event = linkedEvent;
+    Alert.alert(
+      'Linked Event',
+      `"${event.title}"\n\nUnlink keeps the event in your Calendar. Delete removes it everywhere.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Unlink',
+          onPress: async () => {
+            setLinkedEventId(null);
+            setLinkedEvent(null);
+            triggerAutoSave();
+            // Best-effort: drop this note from the event's linked_note_ids
+            try {
+              const remaining = (event.linked_note_ids || []).filter(id => id !== noteIdRef.current);
+              await eventsApi.update(event.id, { linked_note_ids: remaining });
+            } catch {}
+          },
+        },
+        {
+          text: 'Delete Event',
+          style: 'destructive',
+          onPress: async () => {
+            setLinkedEventId(null);
+            setLinkedEvent(null);
+            triggerAutoSave();
+            try {
+              await eventsApi.delete(event.id);
+            } catch (e) {
+              console.error('Delete event failed:', e);
+              Alert.alert('Error', 'Could not delete the event. It has been unlinked from this note.');
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  // Open a picker of existing events to link to this note.
+  const openEventPicker = async () => {
+    setShowEventPicker(true);
+    setLoadingPickerEvents(true);
+    try {
+      const events = await eventsApi.getAll();
+      setPickerEvents(events);
+    } catch (e) {
+      console.error('Load events for picker failed:', e);
+      setPickerEvents([]);
+    } finally {
+      setLoadingPickerEvents(false);
+    }
+  };
+
+  const linkExistingEvent = async (event: CalendarEvent) => {
+    setShowEventPicker(false);
+    setLinkedEventId(event.id);
+    setLinkedEvent(event);
+    triggerAutoSave();
+    // Best-effort: add this note to the event's linked_note_ids (only if the note exists)
+    try {
+      const noteId = noteIdRef.current;
+      if (noteId) {
+        const ids = Array.from(new Set([...(event.linked_note_ids || []), noteId]));
+        await eventsApi.update(event.id, { linked_note_ids: ids });
+      }
+    } catch {}
+  };
+
   const addTag = () => {
     if (!newTagName.trim()) return;
     if (tags.length >= 3) {
@@ -1165,6 +1239,14 @@ export default function EditorScreen() {
               <View style={s.eventHeader}>
                 <MaterialIcons name="event" size={24} color={C.secondary} />
                 <Text style={s.eventHeaderText}>Linked Event</Text>
+                <TouchableOpacity
+                  testID="remove-linked-event-btn"
+                  onPress={handleRemoveLinkedEvent}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  style={{ paddingHorizontal: 4 }}
+                >
+                  <MaterialIcons name="delete-outline" size={22} color={C.error} />
+                </TouchableOpacity>
                 <MaterialIcons name="chevron-right" size={24} color={C.borderSub} />
               </View>
               <View style={s.eventDetails}>
@@ -1197,23 +1279,34 @@ export default function EditorScreen() {
               </View>
             </TouchableOpacity>
           ) : (
-            <TouchableOpacity
-              testID="schedule-event-btn"
-              style={s.calBtn}
-              onPress={() =>
-                router.push({
-                  pathname: '/event-editor',
-                  params: {
-                    noteId: noteIdRef.current || 'new',
-                    noteTitle: title,
-                  },
-                })
-              }
-            >
-              <MaterialIcons name="calendar-today" size={24} color={C.secondary} />
-              <Text style={s.calBtnText}>Schedule Calendar Event</Text>
-              <MaterialIcons name="chevron-right" size={24} color={C.borderSub} />
-            </TouchableOpacity>
+            <View>
+              <TouchableOpacity
+                testID="schedule-event-btn"
+                style={s.calBtn}
+                onPress={() =>
+                  router.push({
+                    pathname: '/event-editor',
+                    params: {
+                      noteId: noteIdRef.current || 'new',
+                      noteTitle: title,
+                    },
+                  })
+                }
+              >
+                <MaterialIcons name="calendar-today" size={24} color={C.secondary} />
+                <Text style={s.calBtnText}>Schedule New Event</Text>
+                <MaterialIcons name="chevron-right" size={24} color={C.borderSub} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="link-event-btn"
+                style={[s.calBtn, { marginTop: 10 }]}
+                onPress={openEventPicker}
+              >
+                <MaterialIcons name="link" size={24} color={C.secondary} />
+                <Text style={s.calBtnText}>Link Existing Event</Text>
+                <MaterialIcons name="chevron-right" size={24} color={C.borderSub} />
+              </TouchableOpacity>
+            </View>
           )}
 
           <View style={{ height: 120 }} />
@@ -1411,6 +1504,55 @@ export default function EditorScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Link Existing Event picker */}
+      <Modal
+        visible={showEventPicker}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowEventPicker(false)}
+      >
+        <View style={s.pickerOverlay}>
+          <View style={s.pickerSheet}>
+            <View style={s.pickerHeader}>
+              <Text style={s.pickerTitle}>Link an Event</Text>
+              <TouchableOpacity
+                testID="close-event-picker"
+                onPress={() => setShowEventPicker(false)}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <MaterialIcons name="close" size={24} color={C.textSec} />
+              </TouchableOpacity>
+            </View>
+            {loadingPickerEvents ? (
+              <ActivityIndicator size="large" color={C.primary} style={{ marginVertical: 32 }} />
+            ) : pickerEvents.length === 0 ? (
+              <Text style={s.pickerEmpty}>No events yet. Use “Schedule New Event” to create one.</Text>
+            ) : (
+              <ScrollView style={{ maxHeight: 380 }}>
+                {pickerEvents.map((ev) => (
+                  <TouchableOpacity
+                    key={ev.id}
+                    testID={`pick-event-${ev.id}`}
+                    style={s.pickerRow}
+                    onPress={() => linkExistingEvent(ev)}
+                    activeOpacity={0.7}
+                  >
+                    <MaterialIcons name="event" size={22} color={C.secondary} />
+                    <View style={{ flex: 1, marginLeft: 10 }}>
+                      <Text style={s.pickerRowTitle} numberOfLines={1}>{ev.title}</Text>
+                      <Text style={s.pickerRowTime} numberOfLines={1}>
+                        {formatEventDateTime(ev.start_time)}
+                      </Text>
+                    </View>
+                    <MaterialIcons name="link" size={20} color={C.borderSub} />
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1573,6 +1715,23 @@ const s = StyleSheet.create({
     borderWidth: 2, borderColor: C.borderSub, marginTop: 16,
   },
   calBtnText: { flex: 1, fontSize: 18, color: C.secondary, marginLeft: 12, fontWeight: '500' },
+  // Event picker modal
+  pickerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  pickerSheet: {
+    backgroundColor: C.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    paddingHorizontal: 20, paddingTop: 16, paddingBottom: 32,
+  },
+  pickerHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12,
+  },
+  pickerTitle: { fontSize: 20, fontWeight: '700', color: C.text },
+  pickerEmpty: { fontSize: 16, color: C.textSec, textAlign: 'center', marginVertical: 32 },
+  pickerRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: C.borderSub + '30',
+  },
+  pickerRowTitle: { fontSize: 16, fontWeight: '600', color: C.text },
+  pickerRowTime: { fontSize: 13, color: C.textSec, marginTop: 2 },
   // Event Card Styles
   eventCard: {
     backgroundColor: C.surface, borderRadius: 12, padding: 16,

@@ -296,11 +296,15 @@ async def update_note(note_id: str, update: NoteUpdate, current_user: dict = Dep
     user_id = current_user.get("id") or str(current_user.get("_id", ""))
     updates = {}
     for k, v in update.model_dump(exclude_unset=True).items():
-        if v is not None:
-            if k == "tags":
-                updates[k] = [t if isinstance(t, dict) else t for t in v]
-            else:
-                updates[k] = v
+        if v is None:
+            # Only allow explicitly clearing linked_event_id (unlinking an event).
+            if k == "linked_event_id":
+                updates[k] = None
+            continue
+        if k == "tags":
+            updates[k] = [t if isinstance(t, dict) else t for t in v]
+        else:
+            updates[k] = v
     # Keep the denormalized flag in sync whenever attachments are part of the update.
     if "attachments" in updates:
         updates["has_attachments"] = len(updates["attachments"]) > 0
