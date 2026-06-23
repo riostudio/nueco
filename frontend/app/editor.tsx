@@ -10,6 +10,7 @@ import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { useAudioRecorder, AudioModule, RecordingPresets, setAudioModeAsync } from 'expo-audio';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
+import * as WebBrowser from 'expo-web-browser';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { notesApi, eventsApi, transcribeApi, textProcessApi, attachmentsApi, uploadAttachment } from '../src/api';
 import { Tag, CalendarEvent, Attachment } from '../src/types';
@@ -43,6 +44,9 @@ export default function EditorScreen() {
   const [isPinned, setIsPinned] = useState(false);
   const [linkedEventId, setLinkedEventId] = useState<string | null>(null);
   const [linkedEvent, setLinkedEvent] = useState<CalendarEvent | null>(null);
+  const [showEventPicker, setShowEventPicker] = useState(false);
+  const [pickerEvents, setPickerEvents] = useState<CalendarEvent[]>([]);
+  const [loadingPickerEvents, setLoadingPickerEvents] = useState(false);
   const [saveStatus, setSaveStatus] = useState('');
   const [loading, setLoading] = useState(!isNew);
 
@@ -515,6 +519,19 @@ export default function EditorScreen() {
       }
     }
 
+    // Append secure download links for attachments (valid ~7 days)
+    if (attachments.length > 0) {
+      shareText += '\n📎 Attachments\n';
+      for (const att of attachments) {
+        try {
+          const { url } = await attachmentsApi.downloadUrl(att.key);
+          shareText += `${att.filename}: ${url}\n`;
+        } catch {
+          shareText += `${att.filename}: (link unavailable)\n`;
+        }
+      }
+    }
+
     try {
       const result = await Share.share({
         message: shareText.trim(),
@@ -724,44 +741,84 @@ export default function EditorScreen() {
 
   // File attachment (paperclip) — picks a file, uploads to storage, embeds metadata.
   // Online-direct, matching the editor's existing save model. Never base64-inlines.
-  const MAX_ATTACHMENT_MB = 25;
+  const MAX_ATTACHMENT_MB = 100;
+  const MAX_PICK_AT_ONCE = 10;
+
+  // Pick up to MAX_PICK_AT_ONCE files at once and upload each (online-direct).
   const pickAttachment = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
         copyToCacheDirectory: true,
-        multiple: false,
+        multiple: true,
       });
       if (result.canceled || !result.assets || result.assets.length === 0) return;
 
-      const asset = result.assets[0];
-      const size = asset.size ?? 0;
-      const name = asset.name || 'file';
-      const mimeType = asset.mimeType || 'application/octet-stream';
-
-      if (size > MAX_ATTACHMENT_MB * 1024 * 1024) {
-        Alert.alert('File too large', `Attachments must be under ${MAX_ATTACHMENT_MB}MB.`);
-        return;
+      let assets = result.assets;
+      if (assets.length > MAX_PICK_AT_ONCE) {
+        Alert.alert('Too many files', `You can attach up to ${MAX_PICK_AT_ONCE} files at once. Adding the first ${MAX_PICK_AT_ONCE}.`);
+        assets = assets.slice(0, MAX_PICK_AT_ONCE);
       }
 
       setIsUploadingAttachment(true);
-      try {
-        const meta = await uploadAttachment({ uri: asset.uri, name, mimeType, size });
-        setAttachments(prev => [...prev, meta]);
+      const uploaded: Attachment[] = [];
+      const failures: string[] = [];
+      let notEnabled = false;
+
+      for (const asset of assets) {
+        const size = asset.size ?? 0;
+        const name = asset.name || 'file';
+        const mimeType = asset.mimeType || 'application/octet-stream';
+
+        if (size > MAX_ATTACHMENT_MB * 1024 * 1024) {
+          failures.push(`${name} (over ${MAX_ATTACHMENT_MB}MB)`);
+          continue;
+        }
+        try {
+          const meta = await uploadAttachment({ uri: asset.uri, name, mimeType, size });
+          uploaded.push(meta);
+        } catch (e: any) {
+          if (e?.message?.includes('503') || e?.message?.includes('not enabled')) notEnabled = true;
+          failures.push(name);
+        }
+      }
+
+      if (uploaded.length > 0) {
+        setAttachments(prev => [...prev, ...uploaded]);
         triggerAutoSave();
-      } catch (e: any) {
-        const notEnabled = e?.message?.includes('503') || e?.message?.includes('not enabled');
+      }
+      setIsUploadingAttachment(false);
+
+      if (failures.length > 0) {
         Alert.alert(
-          'Upload failed',
+          uploaded.length > 0 ? 'Some files were not added' : 'Upload failed',
           notEnabled
             ? 'File attachments aren’t enabled on the server yet.'
-            : 'Could not upload the file. Please check your connection and try again.',
+            : `Couldn’t upload: ${failures.join(', ')}`,
         );
-      } finally {
-        setIsUploadingAttachment(false);
       }
     } catch (e) {
       console.error('Attachment pick failed:', e);
+      setIsUploadingAttachment(false);
     }
+  };
+
+  // Open an attachment (image/video/audio/pdf/doc) via a presigned GET URL.
+  const openAttachment = async (att: Attachment) => {
+    try {
+      const { url } = await attachmentsApi.downloadUrl(att.key);
+      await WebBrowser.openBrowserAsync(url);
+    } catch (e) {
+      console.error('Open attachment failed:', e);
+      Alert.alert('Could not open', 'Unable to open this file right now. Please try again.');
+    }
+  };
+
+  const attachmentIcon = (mime: string): keyof typeof MaterialIcons.glyphMap => {
+    if (mime.startsWith('image/')) return 'image';
+    if (mime.startsWith('video/')) return 'movie';
+    if (mime.startsWith('audio/')) return 'audiotrack';
+    if (mime === 'application/pdf') return 'picture-as-pdf';
+    return 'insert-drive-file';
   };
 
   const removeAttachment = (att: Attachment) => {
@@ -769,6 +826,95 @@ export default function EditorScreen() {
     triggerAutoSave();
     // Best-effort remote cleanup; storage lifecycle/next save reconciles on failure.
     attachmentsApi.remove(att.key).catch(() => {});
+  };
+
+  // Tap the linked-event card's delete control -> choose to unlink or fully delete.
+  const handleRemoveLinkedEvent = () => {
+    if (!linkedEvent) return;
+    const event = linkedEvent;
+
+    // Persist the cleared link to the server BEFORE updating local state. The
+    // focus refresh re-reads the note on every focus/linkedEventId change, so
+    // relying on the debounced autosave would race it and re-link the event
+    // from the still-stale server value.
+    const clearLinkOnServer = async () => {
+      if (noteIdRef.current && isCreatedRef.current) {
+        await notesApi.update(noteIdRef.current, { linked_event_id: null });
+      }
+    };
+
+    Alert.alert(
+      'Linked Event',
+      `"${event.title}"\n\nUnlink keeps the event in your Calendar. Delete removes it everywhere.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Unlink',
+          onPress: async () => {
+            try {
+              await clearLinkOnServer();
+            } catch (e) {
+              console.error('Unlink failed:', e);
+              Alert.alert('Error', 'Could not unlink the event. Please try again.');
+              return;
+            }
+            setLinkedEventId(null);
+            setLinkedEvent(null);
+            // Best-effort: drop this note from the event's linked_note_ids
+            try {
+              const remaining = (event.linked_note_ids || []).filter(id => id !== noteIdRef.current);
+              await eventsApi.update(event.id, { linked_note_ids: remaining });
+            } catch {}
+          },
+        },
+        {
+          text: 'Delete Event',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await clearLinkOnServer();
+              await eventsApi.delete(event.id);
+            } catch (e) {
+              console.error('Delete event failed:', e);
+              Alert.alert('Error', 'Could not delete the event. Please try again.');
+              return;
+            }
+            setLinkedEventId(null);
+            setLinkedEvent(null);
+          },
+        },
+      ],
+    );
+  };
+
+  // Open a picker of existing events to link to this note.
+  const openEventPicker = async () => {
+    setShowEventPicker(true);
+    setLoadingPickerEvents(true);
+    try {
+      const events = await eventsApi.getAll();
+      setPickerEvents(events);
+    } catch (e) {
+      console.error('Load events for picker failed:', e);
+      setPickerEvents([]);
+    } finally {
+      setLoadingPickerEvents(false);
+    }
+  };
+
+  const linkExistingEvent = async (event: CalendarEvent) => {
+    setShowEventPicker(false);
+    setLinkedEventId(event.id);
+    setLinkedEvent(event);
+    triggerAutoSave();
+    // Best-effort: add this note to the event's linked_note_ids (only if the note exists)
+    try {
+      const noteId = noteIdRef.current;
+      if (noteId) {
+        const ids = Array.from(new Set([...(event.linked_note_ids || []), noteId]));
+        await eventsApi.update(event.id, { linked_note_ids: ids });
+      }
+    } catch {}
   };
 
   const addTag = () => {
@@ -1051,9 +1197,16 @@ export default function EditorScreen() {
             <View style={s.imagesContainer}>
               <Text style={s.imagesSectionTitle}>Attachments</Text>
               {attachments.map((att) => (
-                <View key={att.id} style={s.attachmentRow}>
-                  <MaterialIcons name="insert-drive-file" size={22} color={C.secondary} />
+                <TouchableOpacity
+                  key={att.id}
+                  style={s.attachmentRow}
+                  onPress={() => openAttachment(att)}
+                  activeOpacity={0.7}
+                  testID={`open-attachment-${att.id}`}
+                >
+                  <MaterialIcons name={attachmentIcon(att.mime_type)} size={22} color={C.secondary} />
                   <Text style={s.attachmentName} numberOfLines={1}>{att.filename}</Text>
+                  <MaterialIcons name="open-in-new" size={18} color={C.borderSub} />
                   <TouchableOpacity
                     testID={`remove-attachment-${att.id}`}
                     onPress={() => removeAttachment(att)}
@@ -1061,7 +1214,7 @@ export default function EditorScreen() {
                   >
                     <MaterialIcons name="close" size={20} color={C.error} />
                   </TouchableOpacity>
-                </View>
+                </TouchableOpacity>
               ))}
             </View>
           )}
@@ -1104,6 +1257,14 @@ export default function EditorScreen() {
               <View style={s.eventHeader}>
                 <MaterialIcons name="event" size={24} color={C.secondary} />
                 <Text style={s.eventHeaderText}>Linked Event</Text>
+                <TouchableOpacity
+                  testID="remove-linked-event-btn"
+                  onPress={handleRemoveLinkedEvent}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  style={{ paddingHorizontal: 4 }}
+                >
+                  <MaterialIcons name="delete-outline" size={22} color={C.error} />
+                </TouchableOpacity>
                 <MaterialIcons name="chevron-right" size={24} color={C.borderSub} />
               </View>
               <View style={s.eventDetails}>
@@ -1136,23 +1297,34 @@ export default function EditorScreen() {
               </View>
             </TouchableOpacity>
           ) : (
-            <TouchableOpacity
-              testID="schedule-event-btn"
-              style={s.calBtn}
-              onPress={() =>
-                router.push({
-                  pathname: '/event-editor',
-                  params: {
-                    noteId: noteIdRef.current || 'new',
-                    noteTitle: title,
-                  },
-                })
-              }
-            >
-              <MaterialIcons name="calendar-today" size={24} color={C.secondary} />
-              <Text style={s.calBtnText}>Schedule Calendar Event</Text>
-              <MaterialIcons name="chevron-right" size={24} color={C.borderSub} />
-            </TouchableOpacity>
+            <View>
+              <TouchableOpacity
+                testID="schedule-event-btn"
+                style={s.calBtn}
+                onPress={() =>
+                  router.push({
+                    pathname: '/event-editor',
+                    params: {
+                      noteId: noteIdRef.current || 'new',
+                      noteTitle: title,
+                    },
+                  })
+                }
+              >
+                <MaterialIcons name="calendar-today" size={24} color={C.secondary} />
+                <Text style={s.calBtnText}>Schedule New Event</Text>
+                <MaterialIcons name="chevron-right" size={24} color={C.borderSub} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="link-event-btn"
+                style={[s.calBtn, { marginTop: 10 }]}
+                onPress={openEventPicker}
+              >
+                <MaterialIcons name="link" size={24} color={C.secondary} />
+                <Text style={s.calBtnText}>Link Existing Event</Text>
+                <MaterialIcons name="chevron-right" size={24} color={C.borderSub} />
+              </TouchableOpacity>
+            </View>
           )}
 
           <View style={{ height: 120 }} />
@@ -1350,6 +1522,55 @@ export default function EditorScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Link Existing Event picker */}
+      <Modal
+        visible={showEventPicker}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowEventPicker(false)}
+      >
+        <View style={s.pickerOverlay}>
+          <View style={s.pickerSheet}>
+            <View style={s.pickerHeader}>
+              <Text style={s.pickerTitle}>Link an Event</Text>
+              <TouchableOpacity
+                testID="close-event-picker"
+                onPress={() => setShowEventPicker(false)}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <MaterialIcons name="close" size={24} color={C.textSec} />
+              </TouchableOpacity>
+            </View>
+            {loadingPickerEvents ? (
+              <ActivityIndicator size="large" color={C.primary} style={{ marginVertical: 32 }} />
+            ) : pickerEvents.length === 0 ? (
+              <Text style={s.pickerEmpty}>No events yet. Use “Schedule New Event” to create one.</Text>
+            ) : (
+              <ScrollView style={{ maxHeight: 380 }}>
+                {pickerEvents.map((ev) => (
+                  <TouchableOpacity
+                    key={ev.id}
+                    testID={`pick-event-${ev.id}`}
+                    style={s.pickerRow}
+                    onPress={() => linkExistingEvent(ev)}
+                    activeOpacity={0.7}
+                  >
+                    <MaterialIcons name="event" size={22} color={C.secondary} />
+                    <View style={{ flex: 1, marginLeft: 10 }}>
+                      <Text style={s.pickerRowTitle} numberOfLines={1}>{ev.title}</Text>
+                      <Text style={s.pickerRowTime} numberOfLines={1}>
+                        {formatEventDateTime(ev.start_time)}
+                      </Text>
+                    </View>
+                    <MaterialIcons name="link" size={20} color={C.borderSub} />
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1512,6 +1733,23 @@ const s = StyleSheet.create({
     borderWidth: 2, borderColor: C.borderSub, marginTop: 16,
   },
   calBtnText: { flex: 1, fontSize: 18, color: C.secondary, marginLeft: 12, fontWeight: '500' },
+  // Event picker modal
+  pickerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  pickerSheet: {
+    backgroundColor: C.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    paddingHorizontal: 20, paddingTop: 16, paddingBottom: 32,
+  },
+  pickerHeader: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12,
+  },
+  pickerTitle: { fontSize: 20, fontWeight: '700', color: C.text },
+  pickerEmpty: { fontSize: 16, color: C.textSec, textAlign: 'center', marginVertical: 32 },
+  pickerRow: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: C.borderSub + '30',
+  },
+  pickerRowTitle: { fontSize: 16, fontWeight: '600', color: C.text },
+  pickerRowTime: { fontSize: 13, color: C.textSec, marginTop: 2 },
   // Event Card Styles
   eventCard: {
     backgroundColor: C.surface, borderRadius: 12, padding: 16,

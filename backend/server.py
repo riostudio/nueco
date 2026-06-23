@@ -74,9 +74,17 @@ from botocore.exceptions import ClientError, BotoCoreError
 S3_BUCKET = os.getenv("S3_BUCKET")
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 ATTACHMENT_PREFIX = "note-attachments"
-MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024  # 25 MB
+MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024  # 100 MB (videos are large)
 ALLOWED_ATTACHMENT_MIME = {
+    # images
     "image/jpeg", "image/png", "image/gif", "image/webp", "image/heic",
+    # video
+    "video/mp4", "video/quicktime", "video/webm", "video/x-msvideo",
+    "video/x-matroska", "video/3gpp",
+    # audio
+    "audio/mpeg", "audio/mp4", "audio/x-m4a", "audio/wav", "audio/x-wav",
+    "audio/aac", "audio/ogg", "audio/webm",
+    # docs
     "application/pdf", "text/plain", "text/csv",
     "application/msword",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -86,7 +94,10 @@ ALLOWED_ATTACHMENT_MIME = {
     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 }
 ALLOWED_ATTACHMENT_EXT = {
-    "jpg", "jpeg", "png", "gif", "webp", "heic", "pdf", "txt", "csv",
+    "jpg", "jpeg", "png", "gif", "webp", "heic",
+    "mp4", "mov", "webm", "avi", "mkv", "3gp", "m4v",
+    "mp3", "m4a", "wav", "aac", "ogg", "oga",
+    "pdf", "txt", "csv",
     "doc", "docx", "xls", "xlsx", "ppt", "pptx",
 }
 
@@ -285,11 +296,15 @@ async def update_note(note_id: str, update: NoteUpdate, current_user: dict = Dep
     user_id = current_user.get("id") or str(current_user.get("_id", ""))
     updates = {}
     for k, v in update.model_dump(exclude_unset=True).items():
-        if v is not None:
-            if k == "tags":
-                updates[k] = [t if isinstance(t, dict) else t for t in v]
-            else:
-                updates[k] = v
+        if v is None:
+            # Only allow explicitly clearing linked_event_id (unlinking an event).
+            if k == "linked_event_id":
+                updates[k] = None
+            continue
+        if k == "tags":
+            updates[k] = [t if isinstance(t, dict) else t for t in v]
+        else:
+            updates[k] = v
     # Keep the denormalized flag in sync whenever attachments are part of the update.
     if "attachments" in updates:
         updates["has_attachments"] = len(updates["attachments"]) > 0
@@ -402,6 +417,34 @@ async def delete_attachment(key: str = Query(...), current_user: dict = Depends(
         logger.error(f"Failed to delete attachment {key}: {e}")
         raise HTTPException(status_code=502, detail="Could not delete file")
     return {"message": "Attachment deleted"}
+
+
+class DownloadUrlRequest(BaseModel):
+    key: str
+
+
+@api_router.post("/attachments/download-url")
+async def attachment_download_url(req: DownloadUrlRequest, current_user: dict = Depends(get_current_user)):
+    """Return a presigned GET URL for viewing/downloading an attachment.
+    Scoped to the caller's own prefix. Used for tap-to-open and shareable links."""
+    s3 = get_s3_client()
+    if s3 is None:
+        raise HTTPException(status_code=503, detail="File attachments are not enabled on this server")
+
+    user_id = current_user.get("id") or str(current_user.get("_id", ""))
+    if not req.key.startswith(f"{ATTACHMENT_PREFIX}/{user_id}/"):
+        raise HTTPException(status_code=403, detail="Not allowed to access this file")
+
+    try:
+        url = s3.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": S3_BUCKET, "Key": req.key},
+            ExpiresIn=7 * 24 * 3600,  # 7 days (SigV4 max) — covers tap-to-open and shared links
+        )
+    except (ClientError, BotoCoreError) as e:
+        logger.error(f"Failed to presign download for {req.key}: {e}")
+        raise HTTPException(status_code=502, detail="Could not prepare download")
+    return {"url": url}
 
 
 # ---- Events Endpoints ----
