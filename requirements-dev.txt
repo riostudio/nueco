@@ -1,0 +1,32 @@
+# Dev/test dependencies for the MemoPad simulation suite (tests/).
+#
+# Runs the real backend (backend/server.py) in-process against an in-memory Mongo,
+# so the heavy/outbound-only deps (openai, boto3, requests) are stubbed by
+# tests/harness.py and are intentionally NOT required here.
+#
+#   python -m venv .venv && source .venv/bin/activate
+#   pip install -r requirements-dev.txt
+#   python tests/simulate_users.py        # run the simulation + write reports
+#   pytest                                 # run the eval suites (tests/evals)
+#
+# Pinned to versions verified on Python 3.14.
+
+# --- backend runtime (needed to import server.py + auth) ---
+fastapi==0.138.0
+starlette==1.3.1
+uvicorn==0.49.0
+pydantic==2.13.4
+email-validator==2.3.0          # pydantic EmailStr
+python-multipart==0.0.32        # fastapi UploadFile (transcribe route)
+motor==3.7.1
+pymongo==4.17.0
+python-dotenv==1.2.2
+bcrypt==5.0.0                    # auth password hashing
+PyJWT==2.13.0                   # auth tokens
+
+# --- test harness + eval suites ---
+httpx==0.28.1                   # in-process ASGI client + staging runner
+mongomock==4.3.0                # in-memory Mongo
+mongomock-motor==0.0.36         # async wrapper over mongomock
+pytest==9.1.1
+pytest-asyncio==1.4.0

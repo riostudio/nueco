@@ -209,8 +209,28 @@ class BatchEventIds(BaseModel):
 
 # ---- Notes Endpoints ----
 
+# Server-side payload caps so an oversized note is rejected cleanly (413) instead
+# of consuming memory / risking MongoDB's 16MB document limit as an unhandled 500.
+MAX_NOTE_TITLE_CHARS = 1_000
+MAX_NOTE_CONTENT_CHARS = 256 * 1024          # 256 KB of text
+MAX_NOTE_IMAGES_BYTES = 8 * 1024 * 1024      # 8 MB total base64 image payload
+
+
+def _validate_note_payload(title=None, content=None, images=None):
+    """Reject oversized note fields with 413. Only checks provided (non-None) fields."""
+    if title is not None and len(title) > MAX_NOTE_TITLE_CHARS:
+        raise HTTPException(status_code=413, detail=f"Title too long (max {MAX_NOTE_TITLE_CHARS} characters)")
+    if content is not None and len(content) > MAX_NOTE_CONTENT_CHARS:
+        raise HTTPException(status_code=413, detail=f"Note content too large (max {MAX_NOTE_CONTENT_CHARS // 1024}KB)")
+    if images is not None:
+        total = sum(len(img) for img in images)
+        if total > MAX_NOTE_IMAGES_BYTES:
+            raise HTTPException(status_code=413, detail=f"Images too large (max {MAX_NOTE_IMAGES_BYTES // (1024 * 1024)}MB total)")
+
+
 @api_router.post("/notes", response_model=NoteResponse)
 async def create_note(note: NoteCreate, current_user: dict = Depends(get_current_user)):
+    _validate_note_payload(note.title, note.content, note.images)
     now = datetime.now(timezone.utc).isoformat()
     user_id = current_user.get("id") or str(current_user.get("_id", ""))
     doc = {
@@ -293,6 +313,7 @@ async def get_note(note_id: str, current_user: dict = Depends(get_current_user))
 
 @api_router.put("/notes/{note_id}", response_model=NoteResponse)
 async def update_note(note_id: str, update: NoteUpdate, current_user: dict = Depends(get_current_user)):
+    _validate_note_payload(update.title, update.content, update.images)
     user_id = current_user.get("id") or str(current_user.get("_id", ""))
     updates = {}
     for k, v in update.model_dump(exclude_unset=True).items():
@@ -739,6 +760,47 @@ api_router.include_router(auth_router)
 app.include_router(reset_password_router)
 
 app.include_router(api_router)
+
+
+# ---- Staging APK download ----
+# Serve the built APK from this backend so the download link and the /api the app
+# talks to share one origin/port (e.g. http://192.168.20.32:8765). The path is
+# configurable via APK_DOWNLOAD_PATH; if the file is absent (e.g. on Railway) the
+# routes 404, so this is harmless in deployments that don't ship the APK.
+from fastapi.responses import FileResponse, HTMLResponse
+
+APK_DOWNLOAD_PATH = os.getenv(
+    "APK_DOWNLOAD_PATH", str(ROOT_DIR.parent / "frontend" / "memopad-staging.apk")
+)
+APK_DOWNLOAD_ROUTE = "/download/memopad-staging.apk"
+
+
+@app.get("/download", response_class=HTMLResponse)
+async def apk_download_page():
+    if not os.path.isfile(APK_DOWNLOAD_PATH):
+        raise HTTPException(status_code=404, detail="APK not available")
+    size_mb = os.path.getsize(APK_DOWNLOAD_PATH) / (1024 * 1024)
+    return f"""<!doctype html>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MemoPad staging</title>
+<div style="font-family:-apple-system,sans-serif;max-width:480px;margin:48px auto;padding:0 20px;text-align:center">
+  <h1 style="color:#D84315">MemoPad — staging build</h1>
+  <p>{size_mb:.0f} MB</p>
+  <p><a href="{APK_DOWNLOAD_ROUTE}" style="display:inline-block;padding:16px 32px;background:#D84315;color:#fff;text-decoration:none;border-radius:12px;font-size:18px;font-weight:600">Download &amp; install APK</a></p>
+  <p style="color:#78909C;font-size:14px">Enable “Install from unknown sources” when prompted.</p>
+</div>"""
+
+
+@app.api_route(APK_DOWNLOAD_ROUTE, methods=["GET", "HEAD"])
+async def apk_download_file():
+    if not os.path.isfile(APK_DOWNLOAD_PATH):
+        raise HTTPException(status_code=404, detail="APK not available")
+    return FileResponse(
+        APK_DOWNLOAD_PATH,
+        media_type="application/vnd.android.package-archive",
+        filename="memopad-staging.apk",
+    )
+
 
 # ---- CORS Configuration ----
 # For production, specify exact origins instead of ["*"]

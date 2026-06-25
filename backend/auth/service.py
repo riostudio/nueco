@@ -43,13 +43,17 @@ class AuthService:
     def _verify_password(self, password: str, hashed: str) -> bool:
         return bcrypt.checkpw(password.encode(), hashed.encode())
 
-    def _create_access_token(self, user_id: str) -> str:
+    def _create_access_token(self, user_id: str, session_id: Optional[str] = None) -> str:
         expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
         payload = {
             "sub": user_id,
             "type": "access",
             "exp": expire
         }
+        # Bind the access token to its login session so logout (which deletes the
+        # session) revokes the token server-side instead of leaving it valid until exp.
+        if session_id is not None:
+            payload["sid"] = session_id
         return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
     def _create_refresh_token(self) -> str:
@@ -235,8 +239,8 @@ class AuthService:
         )
         await self.sessions.insert_one(session_doc)
 
-        # Create access token
-        access_token = self._create_access_token(user_id)
+        # Create access token bound to this session (revoked on logout)
+        access_token = self._create_access_token(user_id, session_id)
 
         logger.info(f"User logged in: {email}")
         return True, "Login successful", {
@@ -380,9 +384,9 @@ class AuthService:
         if not user:
             return False, "User not found", None
 
-        # Create new access token
-        access_token = self._create_access_token(user["id"])
-        
+        # Create new access token, still bound to the same session
+        access_token = self._create_access_token(user["id"], valid_session["id"])
+
         # Update device last active
         await self.devices.update_one(
             {"id": valid_session["device_id"]},
@@ -411,11 +415,26 @@ class AuthService:
         return None
 
     async def verify_access_token(self, token: str) -> Optional[str]:
-        """Verify access token and return user_id if valid"""
+        """Verify access token and return user_id if valid.
+
+        Tokens are bound to their login session via the `sid` claim: if that
+        session has been deleted (logout) or has expired, the token is rejected
+        even though its signature/exp are still otherwise valid.
+        """
         try:
             payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
             if payload.get("type") != "access":
                 return None
+            session_id = payload.get("sid")
+            if not session_id:
+                # Session-bound tokens are required; legacy/unbound tokens are rejected.
+                return None
+            session = await self.sessions.find_one({"id": session_id})
+            if not session:
+                return None  # session revoked via logout
+            expires_at = session.get("expires_at")
+            if expires_at and expires_at < datetime.utcnow():
+                return None  # session expired
             return payload.get("sub")
         except jwt.ExpiredSignatureError:
             return None

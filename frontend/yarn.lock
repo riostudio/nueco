@@ -3959,6 +3959,15 @@ expo-blur@~55.0.14:
   resolved "https://registry.npmjs.org/expo-blur/-/expo-blur-55.0.14.tgz"
   integrity sha512-NKyCKFWTNpX4CZSsiE1sgkqk/yvR1K0UTukuIbxVKoobB+yALLg1CFav0NqfdQqjhtoj5oEzP0Brlq92Z08Zfg==
 
+expo-build-properties@~55.0.14:
+  version "55.0.14"
+  resolved "https://registry.yarnpkg.com/expo-build-properties/-/expo-build-properties-55.0.14.tgz#2906668de26b0eac4956829ec15c4cf043e34d1b"
+  integrity sha512-5wopuLXlzFpDnCfsIjgAcj4yKnVTYg3XYGnYV5Hqi7u6jJipLG4fwtUqxVIFqBj7vEHXjd4zYCyXjp39AtAD7w==
+  dependencies:
+    "@expo/schema-utils" "^55.0.4"
+    resolve-from "^5.0.0"
+    semver "^7.6.0"
+
 expo-calendar@~55.0.14:
   version "55.0.14"
   resolved "https://registry.npmjs.org/expo-calendar/-/expo-calendar-55.0.14.tgz"
