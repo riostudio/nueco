@@ -133,6 +133,9 @@ class NoteCreate(BaseModel):
     linked_event_id: Optional[str] = None
     images: List[str] = []  # Base64 encoded images
     attachments: List[Attachment] = []
+    # E2EE: when set, title/content/tags are client-side ciphertext (AES-256-GCM).
+    # None/absent means legacy plaintext (pre-encryption notes, pending migration).
+    enc_version: Optional[int] = None
 
 class NoteUpdate(BaseModel):
     title: Optional[str] = None
@@ -142,6 +145,7 @@ class NoteUpdate(BaseModel):
     linked_event_id: Optional[str] = None
     images: Optional[List[str]] = None  # Base64 encoded images
     attachments: Optional[List[Attachment]] = None
+    enc_version: Optional[int] = None
 
 class NoteResponse(BaseModel):
     id: str
@@ -154,6 +158,7 @@ class NoteResponse(BaseModel):
     attachments: List[Attachment] = []
     has_attachments: bool = False
     user_id: Optional[str] = None
+    enc_version: Optional[int] = None
     created_at: str
     updated_at: str
 
@@ -244,6 +249,7 @@ async def create_note(note: NoteCreate, current_user: dict = Depends(get_current
         "attachments": [a.model_dump() for a in note.attachments],
         "has_attachments": len(note.attachments) > 0,
         "user_id": user_id,
+        "enc_version": note.enc_version,
         "created_at": now,
         "updated_at": now,
     }
@@ -293,6 +299,7 @@ async def get_notes(
         "attachments": 1,
         "has_attachments": 1,
         "user_id": 1,
+        "enc_version": 1,
         "created_at": 1,
         "updated_at": 1
     }).sort(
@@ -466,6 +473,84 @@ async def attachment_download_url(req: DownloadUrlRequest, current_user: dict = 
         logger.error(f"Failed to presign download for {req.key}: {e}")
         raise HTTPException(status_code=502, detail="Could not prepare download")
     return {"url": url}
+
+
+# ---- E2EE key escrow + first-party feature telemetry ----
+# The server stores ONLY opaque wrapped-key blobs and metadata-only usage events.
+# It never receives note plaintext or unwrapped encryption keys.
+import json as _json
+
+MAX_WRAPPED_BLOB_CHARS = 8192          # base64 wrapped DEK / salt -- generous cap
+MAX_EVENT_NAME_CHARS = 64
+MAX_EVENT_META_BYTES = 2048            # metadata only -- guards against note content
+
+
+class WrappedKeyPut(BaseModel):
+    wrapped_by_password: str           # DEK wrapped by password-derived KEK (base64)
+    wrapped_by_recovery: str           # DEK wrapped by recovery-code-derived KEK (base64)
+    kdf_salt: str                      # base64 salt for KEK derivation
+    kdf: str = "scrypt"
+    kdf_params: dict = {}
+    enc_version: int = 1
+
+
+class WrappedKeyResponse(WrappedKeyPut):
+    pass
+
+
+class FeatureEvent(BaseModel):
+    event: str
+    meta: dict = {}
+
+
+def _check_blob(name: str, value: str):
+    if len(value) > MAX_WRAPPED_BLOB_CHARS:
+        raise HTTPException(status_code=413, detail=f"{name} too large")
+
+
+@api_router.put("/crypto/wrapped-key")
+async def put_wrapped_key(body: WrappedKeyPut, current_user: dict = Depends(get_current_user)):
+    """Store the user's wrapped Data Encryption Key blobs. Opaque to the server."""
+    user_id = current_user.get("id") or str(current_user.get("_id", ""))
+    for n, v in (("wrapped_by_password", body.wrapped_by_password),
+                 ("wrapped_by_recovery", body.wrapped_by_recovery),
+                 ("kdf_salt", body.kdf_salt)):
+        _check_blob(n, v)
+    doc = body.model_dump()
+    doc["user_id"] = user_id
+    doc["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await db.user_keys.update_one({"user_id": user_id}, {"$set": doc}, upsert=True)
+    return {"message": "stored"}
+
+
+@api_router.get("/crypto/wrapped-key", response_model=WrappedKeyResponse)
+async def get_wrapped_key(current_user: dict = Depends(get_current_user)):
+    user_id = current_user.get("id") or str(current_user.get("_id", ""))
+    doc = await db.user_keys.find_one(
+        {"user_id": user_id}, {"_id": 0, "user_id": 0, "updated_at": 0}
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="No key escrow for this user")
+    return WrappedKeyResponse(**doc)
+
+
+@api_router.post("/events/feature")
+async def record_feature_event(body: FeatureEvent, current_user: dict = Depends(get_current_user)):
+    """Record a metadata-only feature-usage event for first-party MongoDB analytics.
+    NEVER send note content here -- meta is size-capped to discourage it."""
+    user_id = current_user.get("id") or str(current_user.get("_id", ""))
+    if not body.event or len(body.event) > MAX_EVENT_NAME_CHARS:
+        raise HTTPException(status_code=400, detail="Invalid event name")
+    if len(_json.dumps(body.meta)) > MAX_EVENT_META_BYTES:
+        raise HTTPException(status_code=400, detail="Event meta too large (metadata only)")
+    await db.feature_events.insert_one({
+        "id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "event": body.event,
+        "meta": body.meta,
+        "ts": datetime.now(timezone.utc).isoformat(),
+    })
+    return {"ok": True}
 
 
 # ---- Events Endpoints ----
@@ -847,7 +932,12 @@ async def create_indexes():
         
         # Devices indexes
         await db.devices.create_index("user_id")
-        
+
+        # E2EE key escrow + first-party feature telemetry
+        await db.user_keys.create_index("user_id", unique=True)
+        await db.feature_events.create_index([("event", 1), ("ts", -1)])
+        await db.feature_events.create_index([("user_id", 1), ("ts", -1)])
+
         logger.info("Database indexes created successfully")
     except Exception as e:
         logger.warning(f"Could not create indexes (may already exist): {e}")
