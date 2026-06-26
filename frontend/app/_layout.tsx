@@ -1,3 +1,6 @@
+// MUST be first: installs a secure crypto.getRandomValues so @noble's randomBytes
+// (used by the E2EE module) is a real CSPRNG on Hermes/React Native.
+import 'react-native-get-random-values';
 import React from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -24,6 +27,7 @@ function AppWithAnalytics() {
         <Stack.Screen name="editor" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="event-editor" options={{ presentation: 'modal' }} />
         <Stack.Screen name="change-password" options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="crypto-check" options={{ animation: 'slide_from_right' }} />
       </Stack>
     </PostHogProvider>
   );
