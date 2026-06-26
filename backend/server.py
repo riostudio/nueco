@@ -883,7 +883,7 @@ async def apk_download_file():
     return FileResponse(
         APK_DOWNLOAD_PATH,
         media_type="application/vnd.android.package-archive",
-        filename="memopad-staging.apk",
+        filename=os.path.basename(APK_DOWNLOAD_PATH),
     )
 
 

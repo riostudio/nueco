@@ -8,7 +8,7 @@ import {
   Image,
   StatusBar,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, type Href } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
 export default function WelcomeScreen() {
@@ -59,6 +59,15 @@ export default function WelcomeScreen() {
             activeOpacity={0.8}
           >
             <Text style={styles.secondaryButtonText}>Login</Text>
+          </TouchableOpacity>
+
+          {/* Diagnostic: on-device E2EE self-check & scrypt benchmark */}
+          <TouchableOpacity
+            onPress={() => router.push('/crypto-check' as Href)}
+            activeOpacity={0.6}
+            style={styles.diagLink}
+          >
+            <Text style={styles.diagLinkText}>🔒 Crypto self-check</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -166,5 +175,14 @@ const styles = StyleSheet.create({
     color: '#D84315',
     fontSize: 18,
     fontWeight: '600',
+  },
+  diagLink: {
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  diagLinkText: {
+    color: '#90A4AE',
+    fontSize: 14,
+    fontWeight: '500',
   },
 });
