@@ -39,8 +39,14 @@ wrapped-key material.
 
 - **Symmetric encryption:** AES-256-GCM (`@noble/ciphers`), 12-byte random nonce
   per encryption, 128-bit auth tag. Authenticated (tamper-evident).
-- **KDF:** scrypt (`@noble/hashes`), default `N=2^15, r=8, p=1, dkLen=32`, per-use
-  random 16-byte salt. (Cost to be tuned from on-device benchmark — see `/crypto-check`.)
+- **KDF:** PBKDF2-HMAC-SHA-512 via **native** `react-native-quick-crypto` (JSI /
+  OpenSSL), default `iterations=600_000, dkLen=32`, per-use random 16-byte salt.
+  (600k chosen from on-device benchmark: ~350 ms/login on a mid-range Android,
+  above the OWASP-2023 210k SHA-512 baseline.)
+  Native because pure-JS scrypt/PBKDF2 is unusably slow on Hermes (~69 s/login,
+  measured via `/crypto-check`). The portable core (`e2ee.ts`) takes the KDF by
+  injection (`configureKdf`); the app wires in quick-crypto, Node tests wire in
+  `node:crypto`. Not memory-hard — see §7.
 - **CSPRNG:** `@noble/hashes` `randomBytes` → `crypto.getRandomValues`, polyfilled
   on React Native by `react-native-get-random-values` (imported first at app entry).
 - **Encoding:** dependency-free base64; ciphertext token format `v1.<b64 nonce>.<b64 ct‖tag>`.
@@ -48,15 +54,15 @@ wrapped-key material.
 ## 4. Key hierarchy
 
 ```
-password ──scrypt(salt_p)──▶ KEK_p ──┐
+password ──pbkdf2(salt_p)──▶ KEK_p ──┐
                                      ├─ wrap(AES-GCM) ─▶ DEK (random 256-bit)
-recovery code ─scrypt(salt_r)▶ KEK_r ┘
+recovery code ─pbkdf2(salt_r)▶ KEK_r ┘
                                      DEK ──AES-256-GCM──▶ note ciphertext
 ```
 
 - **DEK** — per-user random 256-bit Data Encryption Key. Encrypts all note fields.
   Held on-device in **expo-secure-store** (Android Keystore / iOS Keychain).
-- **KEK_p / KEK_r** — derived from password / recovery code via scrypt. Never stored.
+- **KEK_p / KEK_r** — derived from password / recovery code via PBKDF2. Never stored.
 - **Escrow bundle** (stored server-side, opaque): `wrapped_by_password`,
   `wrapped_by_recovery`, `kdf_salt`, `recovery_salt`, `kdf`, `kdf_params`, `enc_version`.
 
@@ -82,12 +88,17 @@ recovery code ─scrypt(salt_r)▶ KEK_r ┘
 - **Search moves on-device** (server cannot search ciphertext).
 - **Migration** of existing plaintext notes is **client-side**, idempotent, gated by
   `enc_version`; must be preceded by an Atlas snapshot.
-- **scrypt cost** in pure JS may be ~1–3 s on older phones (login UX) — tune `N`.
+- **KDF is not memory-hard.** PBKDF2 resists GPU/ASIC cracking less than scrypt/
+  Argon2id; we run 600k SHA-512 iterations (above the OWASP-2023 210k baseline).
+  Argon2id would be stronger but lacks a maintained native module for this RN 0.83 /
+  New-Architecture stack — revisit when one ships. (Pure-JS scrypt was dropped:
+  ~69 s/login on Hermes; native PBKDF2 @ 600k is ~350 ms.)
 - **No independent audit yet** (see `E2EE-AUDIT-BRIEF.md`).
 
 ## 8. Dependencies (audit surface)
 
-- `@noble/ciphers@2.2.0`, `@noble/hashes@2.2.0` (audited, by Paul Miller)
+- `@noble/ciphers@2.2.0`, `@noble/hashes@2.2.0` (audited, by Paul Miller) — AES-GCM + CSPRNG
+- `react-native-quick-crypto@1.1.5` (+ `react-native-nitro-modules`) — native PBKDF2
 - `react-native-get-random-values@~1.11.0`, `expo-secure-store`
-- Crypto core: `frontend/src/crypto/e2ee.ts` (+ tests `e2ee.test.ts`)
+- Crypto core: `frontend/src/crypto/e2ee.ts` (KDF-injected) + `kdf-native.ts` + tests `e2ee.test.ts`
 - Backend escrow: `backend/server.py` (`/api/crypto/wrapped-key`, `enc_version`)

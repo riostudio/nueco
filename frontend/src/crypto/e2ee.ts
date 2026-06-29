@@ -8,12 +8,17 @@
  * code — so a forgotten password can be recovered without the server ever seeing
  * the DEK or plaintext.
  *
- * Pure/portable: depends only on @noble (audited) + TextEncoder/Decoder. Works in
- * React Native (Hermes) and Node. RN MUST install a CSPRNG polyfill at app entry
- * (`import 'react-native-get-random-values'`) so @noble's randomBytes is secure.
+ * Pure/portable: depends only on @noble (audited) + TextEncoder/Decoder for the
+ * AES/CSPRNG core. Works in React Native (Hermes) and Node. RN MUST install a
+ * CSPRNG polyfill at app entry (`import 'react-native-get-random-values'`) so
+ * @noble's randomBytes is secure.
+ *
+ * The KDF (PBKDF2) is *injected* via `configureKdf()` rather than imported here,
+ * because pure-JS scrypt/PBKDF2 is far too slow under Hermes (measured ~69 s/login
+ * on a mid-range Android). The app wires in a native PBKDF2 (react-native-quick-
+ * crypto) at entry; Node tests wire in node:crypto. See `kdf-native.ts`.
  */
 import { gcm } from '@noble/ciphers/aes.js';
-import { scrypt } from '@noble/hashes/scrypt.js';
 import { randomBytes } from '@noble/hashes/utils.js';
 
 export const ENC_VERSION = 1;
@@ -21,21 +26,26 @@ const NONCE_BYTES = 12; // AES-GCM standard nonce
 const KEY_BYTES = 32; // AES-256
 const SALT_BYTES = 16;
 
-/** scrypt cost params. N=2^15 is a mobile-reasonable login cost (~hundreds of ms). */
+/**
+ * PBKDF2 cost params. PBKDF2-HMAC-SHA-512 @ 600k iterations — above the OWASP-2023
+ * baseline (210k for SHA-512), chosen from an on-device benchmark: ~350 ms/login on
+ * a mid-range Android (moto g56), ~1 s on a phone 3× slower. At native speed
+ * (quick-crypto) this is comfortably within the 250–500 ms login budget.
+ * (Not memory-hard like scrypt/Argon2 — see E2EE-DESIGN.md for the tradeoff.)
+ */
 export interface KdfParams {
-  N: number;
-  r: number;
-  p: number;
+  iterations: number;
+  hash: 'sha512' | 'sha256';
   dkLen: number;
 }
-export const DEFAULT_KDF: KdfParams = { N: 1 << 15, r: 8, p: 1, dkLen: KEY_BYTES };
+export const DEFAULT_KDF: KdfParams = { iterations: 600_000, hash: 'sha512', dkLen: KEY_BYTES };
 
 export interface EscrowBundle {
   wrapped_by_password: string; // DEK wrapped by password KEK
   wrapped_by_recovery: string; // DEK wrapped by recovery-code KEK
   kdf_salt: string; // base64 salt for the password KEK
   recovery_salt: string; // base64 salt for the recovery KEK
-  kdf: 'scrypt';
+  kdf: 'pbkdf2';
   kdf_params: KdfParams;
   enc_version: number;
 }
@@ -118,8 +128,25 @@ export function generateDek(): Uint8Array {
   return randomBytes(KEY_BYTES);
 }
 
+/**
+ * Pluggable KDF. The implementation is injected so the portable core never
+ * imports a platform-specific (native) crypto module. Must take raw bytes and
+ * return `params.dkLen` derived bytes. Call `configureKdf()` once at startup.
+ */
+export type KdfImpl = (secret: Uint8Array, salt: Uint8Array, params: KdfParams) => Uint8Array;
+
+let kdfImpl: KdfImpl | null = null;
+
+/** Wire in the platform PBKDF2 (native on RN, node:crypto in tests). Idempotent. */
+export function configureKdf(fn: KdfImpl): void {
+  kdfImpl = fn;
+}
+
 export function deriveKek(secret: string, salt: Uint8Array, params: KdfParams = DEFAULT_KDF): Uint8Array {
-  return scrypt(utf8(secret), salt, params);
+  if (!kdfImpl) {
+    throw new Error('E2EE KDF not configured — import the kdf-native wiring at app entry (see kdf-native.ts)');
+  }
+  return kdfImpl(utf8(secret), salt, params);
 }
 
 export function wrapKey(rawKey: Uint8Array, kek: Uint8Array): string {
@@ -167,7 +194,7 @@ export function createEscrow(
       wrapped_by_recovery: wrapKey(dek, rKek),
       kdf_salt: toB64(pSalt),
       recovery_salt: toB64(rSalt),
-      kdf: 'scrypt',
+      kdf: 'pbkdf2',
       kdf_params: DEFAULT_KDF,
       enc_version: ENC_VERSION,
     },

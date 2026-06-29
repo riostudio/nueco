@@ -1,14 +1,17 @@
 /**
- * On-device E2EE self-check & scrypt benchmark.
+ * On-device E2EE self-check & PBKDF2 benchmark.
  *
  * Diagnostic route (/crypto-check) used to validate the crypto core on a real
  * device: Hermes CSPRNG (via react-native-get-random-values), AES-256-GCM
  * round-trip/tamper, escrow unlock, password-reset preservation, SecureStore
- * persistence, and scrypt cost at several N values. Not part of normal app flow.
+ * persistence, and native PBKDF2 cost at several iteration counts. Not part of
+ * normal app flow.
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
+// Ensure the native KDF is registered even if this screen is reached first.
+import '../src/crypto/kdf-native';
 import * as e2ee from '../src/crypto/e2ee';
 
 type Status = 'pass' | 'fail' | 'info';
@@ -63,7 +66,7 @@ export default function CryptoCheck() {
       // --- escrow lifecycle + login/signup cost ---
       let t = Date.now();
       const esc = e2ee.createEscrow('hunter2-password');
-      info('createEscrow (2× scrypt, signup)', `${Date.now() - t} ms`);
+      info('createEscrow (2× pbkdf2, signup)', `${Date.now() - t} ms`);
       t = Date.now();
       const dek = e2ee.unlockWithPassword(esc.bundle, 'hunter2-password');
       info('unlockWithPassword (login)', `${Date.now() - t} ms`);
@@ -76,12 +79,12 @@ export default function CryptoCheck() {
       const nb = e2ee.rewrapForNewPassword(esc.bundle, esc.recoveryCode, 'new-password');
       ok('note readable after reset', e2ee.decryptString(note, e2ee.unlockWithPassword(nb, 'new-password')) === 'pre-reset note');
 
-      // --- scrypt cost curve on this device ---
-      for (const N of [1 << 14, 1 << 15, 1 << 16]) {
+      // --- PBKDF2 cost curve on this device (native, sha512) ---
+      for (const iterations of [100_000, 210_000, 600_000]) {
         const salt = e2ee.generateDek().slice(0, 16);
         const ts = Date.now();
-        e2ee.deriveKek('benchmark', salt, { N, r: 8, p: 1, dkLen: 32 });
-        info(`scrypt N=2^${Math.log2(N)} (${N})`, `${Date.now() - ts} ms`);
+        e2ee.deriveKek('benchmark', salt, { iterations, hash: 'sha512', dkLen: 32 });
+        info(`pbkdf2 sha512 ×${iterations.toLocaleString()}`, `${Date.now() - ts} ms`);
       }
 
       // --- SecureStore persistence ---

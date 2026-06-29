@@ -3,6 +3,7 @@
  *   node --experimental-default-type=module src/crypto/e2ee.test.ts
  * (Node 24 strips TS types natively.) Exits non-zero on any failure.
  */
+import { pbkdf2Sync } from 'node:crypto';
 import {
   generateDek,
   encryptString,
@@ -19,7 +20,13 @@ import {
   toB64,
   fromB64,
   DEFAULT_KDF,
+  configureKdf,
 } from './e2ee.ts';
+
+// The portable core has no built-in KDF; tests inject node:crypto's native PBKDF2
+// (the app injects react-native-quick-crypto — same primitive, see kdf-native.ts).
+configureKdf((secret, salt, params) =>
+  new Uint8Array(pbkdf2Sync(Buffer.from(secret), Buffer.from(salt), params.iterations, params.dkLen, params.hash)));
 
 let passed = 0;
 let failed = 0;
@@ -81,7 +88,7 @@ console.log('field encryption (AES-256-GCM):');
   throws('malformed token rejected', () => decryptString('not-a-token', key));
 }
 
-console.log('KDF (scrypt):');
+console.log('KDF (pbkdf2):');
 {
   const salt = fromB64(toB64(generateDek())).slice(0, 16);
   const k1 = deriveKek('correct horse', salt, DEFAULT_KDF);
