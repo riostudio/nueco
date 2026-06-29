@@ -488,8 +488,9 @@ MAX_EVENT_META_BYTES = 2048            # metadata only -- guards against note co
 class WrappedKeyPut(BaseModel):
     wrapped_by_password: str           # DEK wrapped by password-derived KEK (base64)
     wrapped_by_recovery: str           # DEK wrapped by recovery-code-derived KEK (base64)
-    kdf_salt: str                      # base64 salt for KEK derivation
-    kdf: str = "scrypt"
+    kdf_salt: str                      # base64 salt for the password KEK
+    recovery_salt: str                 # base64 salt for the recovery-code KEK
+    kdf: str = "pbkdf2"
     kdf_params: dict = {}
     enc_version: int = 1
 
@@ -514,7 +515,8 @@ async def put_wrapped_key(body: WrappedKeyPut, current_user: dict = Depends(get_
     user_id = current_user.get("id") or str(current_user.get("_id", ""))
     for n, v in (("wrapped_by_password", body.wrapped_by_password),
                  ("wrapped_by_recovery", body.wrapped_by_recovery),
-                 ("kdf_salt", body.kdf_salt)):
+                 ("kdf_salt", body.kdf_salt),
+                 ("recovery_salt", body.recovery_salt)):
         _check_blob(n, v)
     doc = body.model_dump()
     doc["user_id"] = user_id

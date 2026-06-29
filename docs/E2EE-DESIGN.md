@@ -68,12 +68,22 @@ recovery code ─pbkdf2(salt_r)▶ KEK_r ┘
 
 ## 5. Lifecycles
 
-- **Signup:** generate DEK + recovery code; derive KEK_p, KEK_r; wrap DEK under both;
-  `PUT /api/crypto/wrapped-key` (escrow). Show recovery code once. Store DEK in SecureStore.
-- **Login (new device):** `GET /api/crypto/wrapped-key`; derive KEK_p from password;
+Implemented in `frontend/src/crypto/keySession.ts`, run from `AuthContext`. Gated by
+the `e2eeKeys` build flag (on for non-production builds; off in prod until Stage 4).
+
+- **First login / legacy user (no escrow):** signup itself can't escrow (it requires
+  email verification, so there's no session yet), so the **escrow is created at first
+  login** — which also transparently covers users who predate E2EE. Generate DEK +
+  recovery code; derive KEK_p, KEK_r; wrap DEK under both; `PUT /api/crypto/wrapped-key`.
+  Show the recovery code once (blocking screen). Store DEK in SecureStore.
+- **Login (escrow exists):** `GET /api/crypto/wrapped-key`; derive KEK_p from password;
   unwrap DEK; store in SecureStore.
-- **Password reset:** user supplies recovery code → unwrap DEK via KEK_r → re-wrap
-  under KEK_p(new password). **DEK is preserved, so existing notes stay readable.**
+- **Login after an email-token password reset:** the server can't re-wrap the DEK on a
+  reset, so password-unwrap fails → app prompts for the **recovery code**, unwraps via
+  KEK_r, re-wraps under KEK_p(new password), and re-PUTs. **DEK preserved.**
+- **Authenticated password change:** DEK is already in SecureStore → re-wrap directly
+  under the new password (no recovery code needed) and re-PUT.
+- **Logout:** DEK cleared from SecureStore.
 - **Lost password AND recovery code:** notes are unrecoverable (by design).
 
 ## 6. What the server stores

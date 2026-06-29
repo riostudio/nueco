@@ -211,11 +211,17 @@ export function unlockWithRecovery(bundle: EscrowBundle, recoveryCode: string): 
   return unwrapKey(bundle.wrapped_by_recovery, kek); // throws on wrong code
 }
 
+/** Re-wrap a known DEK under a new password (fresh salt). Used when the DEK is
+ * already in hand — e.g. an authenticated password change. Preserves the DEK. */
+export function rewrapWithDek(bundle: EscrowBundle, dek: Uint8Array, newPassword: string): EscrowBundle {
+  const pSalt = randomBytes(SALT_BYTES);
+  const pKek = deriveKek(newPassword, pSalt, bundle.kdf_params);
+  return { ...bundle, wrapped_by_password: wrapKey(dek, pKek), kdf_salt: toB64(pSalt) };
+}
+
 /** Password reset: recover the DEK via the recovery code, re-wrap under a new
  * password. The DEK is preserved, so existing encrypted notes stay readable. */
 export function rewrapForNewPassword(bundle: EscrowBundle, recoveryCode: string, newPassword: string): EscrowBundle {
   const dek = unlockWithRecovery(bundle, recoveryCode);
-  const pSalt = randomBytes(SALT_BYTES);
-  const pKek = deriveKek(newPassword, pSalt);
-  return { ...bundle, wrapped_by_password: wrapKey(dek, pKek), kdf_salt: toB64(pSalt) };
+  return rewrapWithDek(bundle, dek, newPassword);
 }

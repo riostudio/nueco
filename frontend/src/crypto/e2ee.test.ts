@@ -15,6 +15,7 @@ import {
   unlockWithPassword,
   unlockWithRecovery,
   rewrapForNewPassword,
+  rewrapWithDek,
   generateRecoveryCode,
   normalizeRecoveryCode,
   toB64,
@@ -130,6 +131,16 @@ console.log('password reset (rewrap via recovery code):');
   // a note encrypted before reset is still readable after reset (DEK preserved)
   const note = encryptString('pre-reset note', dek);
   ok('notes survive password reset', decryptString(note, unlockWithPassword(newBundle, 'newpassword')) === 'pre-reset note');
+}
+
+console.log('rewrap with known DEK (authenticated change-password):');
+{
+  const { dek, recoveryCode, bundle } = createEscrow('oldpassword');
+  const nb = rewrapWithDek(bundle, dek, 'changedpassword');
+  ok('new password unlocks same DEK', eqBytes(unlockWithPassword(nb, 'changedpassword'), dek));
+  ok('recovery code still works after change', eqBytes(unlockWithRecovery(nb, recoveryCode), dek));
+  ok('password salt rotated', nb.kdf_salt !== bundle.kdf_salt);
+  throws('old password no longer works', () => unlockWithPassword(nb, 'oldpassword'));
 }
 
 console.log('recovery code helpers:');

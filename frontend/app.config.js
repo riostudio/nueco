@@ -13,6 +13,14 @@ const isProduction = process.env.EAS_BUILD_PROFILE === 'production';
 
 module.exports = ({ config }) => ({
   ...config,
+  // Feature flags baked at build time, read at runtime via expo-constants.
+  // e2eeKeys: Stage 3 E2EE key bootstrap (recovery code, DEK in SecureStore).
+  // ON for non-production builds; OFF in production until note encryption (Stage 4)
+  // ships, so prod users aren't shown a recovery code for inactive encryption.
+  extra: {
+    ...(config.extra ?? {}),
+    e2eeKeys: !isProduction,
+  },
   plugins: [
     ...(config.plugins ?? []),
     [

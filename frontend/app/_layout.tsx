@@ -30,6 +30,8 @@ function AppWithAnalytics() {
         <Stack.Screen name="editor" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="event-editor" options={{ presentation: 'modal' }} />
         <Stack.Screen name="change-password" options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="recovery-code" options={{ headerShown: false, gestureEnabled: false }} />
+        <Stack.Screen name="recover-key" options={{ headerShown: false, gestureEnabled: false }} />
         <Stack.Screen name="crypto-check" options={{ animation: 'slide_from_right' }} />
       </Stack>
     </PostHogProvider>
