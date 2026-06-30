@@ -12,7 +12,7 @@ import {
   ActivityIndicator,
   Alert,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, type Href } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../src/auth';
 
@@ -48,8 +48,14 @@ export default function LoginScreen() {
     setIsLoading(true);
     setErrors({}); // Clear previous errors
     try {
-      await login(email.trim().toLowerCase(), password);
-      router.replace('/(tabs)');
+      const bootstrap = await login(email.trim().toLowerCase(), password);
+      if (bootstrap?.status === 'created') {
+        router.replace('/recovery-code' as Href); // show the recovery code once
+      } else if (bootstrap?.status === 'needs_recovery') {
+        router.replace('/recover-key' as Href); // password no longer unwraps; ask for code
+      } else {
+        router.replace('/(tabs)');
+      }
     } catch (error: any) {
       // Show error inline instead of Alert (Alert doesn't work on web)
       const errorMessage = error.message || 'Invalid email or password. Please try again.';

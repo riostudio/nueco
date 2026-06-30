@@ -8,11 +8,13 @@ import {
   Image,
   StatusBar,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, type Href } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
 export default function WelcomeScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -44,7 +46,7 @@ export default function WelcomeScreen() {
         </View>
 
         {/* Action Buttons */}
-        <View style={styles.buttonSection}>
+        <View style={[styles.buttonSection, { paddingBottom: insets.bottom + 24 }]}>
           <TouchableOpacity
             style={styles.primaryButton}
             onPress={() => router.push('/signup')}
@@ -59,6 +61,16 @@ export default function WelcomeScreen() {
             activeOpacity={0.8}
           >
             <Text style={styles.secondaryButtonText}>Login</Text>
+          </TouchableOpacity>
+
+          {/* Diagnostic: on-device E2EE self-check & PBKDF2 benchmark */}
+          <TouchableOpacity
+            onPress={() => router.push('/crypto-check' as Href)}
+            activeOpacity={0.6}
+            style={styles.diagLink}
+            hitSlop={{ top: 12, bottom: 12, left: 24, right: 24 }}
+          >
+            <Text style={styles.diagLinkText}>🔒 Crypto self-check</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -130,7 +142,8 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   buttonSection: {
-    paddingBottom: 40,
+    // paddingBottom is applied dynamically from safe-area insets so the
+    // diagnostic link never lands inside the Android gesture-nav zone.
     gap: 16,
     marginHorizontal: 0,
   },
@@ -166,5 +179,15 @@ const styles = StyleSheet.create({
     color: '#D84315',
     fontSize: 18,
     fontWeight: '600',
+  },
+  diagLink: {
+    alignItems: 'center',
+    paddingVertical: 12,
+    marginTop: 4,
+  },
+  diagLinkText: {
+    color: '#90A4AE',
+    fontSize: 14,
+    fontWeight: '500',
   },
 });

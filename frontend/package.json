@@ -8,7 +8,8 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "test:crypto": "node src/crypto/e2ee.test.ts"
   },
   "dependencies": {
     "@10play/tentap-editor": "^1.0.1",
@@ -17,6 +18,8 @@
     "@expo/ngrok": "^4.1.3",
     "@expo/vector-icons": "^15.0.3",
     "@gorhom/bottom-sheet": "^5.2.8",
+    "@noble/ciphers": "^2.2.0",
+    "@noble/hashes": "^2.2.0",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-community/datetimepicker": "8.6.0",
     "@react-native-community/netinfo": "^12.0.1",
@@ -59,8 +62,12 @@
     "react-native": "0.83.6",
     "react-native-dotenv": "^3.4.11",
     "react-native-gesture-handler": "~2.30.0",
+    "react-native-get-random-values": "~1.11.0",
     "react-native-markdown-display": "^7.0.2",
+    "react-native-nitro-modules": "^0.35.10",
     "react-native-pell-rich-editor": "^1.10.0",
+    "react-native-quick-base64": "^3.0.0",
+    "react-native-quick-crypto": "^1.1.5",
     "react-native-reanimated": "4.2.1",
     "react-native-safe-area-context": "~5.6.0",
     "react-native-screens": "~4.23.0",
