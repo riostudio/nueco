@@ -13,6 +13,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import NetInfo, { NetInfoState } from '@react-native-community/netinfo';
 import { notesApi, eventsApi } from './api';
+import { encryptNoteForServer, decryptNoteFromServer, decryptNotesFromServer } from './crypto/noteCrypto';
 
 // ---- Types ----
 
@@ -279,7 +280,9 @@ export async function processSyncQueue(): Promise<void> {
 async function processNoteOperation(item: SyncQueueItem): Promise<void> {
   switch (item.operation) {
     case 'create': {
-      const created = await notesApi.create(item.payload);
+      // Encrypt outbound fields (no-op when E2EE is off / no DEK). The local copy
+      // keeps its plaintext fields; we only adopt the server-assigned id below.
+      const created = await notesApi.create(await encryptNoteForServer(item.payload));
       // Update local storage: replace temp ID with server ID
       const notes = await getLocalNotes();
       const idx = notes.findIndex(n => n.id === item.id);
@@ -290,17 +293,19 @@ async function processNoteOperation(item: SyncQueueItem): Promise<void> {
       break;
     }
     case 'update': {
-      // Check server version for conflict resolution
+      const encrypted = await encryptNoteForServer(item.payload);
+      // Check server version for conflict resolution. updated_at is never encrypted,
+      // so the timestamp comparison works on the ciphertext note as-is.
       try {
         const serverNote = await notesApi.get(item.id);
         if (isNewer(item.payload.updated_at, serverNote.updated_at)) {
-          await notesApi.update(item.id, item.payload);
+          await notesApi.update(item.id, encrypted);
         } else {
-          // Server is newer — update local copy
-          await upsertLocalNote({ ...serverNote, _isLocal: false });
+          // Server is newer — decrypt then store as the local plaintext copy.
+          await upsertLocalNote({ ...(await decryptNoteFromServer(serverNote)), _isLocal: false });
         }
       } catch {
-        await notesApi.update(item.id, item.payload);
+        await notesApi.update(item.id, encrypted);
       }
       break;
     }
@@ -352,7 +357,8 @@ export async function fullSync(): Promise<void> {
 
     // 3. Merge server notes with local (timestamp wins)
     if (notesResult.status === 'fulfilled') {
-      const serverNotes = notesResult.value;
+      // Decrypt server notes to plaintext before they enter the (plaintext) local store.
+      const serverNotes = await decryptNotesFromServer(notesResult.value);
       const localNotes = await getLocalNotes();
       const mergedNotes: LocalNote[] = [...serverNotes.map((n: any) => ({ ...n, _isLocal: false }))];
 

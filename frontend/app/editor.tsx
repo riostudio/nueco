@@ -13,6 +13,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as WebBrowser from 'expo-web-browser';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { notesApi, eventsApi, transcribeApi, textProcessApi, attachmentsApi, uploadAttachment } from '../src/api';
+import { encryptNoteForServer, decryptNoteFromServer } from '../src/crypto/noteCrypto';
 import { Tag, CalendarEvent, Attachment } from '../src/types';
 import { TAG_COLORS, C } from '../src/theme';
 import { 
@@ -121,7 +122,7 @@ export default function EditorScreen() {
 
   const loadNote = async (id: string) => {
     try {
-      const note = await notesApi.get(id);
+      const note = await decryptNoteFromServer(await notesApi.get(id));
       setTitle(note.title);
       setContent(note.content);
       setTags(note.tags);
@@ -239,7 +240,7 @@ export default function EditorScreen() {
       setSaveStatus('Saving...');
       try {
         if (!isCreatedRef.current) {
-          const created = await retryOperation(() => notesApi.create({
+          const created = await retryOperation(async () => notesApi.create(await encryptNoteForServer({
             title: titleRef.current,
             content: contentRef.current,
             tags: tagsRef.current,
@@ -247,7 +248,7 @@ export default function EditorScreen() {
             linked_event_id: linkedEventIdRef.current,
             images: imagesRef.current,
             attachments: attachmentsRef.current,
-          }));
+          })));
           noteIdRef.current = created.id;
           isCreatedRef.current = true;
           setNoteExists(true);
@@ -258,7 +259,7 @@ export default function EditorScreen() {
             is_shared: false,
           });
         } else if (noteIdRef.current) {
-          await retryOperation(() => notesApi.update(noteIdRef.current, {
+          await retryOperation(async () => notesApi.update(noteIdRef.current, await encryptNoteForServer({
             title: titleRef.current,
             content: contentRef.current,
             tags: tagsRef.current,
@@ -266,7 +267,7 @@ export default function EditorScreen() {
             linked_event_id: linkedEventIdRef.current,
             images: imagesRef.current,
             attachments: attachmentsRef.current,
-          }));
+          })));
           // Track note edit
           trackNoteEdited();
         }
@@ -286,7 +287,7 @@ export default function EditorScreen() {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     try {
       if (!isCreatedRef.current && (titleRef.current || contentRef.current || linkedEventIdRef.current || imagesRef.current.length > 0 || attachmentsRef.current.length > 0)) {
-        await retryOperation(() => notesApi.create({
+        await retryOperation(async () => notesApi.create(await encryptNoteForServer({
           title: titleRef.current,
           content: contentRef.current,
           tags: tagsRef.current,
@@ -294,9 +295,9 @@ export default function EditorScreen() {
           linked_event_id: linkedEventIdRef.current,
           images: imagesRef.current,
           attachments: attachmentsRef.current,
-        }));
+        })));
       } else if (isCreatedRef.current && noteIdRef.current) {
-        await retryOperation(() => notesApi.update(noteIdRef.current, {
+        await retryOperation(async () => notesApi.update(noteIdRef.current, await encryptNoteForServer({
           title: titleRef.current,
           content: contentRef.current,
           tags: tagsRef.current,
@@ -304,7 +305,7 @@ export default function EditorScreen() {
           linked_event_id: linkedEventIdRef.current,
           images: imagesRef.current,
           attachments: attachmentsRef.current,
-        }));
+        })));
       }
     } catch (e) {
       console.error('Save on back failed after retries:', e);
@@ -954,25 +955,25 @@ export default function EditorScreen() {
     
     try {
       if (!isCreatedRef.current) {
-        const created = await retryOperation(() => notesApi.create({
+        const created = await retryOperation(async () => notesApi.create(await encryptNoteForServer({
           title: titleRef.current,
           content: contentRef.current,
           tags: tagsRef.current,
           is_pinned: isPinnedRef.current,
           linked_event_id: linkedEventIdRef.current,
-        }));
+        })));
         noteIdRef.current = created.id;
         isCreatedRef.current = true;
         setNoteExists(true);
         saveSucceeded = true;
       } else if (noteIdRef.current) {
-        await retryOperation(() => notesApi.update(noteIdRef.current, {
+        await retryOperation(async () => notesApi.update(noteIdRef.current, await encryptNoteForServer({
           title: titleRef.current,
           content: contentRef.current,
           tags: tagsRef.current,
           is_pinned: isPinnedRef.current,
           linked_event_id: linkedEventIdRef.current,
-        }));
+        })));
         saveSucceeded = true;
       }
       setSaveStatus('All changes saved');
