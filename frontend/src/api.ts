@@ -81,8 +81,8 @@ async function fetchApi(path: string, options?: RequestInit, retryCount: number 
 }
 
 export const notesApi = {
-  getAll: (search?: string) =>
-    fetchApi(search ? `/notes?search=${encodeURIComponent(search)}` : '/notes'),
+  // Search is client-side (notes are E2EE ciphertext server-side); always fetch all.
+  getAll: () => fetchApi('/notes'),
   get: (id: string) => fetchApi(`/notes/${id}`),
   create: (data: any) =>
     fetchApi('/notes', { method: 'POST', body: JSON.stringify(data) }),

@@ -3,7 +3,6 @@ from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
-import re
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field
@@ -216,9 +215,16 @@ class BatchEventIds(BaseModel):
 
 # Server-side payload caps so an oversized note is rejected cleanly (413) instead
 # of consuming memory / risking MongoDB's 16MB document limit as an unhandled 500.
-MAX_NOTE_TITLE_CHARS = 1_000
-MAX_NOTE_CONTENT_CHARS = 256 * 1024          # 256 KB of text
-MAX_NOTE_IMAGES_BYTES = 8 * 1024 * 1024      # 8 MB total base64 image payload
+#
+# Note fields may arrive as E2EE ciphertext (AES-256-GCM + base64). That inflates a
+# plaintext field by ~4/3 (base64) plus a small constant, and further for multibyte
+# UTF-8. We size the wire caps with generous headroom over the intended *plaintext*
+# limits so encrypted notes aren't falsely rejected, while keeping the stored doc
+# comfortably under MongoDB's 16MB ceiling (content ~1MB + images 8MB + title ~4KB).
+_CIPHERTEXT_HEADROOM = 4                                       # base64 (~1.34x) + worst-case UTF-8
+MAX_NOTE_TITLE_CHARS = 1_000 * _CIPHERTEXT_HEADROOM            # ~1k plaintext chars
+MAX_NOTE_CONTENT_CHARS = 256 * 1024 * _CIPHERTEXT_HEADROOM     # ~256 KB of plaintext text
+MAX_NOTE_IMAGES_BYTES = 8 * 1024 * 1024                        # 8 MB total base64 image payload
 
 
 def _validate_note_payload(title=None, content=None, images=None):
@@ -260,29 +266,18 @@ async def create_note(note: NoteCreate, current_user: dict = Depends(get_current
 
 @api_router.get("/notes", response_model=List[NoteResponse])
 async def get_notes(
-    search: Optional[str] = Query(None),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(50, ge=1, le=100, description="Items per page"),
     current_user: dict = Depends(get_current_user)
 ):
+    # Note: search is client-side. Once note fields are E2EE ciphertext the server
+    # cannot regex-match them, so filtering moved on-device (see index.tsx).
     user_id = current_user.get("id") or str(current_user.get("_id", ""))
     logger.info(f"get_notes called for user_id: {user_id}")
     count_check = await db.notes.count_documents({"user_id": user_id})
     logger.info(f"Total notes found for user: {count_check}")
     query = {"user_id": user_id}
-    if search:
-        escaped_search = re.escape(search)
-        query = {
-            "$and": [
-                {"user_id": user_id},
-                {"$or": [
-                    {"title": {"$regex": escaped_search, "$options": "i"}},
-                    {"content": {"$regex": escaped_search, "$options": "i"}},
-                    {"tags.name": {"$regex": escaped_search, "$options": "i"}},
-                ]}
-            ]
-        }
-    
+
     # Calculate skip for pagination
     skip = (page - 1) * page_size
     

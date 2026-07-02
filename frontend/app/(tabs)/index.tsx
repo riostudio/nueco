@@ -89,7 +89,7 @@ export default function NotesScreen() {
     return `${minutes} min`;
   };
 
-  const loadNotes = useCallback(async (query?: string) => {
+  const loadNotes = useCallback(async () => {
     try {
       await syncAndReload();
       const queue = await getSyncQueue();
@@ -142,14 +142,14 @@ export default function NotesScreen() {
   // Re-load notes when post-login sync completes
   useEffect(() => {
     if (isSyncReady) {
-      loadNotes(debouncedSearch || undefined);
+      loadNotes();
     }
   }, [isSyncReady]);
 
   useFocusEffect(
     useCallback(() => {
-      loadNotes(debouncedSearch || undefined);
-    }, [debouncedSearch, loadNotes])
+      loadNotes();
+    }, [loadNotes])
   );
 
   // Polling for sync across devices - check for updates every 30 seconds
@@ -157,12 +157,12 @@ export default function NotesScreen() {
     const pollInterval = setInterval(() => {
       // Only poll if not currently refreshing and screen is focused
       if (!refreshing && !loading) {
-        loadNotes(debouncedSearch || undefined);
+        loadNotes();
       }
     }, 30000); // 30 seconds
 
     return () => clearInterval(pollInterval);
-  }, [debouncedSearch, loadNotes, refreshing, loading]);
+  }, [loadNotes, refreshing, loading]);
 
   const filteredNotes = debouncedSearch
     ? notes.filter((n) =>
@@ -176,7 +176,7 @@ export default function NotesScreen() {
   const handleTogglePin = async (noteId: string) => {
     try {
       await notesApi.togglePin(noteId);
-      loadNotes(debouncedSearch || undefined);
+      loadNotes();
     } catch (e) {
       console.error('Toggle pin failed:', e);
     }
@@ -194,7 +194,7 @@ export default function NotesScreen() {
       await deleteNote(noteToDelete.id);
       // Track note deletion
       trackNoteDeleted();
-      loadNotes(debouncedSearch || undefined);
+      loadNotes();
       setDeleteModalVisible(false);
       setNoteToDelete(null);
     } catch (e) {
@@ -345,7 +345,7 @@ export default function NotesScreen() {
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
-            onRefresh={() => { setRefreshing(true); loadNotes(debouncedSearch || undefined); }}
+            onRefresh={() => { setRefreshing(true); loadNotes(); }}
             colors={[C.primary]}
           />
         }
