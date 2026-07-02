@@ -94,6 +94,15 @@ export function hasEncryptableFields(note: EncryptableNote): boolean {
   return typeof note.title === 'string' || typeof note.content === 'string' || Array.isArray(note.tags);
 }
 
+/**
+ * Select the notes that still need migrating to ciphertext — i.e. legacy plaintext
+ * (`enc_version == null`). Already-encrypted notes are skipped, which makes the
+ * migration idempotent and safe to re-run.
+ */
+export function notesNeedingMigration<T extends EncryptableNote>(notes: T[]): T[] {
+  return notes.filter((n) => n.enc_version == null);
+}
+
 function tryDecrypt(token: string, dek: Uint8Array): string {
   try {
     return decryptString(token, dek);

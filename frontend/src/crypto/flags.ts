@@ -12,3 +12,13 @@ import Constants from 'expo-constants';
 
 export const E2EE_KEYS_ENABLED: boolean =
   __DEV__ || Constants.expoConfig?.extra?.e2eeKeys === true;
+
+/**
+ * Gates the one-time eager migration of legacy plaintext notes to ciphertext
+ * (Stage 4). Deliberately DEFAULT OFF and independent of `E2EE_KEYS_ENABLED`: new
+ * writes can be encrypted before we ever bulk-rewrite existing notes. This is the
+ * explicit trigger — flip it on (and rebuild) only AFTER taking an Atlas snapshot,
+ * since the migration rewrites every plaintext note document. See E2EE-DESIGN.md §7.
+ */
+export const E2EE_MIGRATION_ENABLED: boolean =
+  Constants.expoConfig?.extra?.e2eeMigration === true;

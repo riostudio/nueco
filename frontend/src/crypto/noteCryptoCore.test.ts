@@ -7,6 +7,7 @@ import { generateDek, decryptString, ENC_VERSION } from './e2ee.ts';
 import {
   encryptNoteFields,
   decryptNoteFields,
+  notesNeedingMigration,
   UNDECRYPTABLE_PLACEHOLDER,
 } from './noteCryptoCore.ts';
 
@@ -130,6 +131,21 @@ console.log('empty strings and empty tags:');
   ok('empty content round-trips', dec.content === '');
   // sanity: the encrypted empty title is genuinely decryptable
   ok('raw decryptString agrees', decryptString(enc.title as string, dek) === '');
+}
+
+console.log('migration selector (notesNeedingMigration):');
+{
+  const notes = [
+    { id: 'a', title: 'plain', enc_version: null },
+    { id: 'b', title: 'v1.x.y', enc_version: 1 },
+    { id: 'c', title: 'no field at all' },            // enc_version absent -> legacy
+    { id: 'd', title: 'v1.p.q', enc_version: 1 },
+  ];
+  const pending = notesNeedingMigration(notes);
+  ok('selects legacy (null) and absent enc_version', pending.map((n) => n.id).join(',') === 'a,c');
+  ok('skips already-encrypted notes', !pending.some((n) => n.enc_version === 1));
+  ok('empty input -> empty', notesNeedingMigration([]).length === 0);
+  ok('all-encrypted input -> empty (idempotent re-run)', notesNeedingMigration(notes.filter((n) => n.enc_version === 1)).length === 0);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
