@@ -221,7 +221,12 @@ class BatchEventIds(BaseModel):
 # UTF-8. We size the wire caps with generous headroom over the intended *plaintext*
 # limits so encrypted notes aren't falsely rejected, while keeping the stored doc
 # comfortably under MongoDB's 16MB ceiling (content ~1MB + images 8MB + title ~4KB).
-_CIPHERTEXT_HEADROOM = 4                                       # base64 (~1.34x) + worst-case UTF-8
+# Headroom = 5, not 4: a worst-case field is all 3-byte UTF-8 chars (BMP, e.g. CJK),
+# which is 3 bytes per UTF-16 unit; AES-GCM adds a 16-byte tag and base64 expands ~4/3,
+# so a max-length plaintext field encrypts to just over 4x its char count (measured:
+# a 1000-char CJK title -> 4044 ciphertext chars). 4x would 413 those users; 5x clears
+# it with margin while keeping the doc well under MongoDB's 16MB ceiling.
+_CIPHERTEXT_HEADROOM = 5
 MAX_NOTE_TITLE_CHARS = 1_000 * _CIPHERTEXT_HEADROOM            # ~1k plaintext chars
 MAX_NOTE_CONTENT_CHARS = 256 * 1024 * _CIPHERTEXT_HEADROOM     # ~256 KB of plaintext text
 MAX_NOTE_IMAGES_BYTES = 8 * 1024 * 1024                        # 8 MB total base64 image payload
