@@ -21,6 +21,8 @@ import {
   deleteLocalEvent,
   enqueueOperation,
   processSyncQueue,
+  createNoteOffline,
+  updateNoteOffline,
   fullSync,
   startBackgroundSync,
   stopBackgroundSync,
@@ -103,77 +105,14 @@ export function useOfflineNotes() {
   // ---- CRUD ----
 
   const createNote = useCallback(async (data: Omit<LocalNote, 'id' | 'created_at' | 'updated_at' | '_isLocal'>): Promise<LocalNote> => {
-    const now = new Date().toISOString();
-    const tempId = `local_${uuid.v4()}`;
-    const note: LocalNote = {
-      ...data,
-      id: tempId,
-      created_at: now,
-      updated_at: now,
-      _isLocal: true,
-    };
-
-    // Always save locally first
-    await upsertLocalNote(note);
-
-    const online = await checkOnline();
-    if (online) {
-      // Try to sync immediately
-      await enqueueOperation({
-        id: tempId,
-        entity: 'note',
-        operation: 'create',
-        payload: data,
-        timestamp: now,
-      });
-      try {
-        await processSyncQueue();
-      } catch (e) {
-        // Sync failed but note is already saved locally
-      }
-      await loadNotes();
-    } else {
-      // Queue for later
-      await enqueueOperation({
-        id: tempId,
-        entity: 'note',
-        operation: 'create',
-        payload: data,
-        timestamp: now,
-      });
-      await loadNotes();
-    }
-
+    const note = await createNoteOffline(data);
+    await loadNotes();
     return note;
   }, [loadNotes]);
 
   const updateNote = useCallback(async (id: string, data: Partial<LocalNote>): Promise<void> => {
-    const now = new Date().toISOString();
-    const notes = await getLocalNotes();
-    const existing = notes.find(n => n.id === id);
-    if (!existing) return;
-
-    const updated: LocalNote = { ...existing, ...data, updated_at: now };
-    await upsertLocalNote(updated);
+    await updateNoteOffline(id, data);
     await loadNotes();
-
-    await enqueueOperation({
-      id,
-      entity: 'note',
-      operation: existing._isLocal ? 'create' : 'update',
-      payload: { ...data, updated_at: now },
-      timestamp: now,
-    });
-
-    const online = await checkOnline();
-    if (online) {
-      try {
-        await processSyncQueue();
-      } catch (e) {
-        // Sync failed but note is already saved locally
-      }
-      await loadNotes();
-    }
   }, [loadNotes]);
 
   const deleteNote = useCallback(async (id: string): Promise<void> => {

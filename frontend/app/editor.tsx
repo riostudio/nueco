@@ -13,7 +13,8 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as WebBrowser from 'expo-web-browser';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { notesApi, eventsApi, transcribeApi, textProcessApi, attachmentsApi, uploadAttachment } from '../src/api';
-import { encryptNoteForServer, decryptNoteFromServer } from '../src/crypto/noteCrypto';
+import { decryptNoteFromServer } from '../src/crypto/noteCrypto';
+import { createNoteOffline, updateNoteOffline, getLocalNotes, processSyncQueue } from '../src/offlineSync';
 import { Tag, CalendarEvent, Attachment } from '../src/types';
 import { TAG_COLORS, C } from '../src/theme';
 import { 
@@ -104,6 +105,8 @@ export default function EditorScreen() {
   const imagesRef = useRef<string[]>(images);
   const attachmentsRef = useRef<Attachment[]>(attachments);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // True when this note originated from a share intent (analytics + discard-on-cancel).
+  const isSharedRef = useRef(false);
   
   // State to track if note exists (for UI rendering like delete button)
   const [noteExists, setNoteExists] = useState(!isNew);
@@ -122,7 +125,21 @@ export default function EditorScreen() {
 
   const loadNote = async (id: string) => {
     try {
-      const note = await decryptNoteFromServer(await notesApi.get(id));
+      let note: any;
+      if (id.startsWith('local_')) {
+        // Not-yet-synced note — read the plaintext copy from local storage.
+        note = (await getLocalNotes()).find(n => n.id === id);
+        if (!note) throw new Error('local note not found');
+      } else {
+        try {
+          note = await decryptNoteFromServer(await notesApi.get(id));
+        } catch (e) {
+          // Offline / fetch failed — fall back to the local copy if we have one.
+          const local = (await getLocalNotes()).find(n => n.id === id);
+          if (!local) throw e;
+          note = local;
+        }
+      }
       setTitle(note.title);
       setContent(note.content);
       setTags(note.tags);
@@ -187,8 +204,9 @@ export default function EditorScreen() {
           console.error('Error checking pending event:', e);
         }
         
-        // If we have a saved note, reload it to get the latest linked_event_id
-        if (noteIdRef.current && isCreatedRef.current) {
+        // If we have a synced note, reload it to get the latest linked_event_id.
+        // Skip for not-yet-synced local notes (no server row yet → would 404).
+        if (noteIdRef.current && isCreatedRef.current && !noteIdRef.current.startsWith('local_')) {
           try {
             const note = await notesApi.get(noteIdRef.current);
             if (note.linked_event_id) {
@@ -219,19 +237,34 @@ export default function EditorScreen() {
     }, [linkedEventId])
   );
 
-  // Retry helper for network resilience
-  const retryOperation = async (operation: () => Promise<any>, maxRetries = 3): Promise<any> => {
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        return await operation();
-      } catch (e) {
-        console.log(`Save attempt ${attempt} failed:`, e);
-        if (attempt === maxRetries) throw e;
-        // Wait before retrying (exponential backoff)
-        await new Promise(resolve => setTimeout(resolve, attempt * 500));
-      }
+  // Offline-first save: writes locally + enqueues for sync. Encryption happens once,
+  // at the offlineSync push boundary. `push: false` (autosave) defers the network sync
+  // so a mid-session id swap can't strand `noteIdRef`; the queue is flushed on exit.
+  const persistLocal = useCallback(async (opts: { push?: boolean } = {}): Promise<void> => {
+    const draft = {
+      title: titleRef.current,
+      content: contentRef.current,
+      tags: tagsRef.current,
+      is_pinned: isPinnedRef.current,
+      linked_event_id: linkedEventIdRef.current,
+      images: imagesRef.current,
+      attachments: attachmentsRef.current,
+    };
+    if (!isCreatedRef.current) {
+      const created = await createNoteOffline(draft, { push: opts.push });
+      noteIdRef.current = created.id;
+      isCreatedRef.current = true;
+      setNoteExists(true);
+      trackNoteCreated({
+        has_scheduled_event: !!linkedEventIdRef.current,
+        has_image_attached: imagesRef.current.length > 0,
+        is_shared: isSharedRef.current,
+      });
+    } else if (noteIdRef.current) {
+      await updateNoteOffline(noteIdRef.current, draft, { push: opts.push });
+      trackNoteEdited();
     }
-  };
+  }, []);
 
   const triggerAutoSave = useCallback(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -239,79 +272,31 @@ export default function EditorScreen() {
     saveTimerRef.current = setTimeout(async () => {
       setSaveStatus('Saving...');
       try {
-        if (!isCreatedRef.current) {
-          const created = await retryOperation(async () => notesApi.create(await encryptNoteForServer({
-            title: titleRef.current,
-            content: contentRef.current,
-            tags: tagsRef.current,
-            is_pinned: isPinnedRef.current,
-            linked_event_id: linkedEventIdRef.current,
-            images: imagesRef.current,
-            attachments: attachmentsRef.current,
-          })));
-          noteIdRef.current = created.id;
-          isCreatedRef.current = true;
-          setNoteExists(true);
-          // Track note creation
-          trackNoteCreated({
-            has_scheduled_event: !!linkedEventIdRef.current,
-            has_image_attached: imagesRef.current.length > 0,
-            is_shared: false,
-          });
-        } else if (noteIdRef.current) {
-          await retryOperation(async () => notesApi.update(noteIdRef.current, await encryptNoteForServer({
-            title: titleRef.current,
-            content: contentRef.current,
-            tags: tagsRef.current,
-            is_pinned: isPinnedRef.current,
-            linked_event_id: linkedEventIdRef.current,
-            images: imagesRef.current,
-            attachments: attachmentsRef.current,
-          })));
-          // Track note edit
-          trackNoteEdited();
-        }
+        // Local write only (push deferred to exit/background) — always succeeds offline.
+        await persistLocal({ push: false });
         setSaveStatus('All changes saved');
       } catch (e: any) {
-        // Show more helpful error message
-        const errorMsg = e?.message?.includes('Network') 
-          ? 'Network error - tap to retry' 
-          : 'Failed to save';
-        setSaveStatus(errorMsg);
-        console.error('Save error after retries:', e);
+        setSaveStatus('Failed to save');
+        console.error('Autosave error:', e);
       }
     }, 2000);
-  }, []);
+  }, [persistLocal]);
 
   const handleBack = useCallback(async () => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     try {
-      if (!isCreatedRef.current && (titleRef.current || contentRef.current || linkedEventIdRef.current || imagesRef.current.length > 0 || attachmentsRef.current.length > 0)) {
-        await retryOperation(async () => notesApi.create(await encryptNoteForServer({
-          title: titleRef.current,
-          content: contentRef.current,
-          tags: tagsRef.current,
-          is_pinned: isPinnedRef.current,
-          linked_event_id: linkedEventIdRef.current,
-          images: imagesRef.current,
-          attachments: attachmentsRef.current,
-        })));
-      } else if (isCreatedRef.current && noteIdRef.current) {
-        await retryOperation(async () => notesApi.update(noteIdRef.current, await encryptNoteForServer({
-          title: titleRef.current,
-          content: contentRef.current,
-          tags: tagsRef.current,
-          is_pinned: isPinnedRef.current,
-          linked_event_id: linkedEventIdRef.current,
-          images: imagesRef.current,
-          attachments: attachmentsRef.current,
-        })));
+      const hasContent = !!(titleRef.current || contentRef.current || linkedEventIdRef.current || imagesRef.current.length > 0 || attachmentsRef.current.length > 0);
+      // Persist locally; only create a brand-new note if it actually has content.
+      if (isCreatedRef.current ? !!noteIdRef.current : hasContent) {
+        await persistLocal({ push: true });
+        // Flush the queue so the note reaches the server on exit (best-effort).
+        processSyncQueue().catch(() => {});
       }
     } catch (e) {
-      console.error('Save on back failed after retries:', e);
+      console.error('Save on back failed:', e);
     }
     router.back();
-  }, [router]);
+  }, [router, persistLocal]);
 
   const handleTitleChange = (text: string) => {
     setTitle(text);
@@ -840,7 +825,7 @@ export default function EditorScreen() {
     // from the still-stale server value.
     const clearLinkOnServer = async () => {
       if (noteIdRef.current && isCreatedRef.current) {
-        await notesApi.update(noteIdRef.current, { linked_event_id: null });
+        await updateNoteOffline(noteIdRef.current, { linked_event_id: null });
       }
     };
 
@@ -952,37 +937,15 @@ export default function EditorScreen() {
 
     setSaveStatus('Saving...');
     let saveSucceeded = false;
-    
+
     try {
-      if (!isCreatedRef.current) {
-        const created = await retryOperation(async () => notesApi.create(await encryptNoteForServer({
-          title: titleRef.current,
-          content: contentRef.current,
-          tags: tagsRef.current,
-          is_pinned: isPinnedRef.current,
-          linked_event_id: linkedEventIdRef.current,
-        })));
-        noteIdRef.current = created.id;
-        isCreatedRef.current = true;
-        setNoteExists(true);
-        saveSucceeded = true;
-      } else if (noteIdRef.current) {
-        await retryOperation(async () => notesApi.update(noteIdRef.current, await encryptNoteForServer({
-          title: titleRef.current,
-          content: contentRef.current,
-          tags: tagsRef.current,
-          is_pinned: isPinnedRef.current,
-          linked_event_id: linkedEventIdRef.current,
-        })));
-        saveSucceeded = true;
-      }
+      await persistLocal({ push: true });
+      processSyncQueue().catch(() => {});
+      saveSucceeded = true;
       setSaveStatus('All changes saved');
     } catch (e: any) {
-      const errorMsg = e?.message?.includes('Network') 
-        ? 'Network error - changes may not be saved' 
-        : 'Could not save - please try again later';
-      setSaveStatus(errorMsg);
-      console.error('Save error after retries:', e);
+      setSaveStatus('Could not save - please try again later');
+      console.error('Save error:', e);
       // Continue to navigate back even if save failed - don't trap the user
     }
     
