@@ -14,9 +14,10 @@ const isProduction = process.env.EAS_BUILD_PROFILE === 'production';
 module.exports = ({ config }) => ({
   ...config,
   // Feature flags baked at build time, read at runtime via expo-constants.
-  // e2eeKeys: Stage 3 E2EE key bootstrap (recovery code, DEK in SecureStore).
-  // ON for non-production builds; OFF in production until note encryption (Stage 4)
-  // ships, so prod users aren't shown a recovery code for inactive encryption.
+  // e2eeKeys: E2EE key bootstrap (recovery code, DEK in SecureStore) AND note field
+  // encryption. Now ON for ALL builds — Stage 4 shipped. IRREVERSIBLE for prod: any
+  // note saved with this on is ciphertext the server can't read. Only enable in prod
+  // after the §9 rollout gates (verify, Atlas snapshot, migration build).
   //
   // e2eeMigration: Stage 4 one-time eager migration of legacy plaintext notes to
   // ciphertext. OFF unless the build explicitly opts in via `E2EE_MIGRATION=1`,
@@ -24,7 +25,7 @@ module.exports = ({ config }) => ({
   // snapshot (see E2EE-DESIGN.md §7). This is the deliberate "run migration" trigger.
   extra: {
     ...(config.extra ?? {}),
-    e2eeKeys: !isProduction,
+    e2eeKeys: true,
     e2eeMigration: process.env.E2EE_MIGRATION === '1',
   },
   plugins: [
