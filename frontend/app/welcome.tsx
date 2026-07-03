@@ -11,6 +11,7 @@ import {
 import { useRouter, type Href } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { DIAGNOSTICS_ENABLED } from '../src/crypto/flags';
 
 export default function WelcomeScreen() {
   const router = useRouter();
@@ -63,15 +64,18 @@ export default function WelcomeScreen() {
             <Text style={styles.secondaryButtonText}>Login</Text>
           </TouchableOpacity>
 
-          {/* Diagnostic: on-device E2EE self-check & PBKDF2 benchmark */}
-          <TouchableOpacity
-            onPress={() => router.push('/crypto-check' as Href)}
-            activeOpacity={0.6}
-            style={styles.diagLink}
-            hitSlop={{ top: 12, bottom: 12, left: 24, right: 24 }}
-          >
-            <Text style={styles.diagLinkText}>🔒 Crypto self-check</Text>
-          </TouchableOpacity>
+          {/* Diagnostic: on-device E2EE self-check & PBKDF2 benchmark.
+              Dev/preview only — hidden in production so end users never see it. */}
+          {DIAGNOSTICS_ENABLED && (
+            <TouchableOpacity
+              onPress={() => router.push('/crypto-check' as Href)}
+              activeOpacity={0.6}
+              style={styles.diagLink}
+              hitSlop={{ top: 12, bottom: 12, left: 24, right: 24 }}
+            >
+              <Text style={styles.diagLinkText}>🔒 Crypto self-check</Text>
+            </TouchableOpacity>
+          )}
         </View>
       </View>
     </SafeAreaView>
