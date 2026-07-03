@@ -9,7 +9,8 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "test:crypto": "node src/crypto/e2ee.test.ts"
+    "test:crypto": "node --import ./src/crypto/_ts-resolver.mjs src/crypto/e2ee.test.ts && node --import ./src/crypto/_ts-resolver.mjs src/crypto/noteCryptoCore.test.ts",
+    "check:e2ee-backend": "node --import ./src/crypto/_ts-resolver.mjs scripts/e2ee-backend-check.ts"
   },
   "dependencies": {
     "@10play/tentap-editor": "^1.0.1",

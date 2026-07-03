@@ -17,9 +17,15 @@ module.exports = ({ config }) => ({
   // e2eeKeys: Stage 3 E2EE key bootstrap (recovery code, DEK in SecureStore).
   // ON for non-production builds; OFF in production until note encryption (Stage 4)
   // ships, so prod users aren't shown a recovery code for inactive encryption.
+  //
+  // e2eeMigration: Stage 4 one-time eager migration of legacy plaintext notes to
+  // ciphertext. OFF unless the build explicitly opts in via `E2EE_MIGRATION=1`,
+  // because it rewrites every plaintext note and MUST be preceded by an Atlas
+  // snapshot (see E2EE-DESIGN.md §7). This is the deliberate "run migration" trigger.
   extra: {
     ...(config.extra ?? {}),
     e2eeKeys: !isProduction,
+    e2eeMigration: process.env.E2EE_MIGRATION === '1',
   },
   plugins: [
     ...(config.plugins ?? []),
