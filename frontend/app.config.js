@@ -23,10 +23,15 @@ module.exports = ({ config }) => ({
   // ciphertext. OFF unless the build explicitly opts in via `E2EE_MIGRATION=1`,
   // because it rewrites every plaintext note and MUST be preceded by an Atlas
   // snapshot (see E2EE-DESIGN.md §7). This is the deliberate "run migration" trigger.
+  //
+  // diagnostics: gates dev-only diagnostic UI (e.g. the welcome-screen "Crypto
+  // self-check" link → /crypto-check). ON for dev + preview so crypto can be validated
+  // on a real device; OFF in production so end users never see it.
   extra: {
     ...(config.extra ?? {}),
     e2eeKeys: true,
     e2eeMigration: process.env.E2EE_MIGRATION === '1',
+    diagnostics: !isProduction,
   },
   plugins: [
     ...(config.plugins ?? []),

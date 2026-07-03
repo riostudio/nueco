@@ -22,3 +22,12 @@ export const E2EE_KEYS_ENABLED: boolean =
  */
 export const E2EE_MIGRATION_ENABLED: boolean =
   Constants.expoConfig?.extra?.e2eeMigration === true;
+
+/**
+ * Gates dev-only diagnostic UI (the welcome-screen "Crypto self-check" link →
+ * `/crypto-check`). ON in dev + preview builds so crypto can be validated on a real
+ * device; OFF in production (`extra.diagnostics = !isProduction`) so end users never
+ * see the diagnostic. `__DEV__` covers the Metro/dev case where extra may be absent.
+ */
+export const DIAGNOSTICS_ENABLED: boolean =
+  __DEV__ || Constants.expoConfig?.extra?.diagnostics === true;
