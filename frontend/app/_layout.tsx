@@ -8,9 +8,10 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
+import { ShareIntentProvider } from 'expo-share-intent';
 import { AuthProvider, useAuth } from '../src/auth';
 import { PostHogProvider } from '../src/analytics';
-import { ErrorBoundary } from '../src/components';
+import { ErrorBoundary, ShareIntentHandler } from '../src/components';
 
 // Inner component that has access to auth context for user ID
 function AppWithAnalytics() {
@@ -19,6 +20,8 @@ function AppWithAnalytics() {
   return (
     <PostHogProvider userId={user?.id}>
       <StatusBar style="dark" />
+      {/* Routes OS shares into the editor; renders nothing. Needs auth + router context. */}
+      <ShareIntentHandler />
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="index" options={{ headerShown: false }} />
         <Stack.Screen name="welcome" options={{ headerShown: false, animation: 'fade' }} />
@@ -41,13 +44,15 @@ function AppWithAnalytics() {
 export default function RootLayout() {
   return (
     <ErrorBoundary>
-      <GestureHandlerRootView style={{ flex: 1 }}>
-        <SafeAreaProvider initialMetrics={initialWindowMetrics}>
-          <AuthProvider>
-            <AppWithAnalytics />
-          </AuthProvider>
-        </SafeAreaProvider>
-      </GestureHandlerRootView>
+      <ShareIntentProvider options={{ debug: false, resetOnBackground: true, scheme: 'memopad' }}>
+        <GestureHandlerRootView style={{ flex: 1 }}>
+          <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+            <AuthProvider>
+              <AppWithAnalytics />
+            </AuthProvider>
+          </SafeAreaProvider>
+        </GestureHandlerRootView>
+      </ShareIntentProvider>
     </ErrorBoundary>
   );
 }

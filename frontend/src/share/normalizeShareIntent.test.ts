@@ -93,6 +93,19 @@ async function main() {
     ok('empty intent → needsTitle', empty.needsTitle === true && empty.content === '' && empty.images.length === 0);
   }
 
+  console.log('per-file resilience (offline upload failure):');
+  {
+    warns = [];
+    const failDeps: ShareDeps = { ...deps, uploadFile: async () => { throw new Error('offline'); } };
+    const d = await normalizeShareIntent({
+      text: 'note body',
+      files: [{ path: 'file:///d.pdf', mimeType: 'application/pdf', fileName: 'd.pdf', size: 2000 }],
+    }, failDeps);
+    ok('failed attachment skipped, not thrown', d.attachments.length === 0);
+    ok('text content still preserved', d.content === 'note body');
+    ok('warned about the failed attachment', warns.length === 1);
+  }
+
   console.log(`\n${passed} passed, ${failed} failed`);
   process.exit(failed === 0 ? 0 : 1);
 }

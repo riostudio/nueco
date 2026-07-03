@@ -89,19 +89,27 @@ export async function normalizeShareIntent(intent: RawShareIntent, deps: ShareDe
     const mime = (f.mimeType || '').toLowerCase();
     const size = f.size ?? 0;
     const isImage = mime.startsWith('image/');
+    const name = baseName(f.fileName, 'shared-file');
 
-    if (isImage && size > 0 && size <= IMAGE_INLINE_CAP) {
-      const b64 = await deps.readBase64(f.path);
-      draft.images.push(`data:${mime};base64,${b64}`);
-    } else {
-      if (!mime) deps.onWarn?.('Unrecognized file type — attached as a file.');
-      const att = await deps.uploadFile({
-        name: baseName(f.fileName, 'shared-file'),
-        mimeType: mime || 'application/octet-stream',
-        uri: f.path,
-        size,
-      });
-      draft.attachments.push(att);
+    // Per-file resilience: reading base64 or uploading a blob can fail (notably a file
+    // attachment while OFFLINE — uploadFile needs the network). Skip that file with a
+    // warning rather than losing the whole draft; text/inline-image content still saves.
+    try {
+      if (isImage && size > 0 && size <= IMAGE_INLINE_CAP) {
+        const b64 = await deps.readBase64(f.path);
+        draft.images.push(`data:${mime};base64,${b64}`);
+      } else {
+        if (!mime) deps.onWarn?.('Unrecognized file type — attaching as a file.');
+        const att = await deps.uploadFile({
+          name,
+          mimeType: mime || 'application/octet-stream',
+          uri: f.path,
+          size,
+        });
+        draft.attachments.push(att);
+      }
+    } catch {
+      deps.onWarn?.(`Couldn't attach "${name}" — check your connection and share again.`);
     }
   }
 

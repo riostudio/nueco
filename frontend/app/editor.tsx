@@ -15,6 +15,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { notesApi, eventsApi, transcribeApi, textProcessApi, attachmentsApi, uploadAttachment } from '../src/api';
 import { decryptNoteFromServer } from '../src/crypto/noteCrypto';
 import { createNoteOffline, updateNoteOffline, getLocalNotes, processSyncQueue } from '../src/offlineSync';
+import { takePendingShareDraft } from '../src/share/pendingShareDraft';
 import { Tag, CalendarEvent, Attachment } from '../src/types';
 import { TAG_COLORS, C } from '../src/theme';
 import { 
@@ -37,7 +38,7 @@ import {
 
 export default function EditorScreen() {
   const router = useRouter();
-  const { noteId } = useLocalSearchParams<{ noteId: string }>();
+  const { noteId, shared } = useLocalSearchParams<{ noteId: string; shared?: string }>();
   const isNew = !noteId || noteId === 'new';
 
   const [title, setTitle] = useState('');
@@ -107,6 +108,9 @@ export default function EditorScreen() {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // True when this note originated from a share intent (analytics + discard-on-cancel).
   const isSharedRef = useRef(false);
+  // True once the user actually edits — a pre-filled shared draft that's never touched
+  // is discarded on back rather than silently saved.
+  const userEditedRef = useRef(false);
   
   // State to track if note exists (for UI rendering like delete button)
   const [noteExists, setNoteExists] = useState(!isNew);
@@ -122,6 +126,20 @@ export default function EditorScreen() {
   useEffect(() => {
     if (!isNew && noteId) loadNote(noteId);
   }, [noteId]);
+
+  // Pre-fill from a shared draft (staged by ShareIntentHandler). Sets state directly so
+  // it does NOT trigger autosave — an untouched shared draft is discarded on back.
+  useEffect(() => {
+    if (!(isNew && shared === '1')) return;
+    const draft = takePendingShareDraft();
+    if (!draft) return;
+    isSharedRef.current = true;
+    if (draft.title) setTitle(draft.title);
+    if (draft.content) setContent(draft.content);
+    if (draft.tags?.length) setTags(draft.tags as Tag[]);
+    if (draft.images?.length) setImages(draft.images);
+    if (draft.attachments?.length) setAttachments(draft.attachments as Attachment[]);
+  }, []);
 
   const loadNote = async (id: string) => {
     try {
@@ -267,6 +285,7 @@ export default function EditorScreen() {
   }, []);
 
   const triggerAutoSave = useCallback(() => {
+    userEditedRef.current = true; // any edit commits a shared draft (no longer discardable)
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     setSaveStatus('Unsaved changes');
     saveTimerRef.current = setTimeout(async () => {
@@ -284,6 +303,11 @@ export default function EditorScreen() {
 
   const handleBack = useCallback(async () => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    // Discard an untouched shared draft (user backed out without editing/saving).
+    if (isSharedRef.current && !isCreatedRef.current && !userEditedRef.current) {
+      router.back();
+      return;
+    }
     try {
       const hasContent = !!(titleRef.current || contentRef.current || linkedEventIdRef.current || imagesRef.current.length > 0 || attachmentsRef.current.length > 0);
       // Persist locally; only create a brand-new note if it actually has content.
