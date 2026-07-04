@@ -447,14 +447,52 @@ async def delete_attachment(key: str = Query(...), current_user: dict = Depends(
     return {"message": "Attachment deleted"}
 
 
+# Object tag written by the ClamAV scanner (infra/clamav, cdk-serverless-clamscan). We
+# gate downloads on CLEAN only — anything else (INFECTED / ERROR / N/A / not-yet-scanned)
+# blocks, so an unscanned or infected file is never downloadable (fail-safe).
+AV_TAG_KEY = "scan-status"
+
+
+def get_scan_status(s3, key: str) -> str:
+    """Return an object's malware-scan status: 'CLEAN', 'PENDING' (not yet tagged), or the
+    raw tag value (e.g. 'INFECTED'). Never raises — a read error reads as 'PENDING' so a
+    transient failure blocks the download rather than leaking an unscanned file."""
+    try:
+        tags = s3.get_object_tagging(Bucket=S3_BUCKET, Key=key).get("TagSet", [])
+        for t in tags:
+            if t.get("Key") == AV_TAG_KEY:
+                return t.get("Value") or "PENDING"
+        return "PENDING"
+    except (ClientError, BotoCoreError) as e:
+        logger.warning(f"scan-status read failed for {key}: {e}")
+        return "PENDING"
+
+
 class DownloadUrlRequest(BaseModel):
     key: str
+
+
+class ScanStatusRequest(BaseModel):
+    keys: List[str]
+
+
+@api_router.post("/attachments/scan-status")
+async def attachment_scan_status(req: ScanStatusRequest, current_user: dict = Depends(get_current_user)):
+    """Return {key: scan_status} for the caller's own attachments, so the app can show a
+    scanning / clean / blocked badge without downloading. Keys outside the caller's
+    namespace are skipped."""
+    s3 = get_s3_client()
+    if s3 is None:
+        raise HTTPException(status_code=503, detail="File attachments are not enabled on this server")
+    user_id = current_user.get("id") or str(current_user.get("_id", ""))
+    prefix = f"{ATTACHMENT_PREFIX}/{user_id}/"
+    return {key: get_scan_status(s3, key) for key in req.keys[:100] if key.startswith(prefix)}
 
 
 @api_router.post("/attachments/download-url")
 async def attachment_download_url(req: DownloadUrlRequest, current_user: dict = Depends(get_current_user)):
     """Return a presigned GET URL for viewing/downloading an attachment.
-    Scoped to the caller's own prefix. Used for tap-to-open and shareable links."""
+    Scoped to the caller's own prefix. Blocked unless the malware scan is CLEAN."""
     s3 = get_s3_client()
     if s3 is None:
         raise HTTPException(status_code=503, detail="File attachments are not enabled on this server")
@@ -462,6 +500,12 @@ async def attachment_download_url(req: DownloadUrlRequest, current_user: dict = 
     user_id = current_user.get("id") or str(current_user.get("_id", ""))
     if not req.key.startswith(f"{ATTACHMENT_PREFIX}/{user_id}/"):
         raise HTTPException(status_code=403, detail="Not allowed to access this file")
+
+    # Fail-safe: only CLEAN files are downloadable. Pending/infected/errored are blocked;
+    # the JSON detail lets the app distinguish "scanning" from "infected".
+    status = get_scan_status(s3, req.key)
+    if status != "CLEAN":
+        raise HTTPException(status_code=403, detail={"error": "not_clean", "scan_status": status})
 
     try:
         url = s3.generate_presigned_url(
