@@ -127,8 +127,8 @@ export default function EditorScreen() {
     if (!isNew && noteId) loadNote(noteId);
   }, [noteId]);
 
-  // Pre-fill from a shared draft (staged by ShareIntentHandler). Sets state directly so
-  // it does NOT trigger autosave — an untouched shared draft is discarded on back.
+  // Pre-fill from a shared draft (staged by ShareIntentHandler), then autosave it so the
+  // shared note persists automatically — no manual save/edit required.
   useEffect(() => {
     if (!(isNew && shared === '1')) return;
     const draft = takePendingShareDraft();
@@ -139,6 +139,10 @@ export default function EditorScreen() {
     if (draft.tags?.length) setTags(draft.tags as Tag[]);
     if (draft.images?.length) setImages(draft.images);
     if (draft.attachments?.length) setAttachments(draft.attachments as Attachment[]);
+    // Autosave the shared draft (marks it committed + schedules the debounced save). The
+    // debounced save reads refs, which are populated by the sync effects after this render.
+    triggerAutoSave();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const loadNote = async (id: string) => {
@@ -303,11 +307,6 @@ export default function EditorScreen() {
 
   const handleBack = useCallback(async () => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    // Discard an untouched shared draft (user backed out without editing/saving).
-    if (isSharedRef.current && !isCreatedRef.current && !userEditedRef.current) {
-      router.back();
-      return;
-    }
     try {
       const hasContent = !!(titleRef.current || contentRef.current || linkedEventIdRef.current || imagesRef.current.length > 0 || attachmentsRef.current.length > 0);
       // Persist locally; only create a brand-new note if it actually has content.
@@ -953,13 +952,12 @@ export default function EditorScreen() {
 
   // Save note and show sign-up prompt (only on first note save)
   const handleSaveAndBack = async () => {
-    // Discard an untouched shared draft (user backed out without editing) — don't save.
-    if (isSharedRef.current && !isCreatedRef.current && !userEditedRef.current) {
-      router.replace('/(tabs)');
-      return;
-    }
-    // Check if there's content to save (also save if there's a linked event)
-    if (!title.trim() && !content.trim() && !linkedEventIdRef.current) {
+    // Cancel any pending autosave timer so it can't double-fire with the save below.
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    // Nothing to save? (also save if there's a linked event, images, or attachments —
+    // e.g. a photo/audio/video share with no typed title/body)
+    if (!title.trim() && !content.trim() && !linkedEventIdRef.current
+        && imagesRef.current.length === 0 && attachmentsRef.current.length === 0) {
       router.replace('/(tabs)');
       return;
     }

@@ -88,8 +88,8 @@
             "NSExtensionActivationSupportsMovieWithMaxCount": 1,
             "NSExtensionActivationSupportsFileWithMaxCount": 10
           },
-          "androidIntentFilters": ["text/*", "image/*", "video/*", "application/*"],
-          "androidMultiIntentFilters": ["image/*", "video/*", "application/*"],
+          "androidIntentFilters": ["text/*", "image/*", "audio/*", "video/*", "application/*"],
+          "androidMultiIntentFilters": ["image/*", "audio/*", "video/*", "application/*"],
           "disableIOS": false,
           "disableAndroid": false
         }
