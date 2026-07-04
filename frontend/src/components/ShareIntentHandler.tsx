@@ -11,7 +11,6 @@ import { Platform, ToastAndroid, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useShareIntentContext } from 'expo-share-intent';
 import * as FileSystem from 'expo-file-system/legacy';
-import { uploadAttachment } from '../api';
 import { useAuth } from '../auth';
 import { normalizeShareIntent } from '../share/normalizeShareIntent';
 import { setPendingShareDraft } from '../share/pendingShareDraft';
@@ -36,9 +35,10 @@ export function ShareIntentHandler() {
     busy.current = true;
     (async () => {
       try {
+        // Files aren't uploaded here — they're staged as pendingFiles and the editor
+        // uploads them with a visible radial progress.
         const draft = await normalizeShareIntent(shareIntent, {
           readBase64: (uri) => FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 }),
-          uploadFile: (f) => uploadAttachment(f),
           onWarn: toast,
         });
         setPendingShareDraft(draft);

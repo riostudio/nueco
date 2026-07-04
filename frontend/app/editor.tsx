@@ -12,7 +12,8 @@ import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as WebBrowser from 'expo-web-browser';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { notesApi, eventsApi, transcribeApi, textProcessApi, attachmentsApi, uploadAttachment } from '../src/api';
+import { notesApi, eventsApi, transcribeApi, textProcessApi, attachmentsApi, uploadAttachmentWithProgress, type UploadFile } from '../src/api';
+import { RadialProgress } from '../src/components';
 import { decryptNoteFromServer } from '../src/crypto/noteCrypto';
 import { createNoteOffline, updateNoteOffline, getLocalNotes, processSyncQueue } from '../src/offlineSync';
 import { takePendingShareDraft } from '../src/share/pendingShareDraft';
@@ -62,6 +63,8 @@ export default function EditorScreen() {
   const [showImagePicker, setShowImagePicker] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
+  // In-flight uploads (shared files + in-app picks): shown as filename + radial progress.
+  const [pendingUploads, setPendingUploads] = useState<{ id: string; name: string; progress: number }[]>([]);
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   
   // Recording duration tracking for analytics
@@ -138,7 +141,8 @@ export default function EditorScreen() {
     if (draft.content) setContent(draft.content);
     if (draft.tags?.length) setTags(draft.tags as Tag[]);
     if (draft.images?.length) setImages(draft.images);
-    if (draft.attachments?.length) setAttachments(draft.attachments as Attachment[]);
+    // Big shared files upload here (in the editor) with visible radial progress.
+    if (draft.pendingFiles?.length) uploadFiles(draft.pendingFiles);
     // Autosave the shared draft (marks it committed + schedules the debounced save). The
     // debounced save reads refs, which are populated by the sync effects after this render.
     triggerAutoSave();
@@ -753,6 +757,35 @@ export default function EditorScreen() {
   const MAX_ATTACHMENT_MB = 100;
   const MAX_PICK_AT_ONCE = 10;
 
+  // Upload files (shared or in-app-picked) with per-file radial progress. Each completed
+  // upload is appended to attachments[] and autosaved. Used by both the share pre-fill
+  // and pickAttachment (new + edit), so progress shows consistently everywhere.
+  const uploadFiles = useCallback(async (files: UploadFile[]) => {
+    for (const file of files) {
+      if ((file.size ?? 0) > MAX_ATTACHMENT_MB * 1024 * 1024) {
+        Alert.alert('File too large', `${file.name} is over ${MAX_ATTACHMENT_MB}MB and can’t be attached.`);
+        continue;
+      }
+      const uploadId = `up_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      setPendingUploads(prev => [...prev, { id: uploadId, name: file.name, progress: 0 }]);
+      try {
+        const meta = await uploadAttachmentWithProgress(file, (p) =>
+          setPendingUploads(prev => prev.map(u => (u.id === uploadId ? { ...u, progress: p } : u))),
+        );
+        setAttachments(prev => [...prev, meta]);
+        triggerAutoSave();
+      } catch (e: any) {
+        const notEnabled = e?.message?.includes('503') || e?.message?.includes('not enabled');
+        Alert.alert(
+          'Upload failed',
+          notEnabled ? 'File attachments aren’t enabled on the server yet.' : `Couldn’t upload ${file.name}.`,
+        );
+      } finally {
+        setPendingUploads(prev => prev.filter(u => u.id !== uploadId));
+      }
+    }
+  }, [triggerAutoSave]);
+
   // Pick up to MAX_PICK_AT_ONCE files at once and upload each (online-direct).
   const pickAttachment = async () => {
     try {
@@ -767,47 +800,15 @@ export default function EditorScreen() {
         Alert.alert('Too many files', `You can attach up to ${MAX_PICK_AT_ONCE} files at once. Adding the first ${MAX_PICK_AT_ONCE}.`);
         assets = assets.slice(0, MAX_PICK_AT_ONCE);
       }
-
-      setIsUploadingAttachment(true);
-      const uploaded: Attachment[] = [];
-      const failures: string[] = [];
-      let notEnabled = false;
-
-      for (const asset of assets) {
-        const size = asset.size ?? 0;
-        const name = asset.name || 'file';
-        const mimeType = asset.mimeType || 'application/octet-stream';
-
-        if (size > MAX_ATTACHMENT_MB * 1024 * 1024) {
-          failures.push(`${name} (over ${MAX_ATTACHMENT_MB}MB)`);
-          continue;
-        }
-        try {
-          const meta = await uploadAttachment({ uri: asset.uri, name, mimeType, size });
-          uploaded.push(meta);
-        } catch (e: any) {
-          if (e?.message?.includes('503') || e?.message?.includes('not enabled')) notEnabled = true;
-          failures.push(name);
-        }
-      }
-
-      if (uploaded.length > 0) {
-        setAttachments(prev => [...prev, ...uploaded]);
-        triggerAutoSave();
-      }
-      setIsUploadingAttachment(false);
-
-      if (failures.length > 0) {
-        Alert.alert(
-          uploaded.length > 0 ? 'Some files were not added' : 'Upload failed',
-          notEnabled
-            ? 'File attachments aren’t enabled on the server yet.'
-            : `Couldn’t upload: ${failures.join(', ')}`,
-        );
-      }
+      // Upload with visible radial progress (same path as shared files).
+      uploadFiles(assets.map(a => ({
+        uri: a.uri,
+        name: a.name || 'file',
+        mimeType: a.mimeType || 'application/octet-stream',
+        size: a.size ?? 0,
+      })));
     } catch (e) {
       console.error('Attachment pick failed:', e);
-      setIsUploadingAttachment(false);
     }
   };
 
@@ -1184,9 +1185,17 @@ export default function EditorScreen() {
           </View>
 
           {/* Attachments Section */}
-          {attachments.length > 0 && (
+          {(attachments.length > 0 || pendingUploads.length > 0) && (
             <View style={s.imagesContainer}>
               <Text style={s.imagesSectionTitle}>Attachments</Text>
+              {/* In-flight uploads: filename + radial progress */}
+              {pendingUploads.map((u) => (
+                <View key={u.id} style={s.attachmentRow} testID={`uploading-${u.id}`}>
+                  <MaterialIcons name="upload-file" size={22} color={C.secondary} />
+                  <Text style={s.attachmentName} numberOfLines={1}>{u.name}</Text>
+                  <RadialProgress progress={u.progress} size={22} />
+                </View>
+              ))}
               {attachments.map((att) => (
                 <TouchableOpacity
                   key={att.id}

@@ -15,7 +15,6 @@ function ok(name: string, cond: boolean, detail = '') {
 let warns: string[] = [];
 const deps: ShareDeps = {
   readBase64: async () => 'QkFTRTY0', // "BASE64"
-  uploadFile: async (f) => ({ id: `att_${f.name}`, filename: f.name, mime_type: f.mimeType, size_bytes: f.size }),
   onWarn: (m) => warns.push(m),
 };
 
@@ -48,20 +47,25 @@ async function main() {
     const small = await normalizeShareIntent(
       { files: [{ path: 'file:///a.jpg', mimeType: 'image/jpeg', fileName: 'a.jpg', size: 1000 }] }, deps);
     ok('small image inlined as data URI', small.images.length === 1 && small.images[0].startsWith('data:image/jpeg;base64,'));
-    ok('no attachment for inline image', small.attachments.length === 0);
+    ok('no pending file for inline image', small.pendingFiles.length === 0);
     ok('title = "Photo note"', small.title === 'Photo note');
 
     const big = await normalizeShareIntent(
       { files: [{ path: 'file:///b.png', mimeType: 'image/png', fileName: 'b.png', size: IMAGE_INLINE_CAP + 1 }] }, deps);
-    ok('over-cap image → attachment, not inline', big.attachments.length === 1 && big.images.length === 0);
+    ok('over-cap image → pending file, not inline', big.pendingFiles.length === 1 && big.images.length === 0);
   }
 
-  console.log('document / video files:');
+  console.log('document / audio / video files → pending upload:');
   {
     const doc = await normalizeShareIntent(
       { files: [{ path: 'file:///r.pdf', mimeType: 'application/pdf', fileName: 'report.pdf', size: 2000 }] }, deps);
-    ok('pdf → attachment', doc.attachments.length === 1 && doc.images.length === 0);
+    ok('pdf → pending file', doc.pendingFiles.length === 1 && doc.images.length === 0);
+    ok('pending file carries uri/name/mime/size', doc.pendingFiles[0].uri === 'file:///r.pdf' && doc.pendingFiles[0].name === 'report.pdf' && doc.pendingFiles[0].size === 2000);
     ok('title from filename (no ext)', doc.title === 'report');
+
+    const audio = await normalizeShareIntent(
+      { files: [{ path: 'file:///s.m4a', mimeType: 'audio/mp4', fileName: 's.m4a', size: 9000 }] }, deps);
+    ok('audio → pending file', audio.pendingFiles.length === 1);
   }
 
   console.log('multiple files → one draft:');
@@ -77,7 +81,7 @@ async function main() {
       { path: 'file:///p.jpg', mimeType: 'image/jpeg', fileName: 'p.jpg', size: 500 },
       { path: 'file:///d.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', fileName: 'd.docx', size: 5000 },
     ] }, deps);
-    ok('mixed: 1 image + 1 attachment', mixed.images.length === 1 && mixed.attachments.length === 1);
+    ok('mixed: 1 inline image + 1 pending file', mixed.images.length === 1 && mixed.pendingFiles.length === 1);
     ok('mixed title from first filename (not "Photo note")', mixed.title === 'p');
   }
 
@@ -86,7 +90,8 @@ async function main() {
     warns = [];
     const unk = await normalizeShareIntent(
       { files: [{ path: 'file:///x', mimeType: '', fileName: 'x', size: 10 }] }, deps);
-    ok('unknown mime → attachment', unk.attachments.length === 1);
+    ok('unknown mime → pending file', unk.pendingFiles.length === 1);
+    ok('unknown mime defaults to octet-stream', unk.pendingFiles[0].mimeType === 'application/octet-stream');
     ok('warned on unknown type', warns.length === 1);
 
     const empty = await normalizeShareIntent({}, deps);
@@ -102,7 +107,7 @@ async function main() {
       { path: 'file:///3.jpg', mimeType: 'image/jpeg', fileName: '3.jpg', size: twoMB },
     ] }, deps);
     ok('first images inlined up to budget', d.images.length === 2, `got ${d.images.length}`);
-    ok('over-budget image overflows to attachment', d.attachments.length === 1);
+    ok('over-budget image overflows to pending file', d.pendingFiles.length === 1);
     ok('budget constant sane', IMAGE_INLINE_TOTAL_BUDGET <= 8 * 1024 * 1024);
   }
 
@@ -110,20 +115,15 @@ async function main() {
   {
     const d = await normalizeShareIntent(
       { files: [{ path: 'file:///x', mimeType: 'application/pdf', fileName: '../../etc/evil.pdf', size: 100 }] }, deps);
-    ok('path separators stripped from stored filename', !/[/\\]/.test(d.attachments[0].filename), d.attachments[0]?.filename);
+    ok('path separators stripped from pending filename', !/[/\\]/.test(d.pendingFiles[0].name), d.pendingFiles[0]?.name);
   }
 
-  console.log('per-file resilience (offline upload failure):');
+  console.log('inline-read failure falls back to pending upload:');
   {
-    warns = [];
-    const failDeps: ShareDeps = { ...deps, uploadFile: async () => { throw new Error('offline'); } };
-    const d = await normalizeShareIntent({
-      text: 'note body',
-      files: [{ path: 'file:///d.pdf', mimeType: 'application/pdf', fileName: 'd.pdf', size: 2000 }],
-    }, failDeps);
-    ok('failed attachment skipped, not thrown', d.attachments.length === 0);
-    ok('text content still preserved', d.content === 'note body');
-    ok('warned about the failed attachment', warns.length === 1);
+    const failRead: ShareDeps = { ...deps, readBase64: async () => { throw new Error('read failed'); } };
+    const d = await normalizeShareIntent(
+      { files: [{ path: 'file:///a.jpg', mimeType: 'image/jpeg', fileName: 'a.jpg', size: 1000 }] }, failRead);
+    ok('unreadable inline image → pending file (not lost)', d.pendingFiles.length === 1 && d.images.length === 0);
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);
