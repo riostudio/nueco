@@ -9,7 +9,7 @@
  * Mapping (see the spec table):
  *   - URL (browser / Docs "copy link")      → title = page title || url, body = url, tag "link"
  *   - plain text (WhatsApp forward, etc.)    → body = text, no title (needsTitle)
- *   - image file ≤ cap                       → inline base64 in images[]
+ *   - image file ≤ caps                      → inline base64 in images[]
  *   - large image / doc / video / unknown    → uploadAttachment → attachments[]
  *   - multiple files                         → ONE draft with multiple images/attachments
  */
@@ -53,14 +53,22 @@ export interface ShareDeps {
   onWarn?: (message: string) => void;
 }
 
-/** Inline base64 only below this size; larger images go to blob storage instead so a
- * big payload never lands in a note / the sync queue. */
+/** Inline base64 only below this size PER image; larger images go to blob storage. */
 export const IMAGE_INLINE_CAP = 5 * 1024 * 1024; // 5 MB
+/** Cumulative inline budget across a share. base64 inflates ~4/3, and the backend caps
+ * a note's total images at 8 MB — keep the raw sum here so a multi-photo share never
+ * 413s on sync; images past the budget overflow to blob storage. */
+export const IMAGE_INLINE_TOTAL_BUDGET = 5 * 1024 * 1024; // 5 MB raw ⇒ ~6.7 MB base64
 const LINK_TAG: NoteDraftTag = { name: 'link', color: '#4F8EF7' };
 const URL_RE = /^https?:\/\/\S+$/i;
 
 function baseName(name: string | null | undefined, fallback: string): string {
-  const n = (name || '').trim();
+  // Sanitize filenames from an untrusted source: collapse path separators, strip
+  // control characters (0x00–0x1f, 0x7f) — basic hygiene against malicious names.
+  const n = (name || '')
+    .trim()
+    .replace(/[/\\]+/g, '_')
+    .replace(/[\x00-\x1f\x7f]/g, '');
   return n || fallback;
 }
 
@@ -85,20 +93,24 @@ export async function normalizeShareIntent(intent: RawShareIntent, deps: ShareDe
   }
 
   const files = intent.files ?? [];
+  let inlineBytes = 0; // cumulative raw bytes inlined so far (budget guard)
   for (const f of files) {
     const mime = (f.mimeType || '').toLowerCase();
     const size = f.size ?? 0;
     const isImage = mime.startsWith('image/');
     const name = baseName(f.fileName, 'shared-file');
+    const canInline = isImage && size > 0 && size <= IMAGE_INLINE_CAP && inlineBytes + size <= IMAGE_INLINE_TOTAL_BUDGET;
 
     // Per-file resilience: reading base64 or uploading a blob can fail (notably a file
     // attachment while OFFLINE — uploadFile needs the network). Skip that file with a
     // warning rather than losing the whole draft; text/inline-image content still saves.
     try {
-      if (isImage && size > 0 && size <= IMAGE_INLINE_CAP) {
+      if (canInline) {
         const b64 = await deps.readBase64(f.path);
         draft.images.push(`data:${mime};base64,${b64}`);
+        inlineBytes += size;
       } else {
+        // Over-budget/large image, doc, video, or unknown type → blob storage.
         if (!mime) deps.onWarn?.('Unrecognized file type — attaching as a file.');
         const att = await deps.uploadFile({
           name,

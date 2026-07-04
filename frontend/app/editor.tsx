@@ -953,6 +953,11 @@ export default function EditorScreen() {
 
   // Save note and show sign-up prompt (only on first note save)
   const handleSaveAndBack = async () => {
+    // Discard an untouched shared draft (user backed out without editing) — don't save.
+    if (isSharedRef.current && !isCreatedRef.current && !userEditedRef.current) {
+      router.replace('/(tabs)');
+      return;
+    }
     // Check if there's content to save (also save if there's a linked event)
     if (!title.trim() && !content.trim() && !linkedEventIdRef.current) {
       router.replace('/(tabs)');

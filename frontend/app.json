@@ -89,6 +89,7 @@
             "NSExtensionActivationSupportsFileWithMaxCount": 10
           },
           "androidIntentFilters": ["text/*", "image/*", "video/*", "application/*"],
+          "androidMultiIntentFilters": ["image/*", "video/*", "application/*"],
           "disableIOS": false,
           "disableAndroid": false
         }

@@ -3,7 +3,7 @@
  *   node src/share/normalizeShareIntent.test.ts
  * Exits non-zero on any failure. Side effects are stubbed via injected deps.
  */
-import { normalizeShareIntent, IMAGE_INLINE_CAP, type ShareDeps } from './normalizeShareIntent.ts';
+import { normalizeShareIntent, IMAGE_INLINE_CAP, IMAGE_INLINE_TOTAL_BUDGET, type ShareDeps } from './normalizeShareIntent.ts';
 
 let passed = 0;
 let failed = 0;
@@ -91,6 +91,26 @@ async function main() {
 
     const empty = await normalizeShareIntent({}, deps);
     ok('empty intent → needsTitle', empty.needsTitle === true && empty.content === '' && empty.images.length === 0);
+  }
+
+  console.log('multi-image cumulative budget:');
+  {
+    const twoMB = 2 * 1024 * 1024; // 3 × 2MB = 6MB > 5MB budget
+    const d = await normalizeShareIntent({ files: [
+      { path: 'file:///1.jpg', mimeType: 'image/jpeg', fileName: '1.jpg', size: twoMB },
+      { path: 'file:///2.jpg', mimeType: 'image/jpeg', fileName: '2.jpg', size: twoMB },
+      { path: 'file:///3.jpg', mimeType: 'image/jpeg', fileName: '3.jpg', size: twoMB },
+    ] }, deps);
+    ok('first images inlined up to budget', d.images.length === 2, `got ${d.images.length}`);
+    ok('over-budget image overflows to attachment', d.attachments.length === 1);
+    ok('budget constant sane', IMAGE_INLINE_TOTAL_BUDGET <= 8 * 1024 * 1024);
+  }
+
+  console.log('filename sanitization:');
+  {
+    const d = await normalizeShareIntent(
+      { files: [{ path: 'file:///x', mimeType: 'application/pdf', fileName: '../../etc/evil.pdf', size: 100 }] }, deps);
+    ok('path separators stripped from stored filename', !/[/\\]/.test(d.attachments[0].filename), d.attachments[0]?.filename);
   }
 
   console.log('per-file resilience (offline upload failure):');
