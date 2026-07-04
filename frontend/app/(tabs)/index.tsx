@@ -14,6 +14,8 @@ import { trackNoteSearched, trackNoteDeleted } from '../../src/analytics';
 import { useOfflineNotes } from '../../src/useOfflineNotes';
 import OfflineBanner from '../../src/components/OfflineBanner';
 import { getSyncQueue, getLocalNotes, LocalNote } from '../../src/offlineSync';
+import { parseSourcePost } from '../../src/share/socialSource';
+import { plainTextFromContent } from '../../src/textContent';
 
 // Extend C with surfaceHi for this screen
 const Colors = { ...C, surfaceHi: '#FFF8E1' };
@@ -34,7 +36,8 @@ function formatTime(dateStr: string): string {
 }
 
 function stripMd(text: string): string {
-  return text.replace(/\*\*/g, '').replace(/\*/g, '').replace(/^- /gm, '').trim();
+  // Notes store rich HTML (+ a shared-post marker); render a clean plain-text preview.
+  return plainTextFromContent(text);
 }
 
 export default function NotesScreen() {
@@ -167,7 +170,7 @@ export default function NotesScreen() {
   const filteredNotes = debouncedSearch
     ? notes.filter((n) =>
         n.title?.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
-        n.content?.toLowerCase().includes(debouncedSearch.toLowerCase())
+        plainTextFromContent(n.content || '').toLowerCase().includes(debouncedSearch.toLowerCase())
       )
     : notes;
   const pinnedNotes = filteredNotes.filter((n) => n.is_pinned);
@@ -211,7 +214,13 @@ export default function NotesScreen() {
 
   const renderCard = (note: LocalNote) => {
     const linkedEvent = note.linked_event_id ? eventsMap[note.linked_event_id] : null;
-    
+    // A shared social post has no title/body of its own — surface its platform + caption so
+    // the list entry isn't blank.
+    const src = parseSourcePost(note.content || '').sourcePost;
+    const body = stripMd(note.content || '');
+    const titleText = note.title || src?.title || src?.label || 'Untitled Note';
+    const previewText = body || (src ? (src.title ? `${src.label} · ${src.title}` : src.label) : '');
+
     return (
       <TouchableOpacity
         key={note.id}
@@ -222,7 +231,7 @@ export default function NotesScreen() {
       >
         <View style={s.cardHead}>
           <Text style={s.cardTitle} numberOfLines={1}>
-            {note.title || 'Untitled Note'}
+            {titleText}
           </Text>
           <View style={s.cardActions}>
             <TouchableOpacity
@@ -244,7 +253,7 @@ export default function NotesScreen() {
               testID={`delete-note-${note.id}`}
               onPress={(e) => {
                 e.stopPropagation();
-                handleDeletePress(note.id, note.title);
+                handleDeletePress(note.id, titleText);
               }}
               style={s.actionBtn}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -253,9 +262,9 @@ export default function NotesScreen() {
             </TouchableOpacity>
           </View>
         </View>
-        {note.content ? (
+        {previewText ? (
           <Text style={s.cardPreview} numberOfLines={2}>
-            {stripMd(note.content).substring(0, 120)}
+            {previewText.substring(0, 120)}
           </Text>
         ) : null}
         

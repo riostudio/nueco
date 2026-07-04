@@ -11,6 +11,7 @@ import { Platform, ToastAndroid, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useShareIntentContext } from 'expo-share-intent';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as VideoThumbnails from 'expo-video-thumbnails';
 import { useAuth } from '../auth';
 import { normalizeShareIntent } from '../share/normalizeShareIntent';
 import { setPendingShareDraft } from '../share/pendingShareDraft';
@@ -39,6 +40,16 @@ export function ShareIntentHandler() {
         // uploads them with a visible radial progress.
         const draft = await normalizeShareIntent(shareIntent, {
           readBase64: (uri) => FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 }),
+          // A shared video gets a poster frame for its card thumbnail (best-effort).
+          videoThumbnail: async (uri) => {
+            try {
+              const { uri: thumbUri } = await VideoThumbnails.getThumbnailAsync(uri, { time: 1000 });
+              const b64 = await FileSystem.readAsStringAsync(thumbUri, { encoding: FileSystem.EncodingType.Base64 });
+              return `data:image/jpeg;base64,${b64}`;
+            } catch {
+              return undefined;
+            }
+          },
           onWarn: toast,
         });
         setPendingShareDraft(draft);

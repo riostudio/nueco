@@ -19,19 +19,21 @@ const deps: ShareDeps = {
 };
 
 async function main() {
-  console.log('URL shares:');
+  console.log('generic URL shares → card (host as label):');
   {
     const d = await normalizeShareIntent({ webUrl: 'https://ex.com/x', meta: { title: 'Ex Page' } }, deps);
-    ok('title = page title', d.title === 'Ex Page');
-    ok('content = url', d.content === 'https://ex.com/x');
+    ok('generic url → card, host label', d.sourcePost?.platform === 'link' && d.sourcePost?.label === 'ex.com');
+    ok('meta.title → card caption', d.sourcePost?.title === 'Ex Page');
+    ok('url NOT dumped into body', d.content === '');
+    ok('note title left for user', d.title === '');
     ok('tagged "link"', d.tags.length === 1 && d.tags[0].name === 'link');
-    ok('no needsTitle (has title)', d.needsTitle === false);
+    ok('no needsTitle (card is content)', d.needsTitle === false);
 
     const d2 = await normalizeShareIntent({ webUrl: 'https://ex.com/y' }, deps);
-    ok('no meta title → title = url', d2.title === 'https://ex.com/y');
+    ok('no caption → empty card title', d2.sourcePost?.title === '');
 
     const d3 = await normalizeShareIntent({ text: 'https://ex.com/z' }, deps);
-    ok('bare-url text treated as link', d3.tags[0]?.name === 'link' && d3.content === 'https://ex.com/z');
+    ok('bare-url text → card', d3.sourcePost?.platform === 'link' && d3.tags[0]?.name === 'link' && d3.content === '');
   }
 
   console.log('plain text:');
@@ -124,6 +126,51 @@ async function main() {
     const d = await normalizeShareIntent(
       { files: [{ path: 'file:///a.jpg', mimeType: 'image/jpeg', fileName: 'a.jpg', size: 1000 }] }, failRead);
     ok('unreadable inline image → pending file (not lost)', d.pendingFiles.length === 1 && d.images.length === 0);
+  }
+
+  console.log('social post shares → card (not a URL in the body):');
+  {
+    const depsWithVideo: ShareDeps = { ...deps, videoThumbnail: async () => 'data:image/jpeg;base64,VIDEOTHUMB' };
+
+    // Link-only Instagram share (caption + url together in text).
+    const ig = await normalizeShareIntent(
+      { webUrl: 'https://www.instagram.com/p/ABC/', text: 'Amazing sunset https://www.instagram.com/p/ABC/' }, deps);
+    ok('sourcePost created for IG', ig.sourcePost?.platform === 'instagram');
+    ok('caption = text minus the url', ig.sourcePost?.title === 'Amazing sunset', ig.sourcePost?.title);
+    ok('url NOT dumped into body', ig.content === '');
+    ok('note title left empty for the user', ig.title === '');
+    ok('kind = link when no media', ig.sourcePost?.kind === 'link');
+    ok('still tagged "link"', ig.tags[0]?.name === 'link');
+    ok('no needsTitle (card is content)', ig.needsTitle === false);
+
+    // IG share carrying an image → the image becomes the card thumbnail (images[0]).
+    const igImg = await normalizeShareIntent(
+      { webUrl: 'https://instagram.com/p/x', files: [{ path: 'file:///t.jpg', mimeType: 'image/jpeg', fileName: 't.jpg', size: 1000 }] }, deps);
+    ok('image share → kind image', igImg.sourcePost?.kind === 'image');
+    ok('thumbnail === inlined images[0]', !!igImg.sourcePost?.thumbnail && igImg.sourcePost?.thumbnail === igImg.images[0]);
+    ok('no "Photo note" override for a card', igImg.title === '');
+
+    // Video share → generated poster frame; the video itself still uploads.
+    const fbVid = await normalizeShareIntent(
+      { webUrl: 'https://www.facebook.com/watch/?v=1', files: [{ path: 'file:///v.mp4', mimeType: 'video/mp4', fileName: 'v.mp4', size: 999999 }] }, depsWithVideo);
+    ok('video share → kind video', fbVid.sourcePost?.kind === 'video');
+    ok('thumbnail = generated frame', fbVid.sourcePost?.thumbnail === 'data:image/jpeg;base64,VIDEOTHUMB');
+    ok('generated frame stashed at images[0]', fbVid.images[0] === 'data:image/jpeg;base64,VIDEOTHUMB');
+    ok('video uploads as a pending file', fbVid.pendingFiles.length === 1 && fbVid.pendingFiles[0].mimeType === 'video/mp4');
+
+    // Caption falls back to meta.title when the text carries no caption.
+    const yt = await normalizeShareIntent({ webUrl: 'https://youtu.be/abc', meta: { title: 'Cool Video' } }, deps);
+    ok('caption falls back to meta.title', yt.sourcePost?.title === 'Cool Video');
+
+    // YouTube → card with a deterministic poster thumbnail (no unfurl), marked as a video.
+    const yt2 = await normalizeShareIntent({ webUrl: 'https://youtu.be/dQw4w9WgXcQ' }, deps);
+    ok('youtube → poster thumbUrl', yt2.sourcePost?.thumbUrl === 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg');
+    ok('youtube → kind video', yt2.sourcePost?.kind === 'video');
+
+    // Generic website → still a card (host label), no poster.
+    const generic = await normalizeShareIntent({ webUrl: 'https://example.com/article' }, deps);
+    ok('generic site → card, url not in body', generic.sourcePost?.platform === 'link' && generic.content === '');
+    ok('generic site → no poster', generic.sourcePost?.thumbUrl === undefined);
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);

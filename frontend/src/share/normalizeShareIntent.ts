@@ -14,6 +14,8 @@
  *   - multiple files                         → ONE draft
  */
 
+import { detectSocialSource, derivePosterUrl, type SourcePost } from './socialSource';
+
 export interface NoteDraftTag {
   name: string;
   color: string;
@@ -34,6 +36,7 @@ export interface NoteDraft {
   images: string[]; // base64 data URIs (inline images)
   pendingFiles: PendingFile[]; // uploaded by the editor → become attachments
   needsTitle: boolean; // true ⇒ UI should nudge the user to add a title
+  sourcePost?: SourcePost; // a recognized social post → rendered as a card in the editor
 }
 
 /** One shared file, structurally typed to match expo-share-intent's `ShareIntentFile`. */
@@ -55,6 +58,8 @@ export interface RawShareIntent {
 export interface ShareDeps {
   /** Read a file uri → raw base64 (no `data:` prefix). */
   readBase64: (uri: string) => Promise<string>;
+  /** Generate a poster frame for a shared video → `data:` URI (or undefined on failure). */
+  videoThumbnail?: (uri: string) => Promise<string | undefined>;
   /** Surface a non-fatal warning (e.g. unknown type attached as a generic file). */
   onWarn?: (message: string) => void;
 }
@@ -88,9 +93,13 @@ export async function normalizeShareIntent(intent: RawShareIntent, deps: ShareDe
   // Treat a bare URL that arrived as plain text as a web URL too (some apps don't set webUrl).
   const url = intent.webUrl?.trim() || (URL_RE.test(text) ? text : '');
 
-  if (url) {
-    draft.title = (intent.meta?.title || '').trim() || url;
-    draft.content = url;
+  // Any shared URL becomes a card, NOT a bare URL dumped into the body: a recognized social
+  // platform (Instagram/Facebook/…) or a generic link with the site host as its label. The
+  // caption is the card header; the body/title stay the user's to write.
+  const brand = url ? detectSocialSource(url) : null;
+  if (url && brand) {
+    const caption = (text ? text.replace(url, '').trim() : '') || (intent.meta?.title || '').trim();
+    draft.sourcePost = { platform: brand.platform, label: brand.label, url, title: caption, kind: 'link' };
     draft.tags = [LINK_TAG];
   } else if (text) {
     draft.content = text;
@@ -122,15 +131,45 @@ export async function normalizeShareIntent(intent: RawShareIntent, deps: ShareDe
     }
   }
 
-  // Title fallback from the shared file(s) when we don't already have one.
-  if (!draft.title && files.length > 0) {
+  // Attach a thumbnail to a social card: a shared image (already inlined) or a poster frame
+  // generated from a shared video. Either way images[0] holds the thumbnail so it persists.
+  if (draft.sourcePost) {
+    if (draft.images.length > 0) {
+      draft.sourcePost.thumbnail = draft.images[0];
+      draft.sourcePost.kind = 'image';
+    } else if (deps.videoThumbnail) {
+      const video = files.find((f) => (f.mimeType || '').toLowerCase().startsWith('video/'));
+      if (video) {
+        try {
+          const thumb = await deps.videoThumbnail(video.path);
+          if (thumb) {
+            draft.images.unshift(thumb);
+            draft.sourcePost.thumbnail = thumb;
+            draft.sourcePost.kind = 'video';
+          }
+        } catch {
+          // Thumbnail generation is best-effort; the card renders a placeholder without it.
+        }
+      }
+    }
+    // A deterministic remote poster (e.g. YouTube's CDN frame) when we have no local thumbnail.
+    const poster = derivePosterUrl(url);
+    if (poster && !draft.sourcePost.thumbnail) {
+      draft.sourcePost.thumbUrl = poster;
+      draft.sourcePost.kind = 'video';
+    }
+  }
+
+  // Title fallback from the shared file(s) when we don't already have one (skip social cards —
+  // the card owns the header, so a bare photo/video share under a card keeps an empty title).
+  if (!draft.title && !draft.sourcePost && files.length > 0) {
     const allImages = files.every((f) => (f.mimeType || '').toLowerCase().startsWith('image/'));
     draft.title = allImages ? 'Photo note' : stripExt(baseName(files[0].fileName, 'Shared file'));
     draft.needsTitle = false;
   }
 
-  // Nothing usable arrived — let the UI prompt for a title.
-  if (!draft.title && !draft.content && draft.images.length === 0 && draft.pendingFiles.length === 0) {
+  // Nothing usable arrived — let the UI prompt for a title (a social card counts as content).
+  if (!draft.title && !draft.content && !draft.sourcePost && draft.images.length === 0 && draft.pendingFiles.length === 0) {
     draft.needsTitle = true;
   }
 

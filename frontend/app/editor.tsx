@@ -13,10 +13,14 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as WebBrowser from 'expo-web-browser';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { notesApi, eventsApi, transcribeApi, textProcessApi, attachmentsApi, uploadAttachmentWithProgress, type UploadFile } from '../src/api';
-import { RadialProgress } from '../src/components';
+import { RadialProgress, SharedPostCard } from '../src/components';
 import { decryptNoteFromServer } from '../src/crypto/noteCrypto';
 import { createNoteOffline, updateNoteOffline, getLocalNotes, processSyncQueue } from '../src/offlineSync';
 import { takePendingShareDraft } from '../src/share/pendingShareDraft';
+import { parseSourcePost, serializeSourcePost, type SourcePost } from '../src/share/socialSource';
+import { unfurl, needsUnfurl } from '../src/share/unfurl';
+import { plainTextFromContent } from '../src/textContent';
+import { RichText, useEditorBridge, useEditorContent, useBridgeState } from '@10play/tentap-editor';
 import { Tag, CalendarEvent, Attachment } from '../src/types';
 import { TAG_COLORS, C } from '../src/theme';
 import { 
@@ -43,7 +47,6 @@ export default function EditorScreen() {
   const isNew = !noteId || noteId === 'new';
 
   const [title, setTitle] = useState('');
-  const [content, setContent] = useState('');
   const [tags, setTags] = useState<Tag[]>([]);
   const [isPinned, setIsPinned] = useState(false);
   const [linkedEventId, setLinkedEventId] = useState<string | null>(null);
@@ -60,6 +63,10 @@ export default function EditorScreen() {
   const [showAiSuggestion, setShowAiSuggestion] = useState(false);
   const [transcribedText, setTranscribedText] = useState('');
   const [images, setImages] = useState<string[]>([]);
+  // A social post shared into the app (Instagram/Facebook/…) rendered as a card above the body.
+  const [sourcePost, setSourcePost] = useState<SourcePost | null>(null);
+  // True when images[0] is the card's thumbnail (kept out of the "Attached Images" gallery).
+  const [thumbInImages0, setThumbInImages0] = useState(false);
   const [showImagePicker, setShowImagePicker] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
@@ -75,15 +82,14 @@ export default function EditorScreen() {
   const [newTagName, setNewTagName] = useState('');
   const [selectedTagColor, setSelectedTagColor] = useState(TAG_COLORS[0].value);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
-  const [isBoldActive, setIsBoldActive] = useState(false);
-  const [isItalicActive, setIsItalicActive] = useState(false);
-
-  const [selection, setSelection] = useState({ start: 0, end: 0 });
-  const contentInputRef = useRef<TextInput>(null);
-  const lastContentLength = useRef(0);
-  
-  // Track if content input is focused
-  const [isContentFocused, setIsContentFocused] = useState(false);
+  // Rich-text editor (TenTap). The note body is HTML; `contentRef` holds the latest for saving.
+  const editor = useEditorBridge({ autofocus: false, avoidIosKeyboard: true, dynamicHeight: true, initialContent: '' });
+  const editorState = useBridgeState(editor);
+  const editorHtml = useEditorContent(editor, { type: 'html', debounceInterval: 400 });
+  // HTML to seed into the editor once its webview is ready (null until the note is loaded).
+  const [seedHtml, setSeedHtml] = useState<string | null>(isNew && shared !== '1' ? '' : null);
+  const seededRef = useRef(false);
+  const seedPlainRef = useRef(''); // plaintext of the seed, to detect the "seed echo" vs a real edit
 
   // Auth state from context
   const { user: authUser } = useAuth();
@@ -102,12 +108,16 @@ export default function EditorScreen() {
   const noteIdRef = useRef(isNew ? '' : (noteId || ''));
   const isCreatedRef = useRef(!isNew);
   const titleRef = useRef(title);
-  const contentRef = useRef(content);
+  const contentRef = useRef('');
   const tagsRef = useRef(tags);
   const isPinnedRef = useRef(isPinned);
   const linkedEventIdRef = useRef<string | null>(linkedEventId);
   const imagesRef = useRef<string[]>(images);
   const attachmentsRef = useRef<Attachment[]>(attachments);
+  const sourcePostRef = useRef<SourcePost | null>(sourcePost);
+  const thumbInImages0Ref = useRef(thumbInImages0);
+  // URL we've already attempted a client-side unfurl for (avoids re-fetching in a loop).
+  const unfurlTriedRef = useRef<string | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // True when this note originated from a share intent (analytics + discard-on-cancel).
   const isSharedRef = useRef(false);
@@ -119,12 +129,62 @@ export default function EditorScreen() {
   const [noteExists, setNoteExists] = useState(!isNew);
 
   useEffect(() => { titleRef.current = title; }, [title]);
-  useEffect(() => { contentRef.current = content; }, [content]);
   useEffect(() => { tagsRef.current = tags; }, [tags]);
   useEffect(() => { isPinnedRef.current = isPinned; }, [isPinned]);
   useEffect(() => { linkedEventIdRef.current = linkedEventId; }, [linkedEventId]);
   useEffect(() => { imagesRef.current = images; }, [images]);
   useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
+  useEffect(() => { sourcePostRef.current = sourcePost; }, [sourcePost]);
+  useEffect(() => { thumbInImages0Ref.current = thumbInImages0; }, [thumbInImages0]);
+
+  // Seed the editor once its webview is ready and we have content to load (new/shared/loaded note).
+  useEffect(() => {
+    if (seededRef.current || !editorState.isReady || seedHtml == null) return;
+    seededRef.current = true;
+    contentRef.current = seedHtml;
+    seedPlainRef.current = plainTextFromContent(seedHtml);
+    if (seedHtml) editor.setContent(seedHtml);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editorState.isReady, seedHtml]);
+
+  // Editor edits → keep contentRef fresh + autosave. Ignore the seed echo so loading a pristine
+  // note doesn't mark it dirty or create an empty note.
+  useEffect(() => {
+    if (editorHtml == null || !seededRef.current) return;
+    contentRef.current = editorHtml;
+    if (!userEditedRef.current && plainTextFromContent(editorHtml) === seedPlainRef.current) return;
+    triggerAutoSave();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editorHtml]);
+
+  // Progressive enhancement for social cards without a thumbnail yet: fetch one (TikTok oEmbed,
+  // or best-effort Open Graph for IG/FB/Threads) in the background, then fill in + persist. The
+  // card shows instantly; this only upgrades it. Runs once per URL (retries on a fresh open).
+  useEffect(() => {
+    const sp = sourcePost;
+    if (!sp || !needsUnfurl(sp.platform)) return;
+    if (sp.thumbnail || sp.thumbUrl) return; // already have a thumbnail
+    if (unfurlTriedRef.current === sp.url) return; // don't refetch the same url
+    unfurlTriedRef.current = sp.url;
+    let cancelled = false;
+    (async () => {
+      const res = await unfurl(sp.url, sp.platform);
+      if (cancelled || (!res.thumbnailUrl && !res.title)) return;
+      setSourcePost(prev => {
+        if (!prev || prev.url !== sp.url) return prev;
+        return {
+          ...prev,
+          title: prev.title || res.title || '',
+          thumbUrl: res.thumbnailUrl || prev.thumbUrl,
+          // A TikTok thumbnail is a video poster → show the play overlay.
+          kind: prev.platform === 'tiktok' && res.thumbnailUrl ? 'video' : prev.kind,
+        };
+      });
+      triggerAutoSave(); // persist the resolved thumbnail/title into the note marker
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourcePost]);
 
   useEffect(() => {
     if (!isNew && noteId) loadNote(noteId);
@@ -138,9 +198,16 @@ export default function EditorScreen() {
     if (!draft) return;
     isSharedRef.current = true;
     if (draft.title) setTitle(draft.title);
-    if (draft.content) setContent(draft.content);
+    contentRef.current = draft.content || ''; // hold body before the WebView seeds
+    setSeedHtml(draft.content || ''); // seed the editor with the shared body (or empty)
     if (draft.tags?.length) setTags(draft.tags as Tag[]);
     if (draft.images?.length) setImages(draft.images);
+    // A recognized social post → show its card. The normalizer already put its thumbnail at
+    // images[0] (image share or generated video frame), so flag it out of the gallery.
+    if (draft.sourcePost) {
+      setSourcePost(draft.sourcePost);
+      setThumbInImages0(!!draft.sourcePost.thumbnail);
+    }
     // Big shared files upload here (in the editor) with visible radial progress.
     if (draft.pendingFiles?.length) uploadFiles(draft.pendingFiles);
     // Autosave the shared draft (marks it committed + schedules the debounced save). The
@@ -167,7 +234,16 @@ export default function EditorScreen() {
         }
       }
       setTitle(note.title);
-      setContent(note.content);
+      // A shared-post card is persisted as a marker at the end of content; split it back out.
+      const parsed = parseSourcePost(note.content || '');
+      // Hold the loaded body immediately so a quick back-out before the WebView seeds can't
+      // overwrite the note with empty content.
+      contentRef.current = parsed.content || '';
+      setSeedHtml(parsed.content || ''); // seed the rich editor with the note body (HTML or legacy text)
+      if (parsed.sourcePost) {
+        setSourcePost(parsed.sourcePost);
+        setThumbInImages0(parsed.thumbInImages0);
+      }
       setTags(note.tags);
       setIsPinned(note.is_pinned);
       setLinkedEventId(note.linked_event_id);
@@ -269,7 +345,8 @@ export default function EditorScreen() {
   const persistLocal = useCallback(async (opts: { push?: boolean } = {}): Promise<void> => {
     const draft = {
       title: titleRef.current,
-      content: contentRef.current,
+      // The shared-post card rides along as a marker appended to the body (stripped on load).
+      content: contentRef.current + serializeSourcePost(sourcePostRef.current, thumbInImages0Ref.current),
       tags: tagsRef.current,
       is_pinned: isPinnedRef.current,
       linked_event_id: linkedEventIdRef.current,
@@ -312,7 +389,7 @@ export default function EditorScreen() {
   const handleBack = useCallback(async () => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     try {
-      const hasContent = !!(titleRef.current || contentRef.current || linkedEventIdRef.current || imagesRef.current.length > 0 || attachmentsRef.current.length > 0);
+      const hasContent = !!(titleRef.current || contentRef.current || linkedEventIdRef.current || imagesRef.current.length > 0 || attachmentsRef.current.length > 0 || sourcePostRef.current);
       // Persist locally; only create a brand-new note if it actually has content.
       if (isCreatedRef.current ? !!noteIdRef.current : hasContent) {
         await persistLocal({ push: true });
@@ -330,142 +407,19 @@ export default function EditorScreen() {
     triggerAutoSave();
   };
 
-  const handleContentChange = (newText: string) => {
-    setContent(newText);
-    lastContentLength.current = newText.length;
+  // Insert plain text (voice transcription / AI output) into the rich editor as new paragraphs.
+  const escapeHtml = (t: string) =>
+    t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const appendToEditor = async (text: string) => {
+    const clean = (text || '').trim();
+    if (!clean) return;
+    const paras = clean.split(/\n{2,}/).map(p => `<p>${escapeHtml(p).replace(/\n/g, '<br>')}</p>`).join('');
+    let current = '';
+    try { current = await editor.getHTML(); } catch {}
+    const base = current.replace(/<p><\/p>\s*$/i, ''); // drop a trailing empty paragraph
+    editor.setContent(base + paras);
+    userEditedRef.current = true;
     triggerAutoSave();
-  };
-
-  // Toggle format button state and apply to selected text
-  // Note: True WYSIWYG requires a rich text editor library
-  // For now, we apply formatting to selected text
-  const toggleBold = () => {
-    const newBoldState = !isBoldActive;
-    setIsBoldActive(newBoldState);
-    
-    // If there's selected text, wrap it with bold markers
-    if (selection.start !== selection.end) {
-      const before = content.substring(0, selection.start);
-      const selected = content.substring(selection.start, selection.end);
-      const after = content.substring(selection.end);
-      
-      // Check if already bold (wrapped in **)
-      if (selected.startsWith('**') && selected.endsWith('**')) {
-        // Remove bold
-        const unbolded = selected.slice(2, -2);
-        const newContent = before + unbolded + after;
-        setContent(newContent);
-      } else {
-        // Add bold
-        const bolded = `**${selected}**`;
-        const newContent = before + bolded + after;
-        setContent(newContent);
-      }
-      triggerAutoSave();
-    }
-    
-    contentInputRef.current?.focus();
-  };
-
-  const toggleItalic = () => {
-    const newItalicState = !isItalicActive;
-    setIsItalicActive(newItalicState);
-    
-    // If there's selected text, wrap it with italic markers
-    if (selection.start !== selection.end) {
-      const before = content.substring(0, selection.start);
-      const selected = content.substring(selection.start, selection.end);
-      const after = content.substring(selection.end);
-      
-      // Check if already italic (wrapped in single *)
-      // But not bold (which is **)
-      if (selected.startsWith('*') && selected.endsWith('*') && 
-          !selected.startsWith('**') && !selected.endsWith('**')) {
-        // Remove italic
-        const unitaliced = selected.slice(1, -1);
-        const newContent = before + unitaliced + after;
-        setContent(newContent);
-      } else {
-        // Add italic
-        const italiced = `*${selected}*`;
-        const newContent = before + italiced + after;
-        setContent(newContent);
-      }
-      triggerAutoSave();
-    }
-    
-    contentInputRef.current?.focus();
-  };
-
-  const insertBullet = () => {
-    // Insert a bullet point character directly
-    const bulletChar = '\u2022 '; // bullet character
-    const newContent = content + (content.endsWith('\n') || content === '' ? '' : '\n') + bulletChar;
-    setContent(newContent);
-    lastContentLength.current = newContent.length;
-    triggerAutoSave();
-    contentInputRef.current?.focus();
-  };
-
-  // Convert content to plain text for sharing (remove bullet chars)
-  const convertToPlainText = (text: string): string => {
-    return text.replace(/\u2022 /g, '- '); // Convert bullet chars back to dashes
-  };
-
-  // Render formatted text (bold/italic) without showing markdown syntax
-  const renderFormattedText = (text: string): React.ReactNode => {
-    if (!text) return null;
-    
-    const parts: React.ReactNode[] = [];
-    let key = 0;
-    
-    // Regex to match **bold**, *italic*, and plain text
-    // Order matters: check bold (**) before italic (*)
-    const regex = /(\*\*[^*]+\*\*|\*[^*]+\*)/g;
-    let lastIndex = 0;
-    let match;
-    
-    while ((match = regex.exec(text)) !== null) {
-      // Add plain text before match
-      if (match.index > lastIndex) {
-        parts.push(
-          <Text key={key++} style={s.contentText}>
-            {text.slice(lastIndex, match.index)}
-          </Text>
-        );
-      }
-      
-      const matchedText = match[0];
-      
-      if (matchedText.startsWith('**') && matchedText.endsWith('**')) {
-        // Bold text
-        parts.push(
-          <Text key={key++} style={[s.contentText, s.boldText]}>
-            {matchedText.slice(2, -2)}
-          </Text>
-        );
-      } else if (matchedText.startsWith('*') && matchedText.endsWith('*')) {
-        // Italic text
-        parts.push(
-          <Text key={key++} style={[s.contentText, s.italicText]}>
-            {matchedText.slice(1, -1)}
-          </Text>
-        );
-      }
-      
-      lastIndex = match.index + matchedText.length;
-    }
-    
-    // Add remaining plain text
-    if (lastIndex < text.length) {
-      parts.push(
-        <Text key={key++} style={s.contentText}>
-          {text.slice(lastIndex)}
-        </Text>
-      );
-    }
-    
-    return parts.length > 0 ? parts : <Text style={s.contentText}>{text}</Text>;
   };
 
   // Format date/time for display
@@ -493,13 +447,12 @@ export default function EditorScreen() {
   };
 
   const handleShare = async () => {
-    if (!title && !content && !linkedEvent) {
+    const plainContent = plainTextFromContent(contentRef.current);
+    if (!title && !plainContent && !linkedEvent) {
       Alert.alert('Nothing to Share', 'Please add a title or content to your note first.');
       return;
     }
 
-    const plainContent = convertToPlainText(content);
-    
     // Build share text with all details - clean format without horizontal lines
     let shareText = '';
     
@@ -653,28 +606,22 @@ export default function EditorScreen() {
     
     if (action === 'keep') {
       // Just add the transcribed text as-is
-      const newContent = content + (content ? ' ' : '') + transcribedText;
-      setContent(newContent);
+      await appendToEditor(transcribedText);
       insertTranscription(transcribedText);
-      triggerAutoSave();
       return;
     }
 
     try {
       setIsProcessingText(true);
       const result = await textProcessApi.processText(transcribedText, action);
-      const newContent = content + (content ? '\n\n' : '') + result.text;
-      setContent(newContent);
+      await appendToEditor(result.text);
       insertTranscription(result.text);
-      triggerAutoSave();
     } catch (e) {
       console.error('Text processing failed:', e);
       Alert.alert('Error', 'AI processing failed. Adding original text.');
       // Fallback to original text
-      const newContent = content + (content ? ' ' : '') + transcribedText;
-      setContent(newContent);
+      await appendToEditor(transcribedText);
       insertTranscription(transcribedText);
-      triggerAutoSave();
     } finally {
       setIsProcessingText(false);
       setTranscribedText('');
@@ -749,6 +696,21 @@ export default function EditorScreen() {
 
   const removeImage = (index: number) => {
     setImages(prev => prev.filter((_, i) => i !== index));
+    triggerAutoSave();
+  };
+
+  // Open the original social post in the browser.
+  const openSourcePost = () => {
+    if (sourcePost?.url) WebBrowser.openBrowserAsync(sourcePost.url).catch(() => {});
+  };
+
+  // Drop the shared-post card (and its thumbnail, which lives at images[0]).
+  const removeSourcePost = () => {
+    if (thumbInImages0) {
+      setImages(prev => prev.slice(1));
+      setThumbInImages0(false);
+    }
+    setSourcePost(null);
     triggerAutoSave();
   };
 
@@ -957,8 +919,9 @@ export default function EditorScreen() {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     // Nothing to save? (also save if there's a linked event, images, or attachments —
     // e.g. a photo/audio/video share with no typed title/body)
-    if (!title.trim() && !content.trim() && !linkedEventIdRef.current
-        && imagesRef.current.length === 0 && attachmentsRef.current.length === 0) {
+    if (!title.trim() && !plainTextFromContent(contentRef.current) && !linkedEventIdRef.current
+        && imagesRef.current.length === 0 && attachmentsRef.current.length === 0
+        && !sourcePostRef.current) {
       router.replace('/(tabs)');
       return;
     }
@@ -1150,38 +1113,40 @@ export default function EditorScreen() {
             )}
           </View>
 
-          {/* Content - Simple plain text input */}
+          {/* Content — the shared-post card sits at the top of the input box, then the writing area */}
           <View style={s.contentContainer}>
-            <TextInput
-              ref={contentInputRef}
-              testID="note-content-input"
-              style={s.contentInput}
-              value={content}
-              onChangeText={handleContentChange}
-              multiline
-              textAlignVertical="top"
-              placeholder="Tap here to start writing..."
-              placeholderTextColor={C.borderSub}
-              onSelectionChange={(e) => setSelection(e.nativeEvent.selection)}
-              onFocus={() => setIsContentFocused(true)}
-              onBlur={() => setIsContentFocused(false)}
-              autoCorrect={true}
-              autoCapitalize="sentences"
-            />
-            {/* Paperclip — pinned to the bottom-left of the input box */}
-            <TouchableOpacity
-              testID="attach-file-btn"
-              style={s.attachBtn}
-              onPress={pickAttachment}
-              disabled={isUploadingAttachment}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              {isUploadingAttachment ? (
-                <ActivityIndicator size="small" color={C.secondary} />
-              ) : (
-                <MaterialIcons name="attach-file" size={22} color={C.secondary} />
+            <View style={s.inputBox}>
+              {/* Shared social post card (Instagram/Facebook/WhatsApp/YouTube/…) — links back to the post */}
+              {sourcePost && (
+                <SharedPostCard
+                  style={s.cardInInput}
+                  source={thumbInImages0 && images[0] ? { ...sourcePost, thumbnail: images[0] } : sourcePost}
+                  onOpen={openSourcePost}
+                  onRemove={removeSourcePost}
+                />
               )}
-            </TouchableOpacity>
+              {/* Rich-text body (TenTap WebView). dynamicHeight lets it grow inside the page scroll.
+                  The padded wrapper insets the editor from the box border so text isn't flush. */}
+              <View style={s.richTextWrap}>
+                <RichText editor={editor} style={s.richText} scrollEnabled={false} />
+              </View>
+              {/* Attach-file footer — a WebView can't be overlaid, so the paperclip sits below it */}
+              <View style={s.editorFooter}>
+                <TouchableOpacity
+                  testID="attach-file-btn"
+                  style={s.attachInline}
+                  onPress={pickAttachment}
+                  disabled={isUploadingAttachment}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  {isUploadingAttachment ? (
+                    <ActivityIndicator size="small" color={C.secondary} />
+                  ) : (
+                    <MaterialIcons name="attach-file" size={22} color={C.secondary} />
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
           </View>
 
           {/* Attachments Section */}
@@ -1219,22 +1184,25 @@ export default function EditorScreen() {
             </View>
           )}
 
-          {/* Images Section */}
-          {images.length > 0 && (
+          {/* Images Section (the card's thumbnail lives at images[0] and is shown by the card, not here) */}
+          {images.filter((_, i) => !(thumbInImages0 && i === 0)).length > 0 && (
             <View style={s.imagesContainer}>
               <Text style={s.imagesSectionTitle}>Attached Images</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.imagesScroll}>
-                {images.map((uri, index) => (
-                  <View key={index} style={s.imageWrapper}>
-                    <Image source={{ uri }} style={s.attachedImage} />
-                    <TouchableOpacity
-                      style={s.removeImageBtn}
-                      onPress={() => removeImage(index)}
-                    >
-                      <MaterialIcons name="close" size={16} color={C.primaryFg} />
-                    </TouchableOpacity>
-                  </View>
-                ))}
+                {images.map((uri, index) => {
+                  if (thumbInImages0 && index === 0) return null;
+                  return (
+                    <View key={index} style={s.imageWrapper}>
+                      <Image source={{ uri }} style={s.attachedImage} />
+                      <TouchableOpacity
+                        style={s.removeImageBtn}
+                        onPress={() => removeImage(index)}
+                      >
+                        <MaterialIcons name="close" size={16} color={C.primaryFg} />
+                      </TouchableOpacity>
+                    </View>
+                  );
+                })}
               </ScrollView>
             </View>
           )}
@@ -1332,44 +1300,32 @@ export default function EditorScreen() {
 
         {/* Voice Input Bar + Format Toolbar */}
         <View style={s.bottomBar}>
-          {/* Format Toolbar - shows only when content input is focused (disabled on web) */}
-          {isContentFocused && Platform.OS !== 'web' && (
+          {/* Format Toolbar — drives the TenTap editor; shows while it's focused (disabled on web) */}
+          {editorState.isFocused && Platform.OS !== 'web' && (
             <View style={s.formatBar}>
-              <TouchableOpacity 
-                testID="fmt-bold" 
-                style={[s.fmtBtn, isBoldActive && s.fmtBtnActive]} 
-                onPress={() => {
-                  toggleBold();
-                  // Keep focus on content input
-                  contentInputRef.current?.focus();
-                }}
+              <TouchableOpacity
+                testID="fmt-bold"
+                style={[s.fmtBtn, editorState.isBoldActive && s.fmtBtnActive]}
+                onPress={() => editor.toggleBold()}
               >
-                <Text style={[s.fmtBold, isBoldActive && s.fmtTextActive]}>B</Text>
-                <Text style={[s.fmtLabel, isBoldActive && s.fmtLabelActive]}>Bold</Text>
+                <Text style={[s.fmtBold, editorState.isBoldActive && s.fmtTextActive]}>B</Text>
+                <Text style={[s.fmtLabel, editorState.isBoldActive && s.fmtLabelActive]}>Bold</Text>
               </TouchableOpacity>
-              <TouchableOpacity 
-                testID="fmt-italic" 
-                style={[s.fmtBtn, isItalicActive && s.fmtBtnActive]} 
-                onPress={() => {
-                  toggleItalic();
-                  // Keep focus on content input
-                  contentInputRef.current?.focus();
-                }}
+              <TouchableOpacity
+                testID="fmt-italic"
+                style={[s.fmtBtn, editorState.isItalicActive && s.fmtBtnActive]}
+                onPress={() => editor.toggleItalic()}
               >
-                <Text style={[s.fmtItalic, isItalicActive && s.fmtTextActive]}>I</Text>
-                <Text style={[s.fmtLabel, isItalicActive && s.fmtLabelActive]}>Italic</Text>
+                <Text style={[s.fmtItalic, editorState.isItalicActive && s.fmtTextActive]}>I</Text>
+                <Text style={[s.fmtLabel, editorState.isItalicActive && s.fmtLabelActive]}>Italic</Text>
               </TouchableOpacity>
-              <TouchableOpacity 
-                testID="fmt-bullet" 
-                style={s.fmtBtn} 
-                onPress={() => {
-                  insertBullet();
-                  // Keep focus on content input
-                  contentInputRef.current?.focus();
-                }}
+              <TouchableOpacity
+                testID="fmt-bullet"
+                style={[s.fmtBtn, editorState.isBulletListActive && s.fmtBtnActive]}
+                onPress={() => editor.toggleBulletList()}
               >
-                <MaterialIcons name="format-list-bulleted" size={22} color={C.text} />
-                <Text style={s.fmtLabel}>List</Text>
+                <MaterialIcons name="format-list-bulleted" size={22} color={editorState.isBulletListActive ? C.primary : C.text} />
+                <Text style={[s.fmtLabel, editorState.isBulletListActive && s.fmtLabelActive]}>List</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -1634,17 +1590,46 @@ const s = StyleSheet.create({
     flex: 1,
     marginBottom: 16,
   },
-  contentInput: {
-    minHeight: 150,
+  // The bordered box that visually contains both the shared-post card and the writing area.
+  inputBox: {
     backgroundColor: C.surface,
     borderRadius: 12,
-    padding: 16,
-    paddingBottom: 52, // leave room for the pinned paperclip so text never overlaps it
     borderWidth: 2,
     borderColor: C.borderSub,
-    fontSize: 18,
-    color: C.text,
-    lineHeight: 28,
+    paddingBottom: 4,
+  },
+  // The shared-post card nested inside the input box: inset from the border, small gap before text.
+  cardInInput: {
+    marginHorizontal: 10,
+    marginTop: 10,
+    marginBottom: 2,
+  },
+  // Insets the editor from the box border so the text has breathing room on all sides.
+  richTextWrap: {
+    paddingHorizontal: 14,
+    paddingTop: 8,
+    paddingBottom: 4,
+  },
+  // TenTap rich editor (WebView). dynamicHeight grows it to content; minHeight gives tap space.
+  richText: {
+    minHeight: 150,
+    backgroundColor: 'transparent',
+  },
+  // Footer row inside the input box holding the attach-file button (below the WebView editor).
+  editorFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingBottom: 8,
+    paddingTop: 2,
+  },
+  attachInline: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: C.bg,
   },
   attachBtn: {
     position: 'absolute',
