@@ -132,8 +132,12 @@ export const attachmentsApi = {
   remove: (key: string) =>
     fetchApi(`/attachments?key=${encodeURIComponent(key)}`, { method: 'DELETE' }),
   // Presigned GET URL for viewing/downloading (valid ~7 days); used for tap-to-open and share links.
+  // Returns 403 unless the file's malware scan is CLEAN — gate with scanStatus first.
   downloadUrl: (key: string): Promise<{ url: string }> =>
     fetchApi('/attachments/download-url', { method: 'POST', body: JSON.stringify({ key }) }),
+  // Malware-scan status per key: 'CLEAN' | 'PENDING' | 'INFECTED' | ... (fail-safe: only CLEAN opens).
+  scanStatus: (keys: string[]): Promise<Record<string, string>> =>
+    fetchApi('/attachments/scan-status', { method: 'POST', body: JSON.stringify({ keys }) }),
 };
 
 /**

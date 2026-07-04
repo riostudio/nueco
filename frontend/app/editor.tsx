@@ -60,6 +60,10 @@ export default function EditorScreen() {
   const [showImagePicker, setShowImagePicker] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
+  // Malware-scan status per attachment key ('CLEAN'|'PENDING'|'INFECTED'|…). Absent = unknown
+  // (endpoint not reachable / not yet deployed) → treated as "no proactive block"; the
+  // backend download gate is the real fail-safe.
+  const [scanStatuses, setScanStatuses] = useState<Record<string, string>>({});
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   
   // Recording duration tracking for analytics
@@ -803,14 +807,59 @@ export default function EditorScreen() {
     }
   };
 
-  // Open an attachment (image/video/audio/pdf/doc) via a presigned GET URL.
+  // Poll malware-scan status for the current attachments; stops once none are pending.
+  // Fail-open: if the endpoint is unavailable, statuses stay unknown and opening falls
+  // back to the backend gate (below).
+  useEffect(() => {
+    const keys = attachments.map(a => a.key).filter(Boolean);
+    if (keys.length === 0) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const poll = async () => {
+      try {
+        const statuses = await attachmentsApi.scanStatus(keys);
+        if (cancelled) return;
+        setScanStatuses(prev => ({ ...prev, ...statuses }));
+        if (Object.values(statuses).some(s => s === 'PENDING')) {
+          timer = setTimeout(poll, 4000);
+        }
+      } catch {
+        // Endpoint unavailable — leave statuses unknown; the backend enforces on open.
+      }
+    };
+    poll();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [attachments]);
+
+  // Open an attachment via a presigned GET URL. Proactively blocks a KNOWN non-clean file;
+  // otherwise attempts and lets the backend gate (403) enforce fail-safe.
   const openAttachment = async (att: Attachment) => {
+    const status = scanStatuses[att.key];
+    if (status === 'PENDING') {
+      Alert.alert('Still scanning', 'This file is being checked for malware. Try again in a moment.');
+      return;
+    }
+    if (status && status !== 'CLEAN') {
+      Alert.alert('File blocked', 'This file was flagged by a malware scan and can’t be opened.');
+      return;
+    }
     try {
       const { url } = await attachmentsApi.downloadUrl(att.key);
       await WebBrowser.openBrowserAsync(url);
-    } catch (e) {
-      console.error('Open attachment failed:', e);
-      Alert.alert('Could not open', 'Unable to open this file right now. Please try again.');
+    } catch (e: any) {
+      const msg = String(e?.message || '');
+      if (msg.includes('403')) {
+        const scanning = /PENDING/.test(msg);
+        Alert.alert(
+          scanning ? 'Still scanning' : 'File blocked',
+          scanning
+            ? 'This file is being checked for malware. Try again shortly.'
+            : 'This file was flagged by a malware scan and can’t be opened.',
+        );
+      } else {
+        console.error('Open attachment failed:', e);
+        Alert.alert('Could not open', 'Unable to open this file right now. Please try again.');
+      }
     }
   };
 
@@ -1207,7 +1256,12 @@ export default function EditorScreen() {
                 >
                   <MaterialIcons name={attachmentIcon(att.mime_type)} size={22} color={C.secondary} />
                   <Text style={s.attachmentName} numberOfLines={1}>{att.filename}</Text>
-                  <MaterialIcons name="open-in-new" size={18} color={C.borderSub} />
+                  {(() => {
+                    const st = scanStatuses[att.key];
+                    if (st === 'PENDING') return <ActivityIndicator size="small" color={C.borderSub} />;
+                    if (st && st !== 'CLEAN') return <MaterialIcons name="block" size={18} color={C.error} />;
+                    return <MaterialIcons name="open-in-new" size={18} color={C.borderSub} />;
+                  })()}
                   <TouchableOpacity
                     testID={`remove-attachment-${att.id}`}
                     onPress={() => removeAttachment(att)}

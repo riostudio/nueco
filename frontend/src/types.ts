@@ -11,6 +11,7 @@ export interface Attachment {
   mime_type: string;
   size_bytes: number;
   uploaded_at: string;
+  scan_status?: string; // in-memory malware-scan state ('CLEAN'|'PENDING'|'INFECTED'|...)
 }
 
 export interface Note {
