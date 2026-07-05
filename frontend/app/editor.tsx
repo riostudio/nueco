@@ -90,6 +90,8 @@ export default function EditorScreen() {
   const [seedHtml, setSeedHtml] = useState<string | null>(isNew && shared !== '1' ? '' : null);
   const seededRef = useRef(false);
   const seedPlainRef = useRef(''); // plaintext of the seed, to detect the "seed echo" vs a real edit
+  const seedRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null); // retry timer for the seed race
+  const editorHtmlRef = useRef<string | null>(null); // latest observed editor HTML (to detect a stuck seed)
 
   // Auth state from context
   const { user: authUser } = useAuth();
@@ -138,14 +140,34 @@ export default function EditorScreen() {
   useEffect(() => { thumbInImages0Ref.current = thumbInImages0; }, [thumbInImages0]);
 
   // Seed the editor once its webview is ready and we have content to load (new/shared/loaded note).
+  // TenTap's `isReady` can flip true a beat BEFORE its webview editor actually accepts content — the
+  // first setContent is dropped ("Editor isn't ready yet"), so on reopen the body comes up empty
+  // (placeholder) until the user taps in. Retry setContent until the editor actually holds the
+  // content (observed via useEditorContent), stopping early if the user starts editing so we never
+  // clobber real input.
   useEffect(() => {
     if (seededRef.current || !editorState.isReady || seedHtml == null) return;
     seededRef.current = true;
     contentRef.current = seedHtml;
     seedPlainRef.current = plainTextFromContent(seedHtml);
-    if (seedHtml) editor.setContent(seedHtml);
+    if (!seedHtml) return; // pristine/new note — nothing to seed
+
+    let attempts = 0;
+    const applySeed = () => {
+      if (userEditedRef.current) return; // a real edit is in flight — leave it alone
+      const shown = editorHtmlRef.current;
+      // The seed has landed (or the user already typed) once the editor reports non-empty content.
+      if (shown != null && plainTextFromContent(shown).trim().length > 0) return;
+      editor.setContent(seedHtml);
+      if (++attempts < 8) seedRetryRef.current = setTimeout(applySeed, 150);
+    };
+    applySeed();
+    return () => { if (seedRetryRef.current) clearTimeout(seedRetryRef.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editorState.isReady, seedHtml]);
+
+  // Track the editor's latest observed HTML so the seed-retry loop can tell when content landed.
+  useEffect(() => { editorHtmlRef.current = editorHtml ?? null; }, [editorHtml]);
 
   // Editor edits → keep contentRef fresh + autosave. Ignore the seed echo so loading a pristine
   // note doesn't mark it dirty or create an empty note.
