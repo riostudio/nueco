@@ -10,6 +10,7 @@ import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { useAudioRecorder, AudioModule, RecordingPresets, setAudioModeAsync } from 'expo-audio';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as WebBrowser from 'expo-web-browser';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { notesApi, eventsApi, transcribeApi, textProcessApi, attachmentsApi, uploadAttachmentWithProgress, type UploadFile } from '../src/api';
@@ -40,6 +41,19 @@ import {
   trackVoiceRecordingCancelled,
   trackVoiceTranscriptionInserted,
 } from '../src/analytics';
+
+// Extension → MIME, aligned with the backend's attachment allowlist. Used to recover a usable
+// content type when the picker reports none (Android cloud/content URIs often omit it, which
+// otherwise defaults to application/octet-stream and gets rejected by presign).
+const EXT_MIME: Record<string, string> = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', heic: 'image/heic',
+  mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', avi: 'video/x-msvideo', mkv: 'video/x-matroska', '3gp': 'video/3gpp', m4v: 'video/mp4',
+  mp3: 'audio/mpeg', m4a: 'audio/mp4', wav: 'audio/wav', aac: 'audio/aac', ogg: 'audio/ogg', oga: 'audio/ogg',
+  pdf: 'application/pdf', txt: 'text/plain', csv: 'text/csv',
+  doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ppt: 'application/vnd.ms-powerpoint', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+};
 
 export default function EditorScreen() {
   const router = useRouter();
@@ -745,8 +759,25 @@ export default function EditorScreen() {
   // upload is appended to attachments[] and autosaved. Used by both the share pre-fill
   // and pickAttachment (new + edit), so progress shows consistently everywhere.
   const uploadFiles = useCallback(async (files: UploadFile[]) => {
-    for (const file of files) {
-      if ((file.size ?? 0) > MAX_ATTACHMENT_MB * 1024 * 1024) {
+    for (const raw of files) {
+      // Recover missing size/MIME before presign. The picker (and Android cloud/content URIs) can
+      // omit both: a missing size gets sent as 0 and rejected as "too large", and a missing MIME
+      // defaults to octet-stream and is rejected as "type not allowed". copyToCacheDirectory makes
+      // the uri a local file, so getInfoAsync reliably yields the size.
+      const ext = (raw.name.includes('.') ? raw.name.split('.').pop() : '')?.toLowerCase() || '';
+      let size = raw.size ?? 0;
+      if (!size) {
+        try {
+          const info = await FileSystem.getInfoAsync(raw.uri);
+          if (info.exists && info.size) size = info.size;
+        } catch { /* fall through — presign will surface a clear error */ }
+      }
+      const mimeType = (!raw.mimeType || raw.mimeType === 'application/octet-stream')
+        ? (EXT_MIME[ext] || raw.mimeType || 'application/octet-stream')
+        : raw.mimeType;
+      const file: UploadFile = { ...raw, size, mimeType };
+
+      if (size > MAX_ATTACHMENT_MB * 1024 * 1024) {
         Alert.alert('File too large', `${file.name} is over ${MAX_ATTACHMENT_MB}MB and can’t be attached.`);
         continue;
       }
@@ -759,11 +790,15 @@ export default function EditorScreen() {
         setAttachments(prev => [...prev, meta]);
         triggerAutoSave();
       } catch (e: any) {
-        const notEnabled = e?.message?.includes('503') || e?.message?.includes('not enabled');
-        Alert.alert(
-          'Upload failed',
-          notEnabled ? 'File attachments aren’t enabled on the server yet.' : `Couldn’t upload ${file.name}.`,
-        );
+        // Surface the real reason (and log it) instead of a blanket "Couldn't upload".
+        const msg = String(e?.message || '');
+        console.error('Attachment upload failed:', file.name, file.mimeType, size, '→', msg);
+        let reason = `Couldn’t upload ${file.name}.`;
+        if (msg.includes('503') || msg.includes('not enabled')) reason = 'File attachments aren’t enabled on the server yet.';
+        else if (msg.includes('File type not allowed')) reason = `${file.name}: that file type isn’t supported.`;
+        else if (msg.includes('File too large') || msg.includes('EntityTooLarge')) reason = `${file.name} is too large to attach.`;
+        else if (msg.includes('network error')) reason = `Network error uploading ${file.name}. Check your connection and try again.`;
+        Alert.alert('Upload failed', reason);
       } finally {
         setPendingUploads(prev => prev.filter(u => u.id !== uploadId));
       }
