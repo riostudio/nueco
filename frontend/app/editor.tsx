@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   ScrollView, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
@@ -55,6 +55,54 @@ const EXT_MIME: Record<string, string> = {
   ppt: 'application/vnd.ms-powerpoint', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
 };
 
+// Imperative handle the parent uses to drive the editor (voice/AI insert + toolbar buttons).
+type EditorApi = {
+  getHTML: () => Promise<string>;
+  setContent: (html: string) => void;
+  toggleBold: () => void;
+  toggleItalic: () => void;
+  toggleBulletList: () => void;
+};
+type EditorUiState = { isFocused: boolean; isBoldActive: boolean; isItalicActive: boolean; isBulletListActive: boolean };
+
+// The TenTap rich-text body, isolated so the bridge is created with the note's content as
+// `initialContent`. That's the reliable way to load existing content: `setContent` after mount
+// races the webview's readiness (it logs "Editor isn't ready yet" and drops the call, leaving the
+// body empty until tapped). Mounting this only once the content is known sidesteps the race.
+const NoteBodyEditor = forwardRef<EditorApi, {
+  initialContent: string;
+  onChange: (html: string) => void;
+  onStateChange: (s: EditorUiState) => void;
+}>(function NoteBodyEditor({ initialContent, onChange, onStateChange }, ref) {
+  const editor = useEditorBridge({ autofocus: false, avoidIosKeyboard: true, dynamicHeight: true, initialContent });
+  const state = useBridgeState(editor);
+  const html = useEditorContent(editor, { type: 'html', debounceInterval: 400 });
+
+  useImperativeHandle(ref, () => ({
+    getHTML: () => editor.getHTML(),
+    setContent: (h: string) => editor.setContent(h),
+    toggleBold: () => editor.toggleBold(),
+    toggleItalic: () => editor.toggleItalic(),
+    toggleBulletList: () => editor.toggleBulletList(),
+  }), [editor]);
+
+  useEffect(() => { if (html != null) onChange(html); }, [html]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    onStateChange({
+      isFocused: state.isFocused,
+      isBoldActive: state.isBoldActive,
+      isItalicActive: state.isItalicActive,
+      isBulletListActive: state.isBulletListActive,
+    });
+  }, [state.isFocused, state.isBoldActive, state.isItalicActive, state.isBulletListActive]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <View style={s.richTextWrap}>
+      <RichText editor={editor} style={s.richText} scrollEnabled={false} />
+    </View>
+  );
+});
+
 export default function EditorScreen() {
   const router = useRouter();
   const { noteId, shared } = useLocalSearchParams<{ noteId: string; shared?: string }>();
@@ -96,16 +144,15 @@ export default function EditorScreen() {
   const [newTagName, setNewTagName] = useState('');
   const [selectedTagColor, setSelectedTagColor] = useState(TAG_COLORS[0].value);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
-  // Rich-text editor (TenTap). The note body is HTML; `contentRef` holds the latest for saving.
-  const editor = useEditorBridge({ autofocus: false, avoidIosKeyboard: true, dynamicHeight: true, initialContent: '' });
-  const editorState = useBridgeState(editor);
-  const editorHtml = useEditorContent(editor, { type: 'html', debounceInterval: 400 });
-  // HTML to seed into the editor once its webview is ready (null until the note is loaded).
+  // Rich-text editor (TenTap). Content is the note body HTML; `contentRef` holds the latest for
+  // saving. The editor lives in <NoteBodyEditor>, mounted with the loaded content as initialContent
+  // (below). We drive it imperatively via editorApiRef and mirror its UI state for the toolbar.
+  const editorApiRef = useRef<EditorApi | null>(null);
+  const [editorUi, setEditorUi] = useState<EditorUiState>({ isFocused: false, isBoldActive: false, isItalicActive: false, isBulletListActive: false });
+  // HTML to load into the editor once the note is available (null until loaded — editor waits).
   const [seedHtml, setSeedHtml] = useState<string | null>(isNew && shared !== '1' ? '' : null);
   const seededRef = useRef(false);
   const seedPlainRef = useRef(''); // plaintext of the seed, to detect the "seed echo" vs a real edit
-  const seedRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null); // retry timer for the seed race
-  const editorHtmlRef = useRef<string | null>(null); // latest observed editor HTML (to detect a stuck seed)
 
   // Auth state from context
   const { user: authUser } = useAuth();
@@ -153,45 +200,24 @@ export default function EditorScreen() {
   useEffect(() => { sourcePostRef.current = sourcePost; }, [sourcePost]);
   useEffect(() => { thumbInImages0Ref.current = thumbInImages0; }, [thumbInImages0]);
 
-  // Seed the editor once its webview is ready and we have content to load (new/shared/loaded note).
-  // TenTap's `isReady` can flip true a beat BEFORE its webview editor actually accepts content — the
-  // first setContent is dropped ("Editor isn't ready yet"), so on reopen the body comes up empty
-  // (placeholder) until the user taps in. Retry setContent until the editor actually holds the
-  // content (observed via useEditorContent), stopping early if the user starts editing so we never
-  // clobber real input.
+  // Once the note body is known, record it for save + seed-echo detection. <NoteBodyEditor> is
+  // mounted with this as initialContent (below), so the editor itself loads reliably without a
+  // setContent-after-mount race.
   useEffect(() => {
-    if (seededRef.current || !editorState.isReady || seedHtml == null) return;
+    if (seedHtml == null || seededRef.current) return;
     seededRef.current = true;
     contentRef.current = seedHtml;
     seedPlainRef.current = plainTextFromContent(seedHtml);
-    if (!seedHtml) return; // pristine/new note — nothing to seed
+  }, [seedHtml]);
 
-    let attempts = 0;
-    const applySeed = () => {
-      if (userEditedRef.current) return; // a real edit is in flight — leave it alone
-      const shown = editorHtmlRef.current;
-      // The seed has landed (or the user already typed) once the editor reports non-empty content.
-      if (shown != null && plainTextFromContent(shown).trim().length > 0) return;
-      editor.setContent(seedHtml);
-      if (++attempts < 8) seedRetryRef.current = setTimeout(applySeed, 150);
-    };
-    applySeed();
-    return () => { if (seedRetryRef.current) clearTimeout(seedRetryRef.current); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editorState.isReady, seedHtml]);
-
-  // Track the editor's latest observed HTML so the seed-retry loop can tell when content landed.
-  useEffect(() => { editorHtmlRef.current = editorHtml ?? null; }, [editorHtml]);
-
-  // Editor edits → keep contentRef fresh + autosave. Ignore the seed echo so loading a pristine
-  // note doesn't mark it dirty or create an empty note.
-  useEffect(() => {
-    if (editorHtml == null || !seededRef.current) return;
-    contentRef.current = editorHtml;
-    if (!userEditedRef.current && plainTextFromContent(editorHtml) === seedPlainRef.current) return;
+  // Editor edits (debounced HTML from <NoteBodyEditor>) → keep contentRef fresh + autosave. Ignore
+  // the initial-content echo so loading a pristine note doesn't mark it dirty or create an empty one.
+  const handleBodyChange = useCallback((html: string) => {
+    contentRef.current = html;
+    if (!userEditedRef.current && plainTextFromContent(html) === seedPlainRef.current) return;
     triggerAutoSave();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editorHtml]);
+  }, []);
 
   // Progressive enhancement for social cards without a thumbnail yet: fetch one (TikTok oEmbed,
   // or best-effort Open Graph for IG/FB/Threads) in the background, then fill in + persist. The
@@ -451,9 +477,9 @@ export default function EditorScreen() {
     if (!clean) return;
     const paras = clean.split(/\n{2,}/).map(p => `<p>${escapeHtml(p).replace(/\n/g, '<br>')}</p>`).join('');
     let current = '';
-    try { current = await editor.getHTML(); } catch {}
+    try { current = (await editorApiRef.current?.getHTML()) || ''; } catch {}
     const base = current.replace(/<p><\/p>\s*$/i, ''); // drop a trailing empty paragraph
-    editor.setContent(base + paras);
+    editorApiRef.current?.setContent(base + paras);
     userEditedRef.current = true;
     triggerAutoSave();
   };
@@ -1182,11 +1208,18 @@ export default function EditorScreen() {
                   onRemove={removeSourcePost}
                 />
               )}
-              {/* Rich-text body (TenTap WebView). dynamicHeight lets it grow inside the page scroll.
-                  The padded wrapper insets the editor from the box border so text isn't flush. */}
-              <View style={s.richTextWrap}>
-                <RichText editor={editor} style={s.richText} scrollEnabled={false} />
-              </View>
+              {/* Rich-text body (TenTap WebView). Mounted only once the note content is known, so the
+                  bridge is created with it as initialContent — reliable load, no setContent race. */}
+              {seedHtml != null ? (
+                <NoteBodyEditor
+                  ref={editorApiRef}
+                  initialContent={seedHtml}
+                  onChange={handleBodyChange}
+                  onStateChange={setEditorUi}
+                />
+              ) : (
+                <View style={s.richTextWrap}><View style={{ minHeight: 150 }} /></View>
+              )}
               {/* Attach-file footer — a WebView can't be overlaid, so the paperclip sits below it */}
               <View style={s.editorFooter}>
                 <TouchableOpacity
@@ -1358,31 +1391,31 @@ export default function EditorScreen() {
         {/* Voice Input Bar + Format Toolbar */}
         <View style={s.bottomBar}>
           {/* Format Toolbar — drives the TenTap editor; shows while it's focused (disabled on web) */}
-          {editorState.isFocused && Platform.OS !== 'web' && (
+          {editorUi.isFocused && Platform.OS !== 'web' && (
             <View style={s.formatBar}>
               <TouchableOpacity
                 testID="fmt-bold"
-                style={[s.fmtBtn, editorState.isBoldActive && s.fmtBtnActive]}
-                onPress={() => editor.toggleBold()}
+                style={[s.fmtBtn, editorUi.isBoldActive && s.fmtBtnActive]}
+                onPress={() => editorApiRef.current?.toggleBold()}
               >
-                <Text style={[s.fmtBold, editorState.isBoldActive && s.fmtTextActive]}>B</Text>
-                <Text style={[s.fmtLabel, editorState.isBoldActive && s.fmtLabelActive]}>Bold</Text>
+                <Text style={[s.fmtBold, editorUi.isBoldActive && s.fmtTextActive]}>B</Text>
+                <Text style={[s.fmtLabel, editorUi.isBoldActive && s.fmtLabelActive]}>Bold</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 testID="fmt-italic"
-                style={[s.fmtBtn, editorState.isItalicActive && s.fmtBtnActive]}
-                onPress={() => editor.toggleItalic()}
+                style={[s.fmtBtn, editorUi.isItalicActive && s.fmtBtnActive]}
+                onPress={() => editorApiRef.current?.toggleItalic()}
               >
-                <Text style={[s.fmtItalic, editorState.isItalicActive && s.fmtTextActive]}>I</Text>
-                <Text style={[s.fmtLabel, editorState.isItalicActive && s.fmtLabelActive]}>Italic</Text>
+                <Text style={[s.fmtItalic, editorUi.isItalicActive && s.fmtTextActive]}>I</Text>
+                <Text style={[s.fmtLabel, editorUi.isItalicActive && s.fmtLabelActive]}>Italic</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 testID="fmt-bullet"
-                style={[s.fmtBtn, editorState.isBulletListActive && s.fmtBtnActive]}
-                onPress={() => editor.toggleBulletList()}
+                style={[s.fmtBtn, editorUi.isBulletListActive && s.fmtBtnActive]}
+                onPress={() => editorApiRef.current?.toggleBulletList()}
               >
-                <MaterialIcons name="format-list-bulleted" size={22} color={editorState.isBulletListActive ? C.primary : C.text} />
-                <Text style={[s.fmtLabel, editorState.isBulletListActive && s.fmtLabelActive]}>List</Text>
+                <MaterialIcons name="format-list-bulleted" size={22} color={editorUi.isBulletListActive ? C.primary : C.text} />
+                <Text style={[s.fmtLabel, editorUi.isBulletListActive && s.fmtLabelActive]}>List</Text>
               </TouchableOpacity>
             </View>
           )}
