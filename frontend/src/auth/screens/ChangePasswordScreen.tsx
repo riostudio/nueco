@@ -13,6 +13,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useChangePassword } from '../hooks/useChangePassword';
 import { strings } from '../constants/strings';
+import { EyeIcon } from '../../components/EyeIcon';
 
 const C = {
   primary: '#D84315',
@@ -33,6 +34,10 @@ export function ChangePasswordScreen() {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
+  // Per-field show/hide toggles for the password inputs.
+  const [showCurrent, setShowCurrent] = useState(false);
+  const [showNew, setShowNew] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
 
   const handleSubmit = async () => {
     const newErrors: { [key: string]: string } = {};
@@ -68,7 +73,7 @@ export function ChangePasswordScreen() {
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-          <MaterialIcons name="arrow-back" size={28} color={C.text} />
+          <MaterialIcons name="arrow-back" size={28} color={C.textSec} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Change Password</Text>
         <View style={{ width: 48 }} />
@@ -77,14 +82,23 @@ export function ChangePasswordScreen() {
       <View style={styles.content}>
         <View style={styles.inputGroup}>
           <Text style={styles.label}>{strings.currentPassword}</Text>
-          <TextInput
-            style={[styles.input, errors.current && styles.inputError]}
-            placeholder={strings.hintCurrentPassword}
-            placeholderTextColor={C.borderSub}
-            secureTextEntry
-            value={currentPassword}
-            onChangeText={setCurrentPassword}
-          />
+          <View style={[styles.inputRow, errors.current && styles.inputError]}>
+            <TextInput
+              style={styles.inputFlex}
+              placeholder={strings.hintCurrentPassword}
+              placeholderTextColor={C.borderSub}
+              secureTextEntry={!showCurrent}
+              value={currentPassword}
+              onChangeText={setCurrentPassword}
+            />
+            <TouchableOpacity
+              onPress={() => setShowCurrent(!showCurrent)}
+              style={styles.eyeButton}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <EyeIcon off={showCurrent} size={24} color={C.borderSub} />
+            </TouchableOpacity>
+          </View>
           {errors.current && (
             <Text style={styles.errorText}>{errors.current}</Text>
           )}
@@ -92,27 +106,45 @@ export function ChangePasswordScreen() {
 
         <View style={styles.inputGroup}>
           <Text style={styles.label}>{strings.newPassword}</Text>
-          <TextInput
-            style={[styles.input, errors.new && styles.inputError]}
-            placeholder={strings.hintNewPassword}
-            placeholderTextColor={C.borderSub}
-            secureTextEntry
-            value={newPassword}
-            onChangeText={setNewPassword}
-          />
+          <View style={[styles.inputRow, errors.new && styles.inputError]}>
+            <TextInput
+              style={styles.inputFlex}
+              placeholder={strings.hintNewPassword}
+              placeholderTextColor={C.borderSub}
+              secureTextEntry={!showNew}
+              value={newPassword}
+              onChangeText={setNewPassword}
+            />
+            <TouchableOpacity
+              onPress={() => setShowNew(!showNew)}
+              style={styles.eyeButton}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <EyeIcon off={showNew} size={24} color={C.borderSub} />
+            </TouchableOpacity>
+          </View>
           {errors.new && <Text style={styles.errorText}>{errors.new}</Text>}
         </View>
 
         <View style={styles.inputGroup}>
           <Text style={styles.label}>{strings.confirmPassword}</Text>
-          <TextInput
-            style={[styles.input, errors.confirm && styles.inputError]}
-            placeholder={strings.hintConfirmPassword}
-            placeholderTextColor={C.borderSub}
-            secureTextEntry
-            value={confirmPassword}
-            onChangeText={setConfirmPassword}
-          />
+          <View style={[styles.inputRow, errors.confirm && styles.inputError]}>
+            <TextInput
+              style={styles.inputFlex}
+              placeholder={strings.hintConfirmPassword}
+              placeholderTextColor={C.borderSub}
+              secureTextEntry={!showConfirm}
+              value={confirmPassword}
+              onChangeText={setConfirmPassword}
+            />
+            <TouchableOpacity
+              onPress={() => setShowConfirm(!showConfirm)}
+              style={styles.eyeButton}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <EyeIcon off={showConfirm} size={24} color={C.borderSub} />
+            </TouchableOpacity>
+          </View>
           {errors.confirm && (
             <Text style={styles.errorText}>{errors.confirm}</Text>
           )}
@@ -173,15 +205,27 @@ const styles = StyleSheet.create({
     color: C.text,
     marginBottom: 8,
   },
-  input: {
+  // Bordered container holding the password TextInput + the show/hide eye toggle.
+  inputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     height: 56,
     borderWidth: 2,
     borderColor: C.border,
     borderRadius: 12,
-    paddingHorizontal: 16,
+    paddingLeft: 16,
+    paddingRight: 8,
+    backgroundColor: C.surface,
+  },
+  // Borderless input inside inputRow (the border lives on inputRow).
+  inputFlex: {
+    flex: 1,
+    height: '100%',
     fontSize: 18,
     color: C.text,
-    backgroundColor: C.surface,
+  },
+  eyeButton: {
+    padding: 8,
   },
   inputError: {
     borderColor: C.error,
