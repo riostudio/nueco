@@ -176,8 +176,8 @@ export default function EditorScreen() {
           ...prev,
           title: prev.title || res.title || '',
           thumbUrl: res.thumbnailUrl || prev.thumbUrl,
-          // A TikTok thumbnail is a video poster → show the play overlay.
-          kind: prev.platform === 'tiktok' && res.thumbnailUrl ? 'video' : prev.kind,
+          // Reddit reports image/video directly; a TikTok thumbnail is always a video poster.
+          kind: res.kind || (prev.platform === 'tiktok' && res.thumbnailUrl ? 'video' : prev.kind),
         };
       });
       triggerAutoSave(); // persist the resolved thumbnail/title into the note marker

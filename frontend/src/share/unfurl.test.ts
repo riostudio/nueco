@@ -3,7 +3,7 @@
  *   node --import ./src/crypto/_ts-resolver.mjs src/share/unfurl.test.ts
  * The network call is stubbed via an injected fetch.
  */
-import { parseTikTokOEmbed, parseOpenGraph, needsUnfurl, unfurl } from './unfurl.ts';
+import { parseTikTokOEmbed, parseOpenGraph, parseRedditJson, redditJsonUrl, needsUnfurl, unfurl } from './unfurl.ts';
 
 let passed = 0;
 let failed = 0;
@@ -16,11 +16,50 @@ async function main() {
   console.log('needsUnfurl:');
   {
     ok('tiktok', needsUnfurl('tiktok'));
+    ok('reddit', needsUnfurl('reddit'));
     ok('instagram', needsUnfurl('instagram'));
     ok('facebook', needsUnfurl('facebook'));
     ok('threads', needsUnfurl('threads'));
+    ok('linkedin', needsUnfurl('linkedin'));
     ok('youtube → no (derivable poster)', !needsUnfurl('youtube'));
     ok('generic link → no', !needsUnfurl('link'));
+  }
+
+  console.log('redditJsonUrl:');
+  {
+    ok('reddit.com post → .json', redditJsonUrl('https://www.reddit.com/r/aww/comments/abc/a_cute_dog/') === 'https://www.reddit.com/r/aww/comments/abc/a_cute_dog.json?raw_json=1',
+      redditJsonUrl('https://www.reddit.com/r/aww/comments/abc/a_cute_dog/') || 'null');
+    ok('redd.it short → /comments/<id>', redditJsonUrl('https://redd.it/xyz123') === 'https://www.reddit.com/comments/xyz123.json?raw_json=1',
+      redditJsonUrl('https://redd.it/xyz123') || 'null');
+    ok('garbage → null', redditJsonUrl('not a url') === null);
+  }
+
+  console.log('parseRedditJson:');
+  {
+    const listing = (post: Record<string, unknown>) => [{ data: { children: [{ data: post }] } }];
+    const r = parseRedditJson(listing({
+      title: 'A cute &amp; fluffy dog',
+      post_hint: 'image',
+      preview: { images: [{ source: { url: 'https://preview.redd.it/x.jpg?width=1080&amp;s=abc' } }] },
+    }));
+    ok('title decoded', r.title === 'A cute & fluffy dog', r.title);
+    ok('preview poster used + decoded', r.thumbnailUrl === 'https://preview.redd.it/x.jpg?width=1080&s=abc', r.thumbnailUrl);
+    ok('image kind', r.kind === 'image', r.kind);
+
+    const vid = parseRedditJson(listing({
+      title: 'clip', is_video: true,
+      preview: { images: [{ source: { url: 'https://preview.redd.it/v.jpg' } }] },
+    }));
+    ok('video kind (is_video)', vid.kind === 'video', vid.kind);
+
+    const dest = parseRedditJson(listing({ title: 't', url_overridden_by_dest: 'https://i.redd.it/pic.png' }));
+    ok('falls back to image dest', dest.thumbnailUrl === 'https://i.redd.it/pic.png', dest.thumbnailUrl);
+
+    const placeholder = parseRedditJson(listing({ title: 't', thumbnail: 'self' }));
+    ok('placeholder thumbnail ignored', placeholder.thumbnailUrl === undefined, placeholder.thumbnailUrl);
+
+    ok('malformed → {}', Object.keys(parseRedditJson({ nope: 1 })).length === 0);
+    ok('null → {}', Object.keys(parseRedditJson(null)).length === 0);
   }
 
   console.log('parseTikTokOEmbed:');
@@ -73,6 +112,18 @@ async function main() {
     const ogFetch = (async () => ({ ok: true, text: async () => '<meta property="og:image" content="https://cdn/ig.jpg">' })) as unknown as typeof fetch;
     const r2 = await unfurl('https://instagram.com/p/x', 'instagram', ogFetch);
     ok('instagram via og scrape', r2.thumbnailUrl === 'https://cdn/ig.jpg');
+
+    // LinkedIn shares the OG-scrape path (best-effort; usually gated in the wild).
+    const li = await unfurl('https://www.linkedin.com/posts/x', 'linkedin',
+      (async () => ({ ok: true, text: async () => '<meta property="og:title" content="LI Post">' })) as unknown as typeof fetch);
+    ok('linkedin via og scrape', li.title === 'LI Post');
+
+    const redditFetch = (async (u: string) => {
+      ok('reddit hits .json api', typeof u === 'string' && u.includes('/comments/r1.json'));
+      return { ok: true, json: async () => [{ data: { children: [{ data: { title: 'RD', is_video: true, preview: { images: [{ source: { url: 'https://preview.redd.it/r.jpg' } }] } } }] } }] };
+    }) as unknown as typeof fetch;
+    const r3 = await unfurl('https://redd.it/r1', 'reddit', redditFetch);
+    ok('reddit via json api', r3.title === 'RD' && r3.thumbnailUrl === 'https://preview.redd.it/r.jpg' && r3.kind === 'video');
 
     const failFetch = (async () => ({ ok: false })) as unknown as typeof fetch;
     ok('non-ok response → {}', Object.keys(await unfurl('https://x', 'tiktok', failFetch)).length === 0);
