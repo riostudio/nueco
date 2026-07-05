@@ -1611,9 +1611,12 @@ const s = StyleSheet.create({
     paddingBottom: 4,
   },
   // TenTap rich editor (WebView). dynamicHeight grows it to content; minHeight gives tap space.
+  // Opaque (surface-colored, matching the inputBox) — a transparent Android WebView stops
+  // repainting after a parent re-render/blur (e.g. autosave), blanking the text until a tap
+  // forces a redraw. Solid bg keeps the WebView opaque so content always paints.
   richText: {
     minHeight: 150,
-    backgroundColor: 'transparent',
+    backgroundColor: C.surface,
   },
   // Footer row inside the input box holding the attach-file button (below the WebView editor).
   editorFooter: {
