@@ -94,7 +94,7 @@ export default function EventsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<'upcoming' | 'all'>('upcoming');
   const [fabExpanded, setFabExpanded] = useState(false);
-  const fabWidth = useRef(new Animated.Value(56)).current;
+  const fabWidth = useRef(new Animated.Value(64)).current; // collapsed size matches Notes/Calendar FAB height
   const textOpacity = useRef(new Animated.Value(0)).current;
   const lastScrollY = useRef(0);
 
@@ -179,7 +179,7 @@ export default function EventsScreen() {
     if (!fabExpanded) return;
     setFabExpanded(false);
     Animated.parallel([
-      Animated.spring(fabWidth, { toValue: 56, useNativeDriver: false, friction: 8 }),
+      Animated.spring(fabWidth, { toValue: 64, useNativeDriver: false, friction: 8 }),
       Animated.timing(textOpacity, { toValue: 0, duration: 150, useNativeDriver: false }),
     ]).start();
   };
@@ -450,16 +450,17 @@ const s = StyleSheet.create({
     borderRadius: 8,
   },
   fab: {
-    position: 'absolute', bottom: 20, right: 20,
-    backgroundColor: C.primary, borderRadius: 28,
-    height: 56, overflow: 'hidden',
+    // Match the Notes/Calendar FAB position + size so the CTA sits in the same spot on every tab.
+    position: 'absolute', bottom: 24, right: 24,
+    backgroundColor: C.primary, borderRadius: 36,
+    height: 64, overflow: 'hidden',
     elevation: 4,
   },
   fabTouchable: {
     flex: 1, flexDirection: 'row', alignItems: 'center',
   },
   fabIconContainer: {
-    width: 56, height: 56, 
+    width: 64, height: 64,
     justifyContent: 'center', alignItems: 'center',
   },
   fabText: { fontSize: 16, fontWeight: '600', color: C.primaryFg, marginRight: 16 },
