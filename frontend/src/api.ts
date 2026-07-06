@@ -10,8 +10,20 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
   return {};
 }
 
+// Single-flight guard: coalesce concurrent token refreshes so only ONE /auth/refresh runs. The
+// backend ROTATES refresh tokens, so two concurrent refreshes with the same token make the second
+// use an already-invalidated token → "Session expired". (Surfaced once post-login sync moved to the
+// background, which makes the notes/events/calendar loads hit refresh concurrently.)
+let refreshInFlight: Promise<boolean> | null = null;
+
+function refreshAccessToken(): Promise<boolean> {
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = doRefreshAccessToken().finally(() => { refreshInFlight = null; });
+  return refreshInFlight;
+}
+
 // Refresh the access token using the refresh token
-async function refreshAccessToken(): Promise<boolean> {
+async function doRefreshAccessToken(): Promise<boolean> {
   try {
     const refreshToken = await authStorage.getRefreshToken();
     if (!refreshToken) {
