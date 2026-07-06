@@ -3,8 +3,8 @@
 import 'react-native-get-random-values';
 // Registers the native PBKDF2 KDF for the E2EE core (pure-JS is too slow on Hermes).
 import '../src/crypto/kdf-native';
-import React from 'react';
-import { Stack } from 'expo-router';
+import React, { useEffect } from 'react';
+import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
@@ -12,11 +12,22 @@ import { ShareIntentProvider } from 'expo-share-intent';
 import { AuthProvider, useAuth } from '../src/auth';
 import { PostHogProvider } from '../src/analytics';
 import { ErrorBoundary, ShareIntentHandler } from '../src/components';
+import { setupNotificationHandler, setupNotificationTapHandler } from '../src/notifications';
 
 // Inner component that has access to auth context for user ID
 function AppWithAnalytics() {
   const { user } = useAuth();
-  
+  const router = useRouter();
+
+  // Foreground reminder presentation + tap → open the linked event.
+  useEffect(() => {
+    setupNotificationHandler();
+    const unsubscribe = setupNotificationTapHandler((eventId) => {
+      router.push({ pathname: '/event-editor', params: { eventId } });
+    });
+    return unsubscribe;
+  }, [router]);
+
   return (
     <PostHogProvider userId={user?.id}>
       <StatusBar style="dark" />

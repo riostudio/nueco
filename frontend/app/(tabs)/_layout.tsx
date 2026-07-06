@@ -1,12 +1,13 @@
 import { Tabs } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StyleSheet, View, Alert } from 'react-native';
-import React from 'react';
+import React, { useEffect } from 'react';
 import { UserAvatar, useAuth } from '../../src/auth';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useRouter } from 'expo-router';
 import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { registerForPushNotifications, unregisterPushNotifications } from '../../src/notifications';
 
 const C = {
   primary: '#D84315',
@@ -42,6 +43,9 @@ export default function TabLayout() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
+  // Register this device for reminder push notifications once we're in the app (authenticated).
+  useEffect(() => { registerForPushNotifications(); }, []);
+
   const handleLogout = () => {
     Alert.alert(
       'Log Out',
@@ -52,6 +56,7 @@ export default function TabLayout() {
           text: 'Log Out',
           style: 'destructive',
           onPress: async () => {
+            await unregisterPushNotifications();
             await logout();
             router.replace('/welcome');
           },

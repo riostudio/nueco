@@ -74,6 +74,12 @@
           "calendarPermission": "Save events to your calendar"
         }
       ],
+      [
+        "expo-notifications",
+        {
+          "color": "#D84315"
+        }
+      ],
       "expo-web-browser",
       "expo-localization",
       "expo-secure-store",
