@@ -49,27 +49,26 @@ export function useOfflineNotes() {
     setNotes(local.filter(n => !n._pendingDelete));
   }, []);
 
-  // Sync and reload
+  // Sync and reload. Offline-first: show cached notes IMMEDIATELY, then sync in the background and
+  // refresh. Previously the full network sync ran before the first loadNotes, so the list (and its
+  // blocking spinner) waited on the network — the tab felt slow to open.
   const syncAndReload = useCallback(async () => {
+    await loadNotes(); // instant: cached notes on screen right away
     const token = await authStorage.getAccessToken();
-    if (!token) {
-      await loadNotes();
-      return;
-    }
+    if (!token) return;
     const online = await checkOnline();
     setOnline(online);
-    if (online) {
-      setIsSyncing(true);
-      setSyncError(null);
-      try {
-        await fullSync();
-      } catch (e: any) {
-        setSyncError(e?.message || 'Sync failed');
-      } finally {
-        setIsSyncing(false);
-      }
+    if (!online) return;
+    setIsSyncing(true);
+    setSyncError(null);
+    try {
+      await fullSync();
+      await loadNotes(); // reflect synced changes
+    } catch (e: any) {
+      setSyncError(e?.message || 'Sync failed');
+    } finally {
+      setIsSyncing(false);
     }
-    await loadNotes();
   }, [loadNotes]);
 
   // Re-run syncAndReload when isSyncReady flips to true (post-login fullSync complete)
@@ -176,17 +175,17 @@ export function useOfflineEvents() {
   }, []);
 
   const syncAndReload = useCallback(async () => {
+    await loadEvents(); // instant: cached events on screen right away
     const online = await checkOnline();
     setOnline(online);
-    if (online) {
-      setIsSyncing(true);
-      try {
-        await processSyncQueue();
-      } finally {
-        setIsSyncing(false);
-      }
+    if (!online) return;
+    setIsSyncing(true);
+    try {
+      await processSyncQueue();
+      await loadEvents(); // reflect synced changes
+    } finally {
+      setIsSyncing(false);
     }
-    await loadEvents();
   }, [loadEvents]);
 
   useEffect(() => {

@@ -121,12 +121,9 @@ export default function CalendarScreen() {
         ))}
       </View>
 
-      {/* Calendar Grid */}
-      {loading ? (
-        <View style={s.loadingGrid}>
-          <ActivityIndicator size="small" color={C.primary} />
-        </View>
-      ) : (
+      {/* Calendar Grid — always rendered instantly (the grid is derived from the date); event
+          day-markers fill in when events load, instead of replacing the whole grid with a spinner. */}
+      {(
         <View style={s.grid}>
           {rows.map((row, ri) => (
             <View key={ri} style={s.gridRow}>

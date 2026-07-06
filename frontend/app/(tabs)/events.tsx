@@ -7,10 +7,11 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { eventsApi } from '../../src/api';
 import { CalendarEvent } from '../../src/types';
 import { MONTH_NAMES } from '../../src/theme';
-import { UserAvatar } from '../../src/auth';
+import { UserAvatar, useAuth } from '../../src/auth';
 
 const C = {
   primary: '#D84315',
@@ -86,6 +87,8 @@ function groupEventsByDate(events: CalendarEvent[]): GroupedEvents {
 
 export default function EventsScreen() {
   const router = useRouter();
+  const { user } = useAuth();
+  const cacheKey = `events_cache_${user?.id ?? 'anon'}`; // per-user so events don't leak across accounts
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -104,13 +107,25 @@ export default function EventsScreen() {
     try {
       const data = await eventsApi.getAll();
       setEvents(data);
+      AsyncStorage.setItem(cacheKey, JSON.stringify(data)).catch(() => {});
     } catch (e) {
       console.error('Failed to load events:', e);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [cacheKey]);
+
+  // Instant: show the last-fetched events from cache while the network refresh runs.
+  useEffect(() => {
+    AsyncStorage.getItem(cacheKey).then((raw) => {
+      if (!raw) return;
+      try {
+        const cached = JSON.parse(raw);
+        if (Array.isArray(cached) && cached.length) setEvents((cur) => (cur.length ? cur : cached));
+      } catch {}
+    }).catch(() => {});
+  }, [cacheKey]);
 
   useFocusEffect(useCallback(() => { loadEvents(); }, [loadEvents]));
 
@@ -188,7 +203,8 @@ export default function EventsScreen() {
 
   const grouped = groupEventsByDate(filteredEvents);
 
-  if (loading) {
+  // Only block on a spinner when there's nothing cached yet; otherwise render cached events instantly.
+  if (loading && events.length === 0) {
     return (
       <SafeAreaView style={s.container} edges={['top']}>
         <View style={s.center}>

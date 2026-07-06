@@ -309,7 +309,9 @@ export default function NotesScreen() {
     );
   };
 
-  if (loading) {
+  // Only block on a spinner when there's genuinely nothing cached yet; otherwise render the cached
+  // notes instantly (offline-first) and let the background sync refresh them.
+  if (loading && notes.length === 0) {
     return (
       <SafeAreaView style={s.container}>
         <View style={s.center}>
