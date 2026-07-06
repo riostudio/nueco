@@ -2,7 +2,7 @@ import React, { useState, useEffect, createElement, useRef, useCallback } from '
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   ScrollView, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
-  Switch, Modal, Linking,
+  Switch, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -22,12 +22,6 @@ async function retryOperation(operation: () => Promise<any>, maxRetries = 3): Pr
       await new Promise(resolve => setTimeout(resolve, attempt * 500));
     }
   }
-}
-
-function formatGoogleDate(d: Date): string {
-  const pad = (n: number) => n.toString().padStart(2, '0');
-  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}` +
-    `T${pad(d.getHours())}${pad(d.getMinutes())}00`;
 }
 
 // ---- Lazy imports ----
@@ -159,6 +153,10 @@ export default function EventEditorScreen() {
   const [deleteModalVisible, setDeleteModalVisible] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [eventExists, setEventExists] = useState(isEditing);
+  // Device-calendar picker: the user's writable calendars + their chosen target (persisted).
+  const [calendars, setCalendars] = useState<{ id: string; title: string; source?: string }[]>([]);
+  const [preferredCalendarId, setPreferredCalendarId] = useState<string | null>(null);
+  const [showCalendarPicker, setShowCalendarPicker] = useState(false);
 
   // Refs
   const eventIdRef = useRef(isEditing ? (params.eventId || '') : '');
@@ -171,8 +169,9 @@ export default function EventEditorScreen() {
   const reminderMinutesRef = useRef(reminderMinutes);
   const deviceCalendarEventIdRef = useRef(deviceCalendarEventId);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const calendarSyncedRef = useRef(false); // Track if already prompted for Google Calendar
   const lastSavedDataRef = useRef<string>(''); // Track last saved data to avoid duplicate saves
+  const calendarsRef = useRef<{ id: string; title: string; source?: string }[]>([]); // cached writable calendars
+  const preferredCalendarIdRef = useRef<string | null>(null);
 
   // Sync refs with state
   useEffect(() => { titleRef.current = title; }, [title]);
@@ -182,10 +181,20 @@ export default function EventEditorScreen() {
   useEffect(() => { endTimeRef.current = endTime; }, [endTime]);
   useEffect(() => { reminderMinutesRef.current = reminderMinutes; }, [reminderMinutes]);
   useEffect(() => { deviceCalendarEventIdRef.current = deviceCalendarEventId; }, [deviceCalendarEventId]);
+  useEffect(() => { preferredCalendarIdRef.current = preferredCalendarId; }, [preferredCalendarId]);
 
   useEffect(() => {
     if (isEditing && params.eventId) loadEvent(params.eventId);
     requestNotificationPermissions();
+    (async () => {
+      try {
+        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+        const saved = await AsyncStorage.getItem('preferred_calendar_id');
+        if (saved) setPreferredCalendarId(saved);
+      } catch {}
+      loadCalendars(); // silent — populates the picker if calendar permission is already granted
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ---- API calls ----
@@ -212,7 +221,6 @@ export default function EventEditorScreen() {
       eventIdRef.current = event.id;
       isCreatedRef.current = true;
       setEventExists(true);
-      calendarSyncedRef.current = true; // Already synced previously
     } catch (e) {
       console.error('Failed to load event:', e);
     } finally {
@@ -221,6 +229,42 @@ export default function EventEditorScreen() {
   };
 
   // ---- Calendar functions ----
+
+  // Load + cache the device's writable calendars. Silent by default (won't prompt for permission);
+  // pass { prompt: true } to request it (from the picker and on write). { force: true } refetches.
+  const loadCalendars = useCallback(async (opts: { prompt?: boolean; force?: boolean } = {}) => {
+    if (!ExpoCalendar || isWeb) return [] as { id: string; title: string; source?: string }[];
+    if (calendarsRef.current.length && !opts.force) return calendarsRef.current;
+    try {
+      let status = (await ExpoCalendar.getCalendarPermissionsAsync()).status;
+      if (status !== 'granted') {
+        if (!opts.prompt) return [];
+        status = (await ExpoCalendar.requestCalendarPermissionsAsync()).status;
+        if (status !== 'granted') return [];
+      }
+      const all = await ExpoCalendar.getCalendarsAsync(ExpoCalendar.EntityTypes.EVENT);
+      const writable = all
+        .filter((c: any) => c.allowsModifications)
+        .map((c: any) => ({ id: c.id as string, title: c.title as string, source: c.source?.name as string | undefined }));
+      calendarsRef.current = writable;
+      setCalendars(writable);
+      return writable;
+    } catch (e) {
+      console.error('Failed to load calendars:', e);
+      return [];
+    }
+  }, []);
+
+  const selectCalendar = async (id: string | null) => {
+    setPreferredCalendarId(id);
+    preferredCalendarIdRef.current = id;
+    setShowCalendarPicker(false);
+    try {
+      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+      if (id) await AsyncStorage.setItem('preferred_calendar_id', id);
+      else await AsyncStorage.removeItem('preferred_calendar_id');
+    } catch {}
+  };
 
   const writeToDeviceCalendar = async (
     eventTitle: string,
@@ -231,25 +275,25 @@ export default function EventEditorScreen() {
   ): Promise<string | null> => {
     if (!ExpoCalendar || isWeb) return null;
     try {
-      const { status } = await ExpoCalendar.requestCalendarPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Calendar Permission', 'Calendar access is needed to sync events. You can enable it in Settings.');
+      const cals = await loadCalendars({ prompt: true });
+      if (!cals.length) {
+        Alert.alert('Calendar', 'Calendar access is needed, or no writable calendar was found. You can enable access in Settings.');
         return null;
       }
 
-      const calendars = await ExpoCalendar.getCalendarsAsync(ExpoCalendar.EntityTypes.EVENT);
-      let targetCalId: string | undefined;
-
-      if (Platform.OS === 'ios') {
-        try {
-          const defaultCal = await ExpoCalendar.getDefaultCalendarAsync();
-          targetCalId = defaultCal.id;
-        } catch {
-          targetCalId = calendars.find(c => c.allowsModifications && c.source?.type === 'local')?.id || calendars[0]?.id;
+      // Prefer the user-chosen calendar (if it still exists + is writable); else the platform default.
+      let targetCalId: string | undefined =
+        (preferredCalendarIdRef.current && cals.some(c => c.id === preferredCalendarIdRef.current))
+          ? preferredCalendarIdRef.current
+          : undefined;
+      if (!targetCalId) {
+        if (Platform.OS === 'ios') {
+          try { targetCalId = (await ExpoCalendar.getDefaultCalendarAsync()).id; }
+          catch { targetCalId = cals[0]?.id; }
+        } else {
+          const googleCal = cals.find(c => c.source?.toLowerCase().includes('google'));
+          targetCalId = googleCal?.id || cals[0]?.id;
         }
-      } else {
-        const googleCal = calendars.find(c => c.allowsModifications && c.source?.name?.toLowerCase().includes('google'));
-        targetCalId = googleCal?.id || calendars.find(c => c.allowsModifications)?.id || calendars[0]?.id;
       }
 
       if (!targetCalId) {
@@ -273,25 +317,6 @@ export default function EventEditorScreen() {
       return null;
     }
   };
-
-  const syncToGoogleCalendar = useCallback(async () => {
-    try {
-      const st = new Date(dateRef.current);
-      st.setHours(startTimeRef.current.getHours(), startTimeRef.current.getMinutes(), 0, 0);
-      const et = new Date(dateRef.current);
-      et.setHours(endTimeRef.current.getHours(), endTimeRef.current.getMinutes(), 0, 0);
-
-      const url = `https://calendar.google.com/calendar/render?action=TEMPLATE` +
-        `&text=${encodeURIComponent(titleRef.current.trim())}` +
-        `&dates=${formatGoogleDate(st)}/${formatGoogleDate(et)}` +
-        `&details=${encodeURIComponent(descriptionRef.current.trim() || '')}`;
-
-      await Linking.openURL(url);
-    } catch (e) {
-      console.error('Failed to open Google Calendar:', e);
-      Alert.alert('Calendar Error', 'Could not sync to Google Calendar. Please try again.');
-    }
-  }, []);
 
   const scheduleReminder = async (eventTitle: string, eventStartTime: Date, minutesBefore: number) => {
     if (!Notifications || isWeb) return;
@@ -345,9 +370,10 @@ export default function EventEditorScreen() {
 
       setSaveStatus('Saving...');
       try {
-        // Write to device calendar only on iOS (Android uses Google Calendar link)
+        // Write straight into the device calendar (iOS = Apple Calendar, Android = the Google-synced
+        // calendar) natively — no browser redirect. The OS handles syncing to Google/iCloud.
         let newDeviceCalEventId = deviceCalendarEventIdRef.current;
-        if (addToDeviceCal && !isWeb && Platform.OS === 'ios') {
+        if (addToDeviceCal && !isWeb) {
           newDeviceCalEventId = await writeToDeviceCalendar(
             titleRef.current.trim(),
             descriptionRef.current.trim(),
@@ -380,19 +406,6 @@ export default function EventEditorScreen() {
               await AsyncStorage.setItem('pendingLinkedEventId', created.id);
             } catch {}
           }
-
-          // Prompt Google Calendar sync once on first creation (Android only)
-          if (addToDeviceCal && !isWeb && Platform.OS === 'android' && !calendarSyncedRef.current) {
-            calendarSyncedRef.current = true;
-            Alert.alert(
-              'Sync to Google Calendar?',
-              'Your event has been saved. Would you like to add it to Google Calendar?',
-              [
-                { text: 'Add to Google Calendar', onPress: () => syncToGoogleCalendar() },
-                { text: 'Not Now', style: 'cancel' },
-              ]
-            );
-          }
         } else {
           await retryOperation(() => eventsApi.update(eventIdRef.current, eventData));
         }
@@ -404,7 +417,7 @@ export default function EventEditorScreen() {
         console.error('Save error:', e);
       }
     }, 2000);
-  }, [addToDeviceCal, params.noteId, syncToGoogleCalendar]);
+  }, [addToDeviceCal, params.noteId]);
 
   // ---- Back handler ----
 
@@ -420,7 +433,16 @@ export default function EventEditorScreen() {
 
       if (et > st) {
         try {
-          const eventData = buildEventData(st, et, deviceCalendarEventIdRef.current);
+          // Write to the device calendar natively (both platforms) before persisting, so a quick
+          // back-out still lands the event on the calendar. Idempotent via the stored event id.
+          let devId = deviceCalendarEventIdRef.current;
+          if (addToDeviceCal && !isWeb) {
+            const written = await writeToDeviceCalendar(
+              titleRef.current.trim(), descriptionRef.current.trim(), st, et, devId,
+            );
+            if (written) { devId = written; deviceCalendarEventIdRef.current = written; }
+          }
+          const eventData = buildEventData(st, et, devId);
           if (!isCreatedRef.current) {
             const created = await eventsApi.create(eventData);
             if (params.noteId && params.noteId !== 'new') {
@@ -429,35 +451,8 @@ export default function EventEditorScreen() {
               const AsyncStorage = require('@react-native-async-storage/async-storage').default;
               await AsyncStorage.setItem('pendingLinkedEventId', created.id);
             }
-            // Prompt Google Calendar if not yet synced
-            if (addToDeviceCal && !isWeb && Platform.OS === 'android' && !calendarSyncedRef.current) {
-              calendarSyncedRef.current = true;
-              await new Promise<void>((resolve) => {
-                Alert.alert(
-                  'Sync to Google Calendar?',
-                  'Your event has been saved. Would you like to add it to Google Calendar?',
-                  [
-                    { text: 'Add to Google Calendar', onPress: async () => { await syncToGoogleCalendar(); resolve(); } },
-                    { text: 'Not Now', style: 'cancel', onPress: () => resolve() },
-                  ]
-                );
-              });
-            }
           } else {
             await eventsApi.update(eventIdRef.current, eventData);
-            // Prompt to update Google Calendar on edit
-            if (addToDeviceCal && !isWeb && Platform.OS === 'android') {
-              await new Promise<void>((resolve) => {
-                Alert.alert(
-                  'Update Google Calendar?',
-                  'Your event has been updated. Would you like to update it in Google Calendar too? The previous entry will need to be deleted manually.',
-                  [
-                    { text: 'Open Google Calendar', onPress: async () => { await syncToGoogleCalendar(); resolve(); } },
-                    { text: 'Skip', style: 'cancel', onPress: () => resolve() },
-                  ]
-                );
-              });
-            }
           }
         } catch (e) {
           console.error('Final save on back failed:', e);
@@ -470,7 +465,7 @@ export default function EventEditorScreen() {
     } else {
       router.replace('/(tabs)/events');
     }
-  }, [params.noteId, router, addToDeviceCal, syncToGoogleCalendar]);
+  }, [params.noteId, router, addToDeviceCal]);
 
   // ---- Delete ----
 
@@ -511,6 +506,9 @@ export default function EventEditorScreen() {
 
   const isIOS = Platform.OS === 'ios';
   const isAndroid = Platform.OS === 'android';
+  const selectedCalendarLabel = preferredCalendarId
+    ? (calendars.find(c => c.id === preferredCalendarId)?.title || 'Selected calendar')
+    : 'Default calendar';
 
   return (
     <SafeAreaView style={s.container}>
@@ -709,7 +707,7 @@ export default function EventEditorScreen() {
                 <MaterialIcons name={isIOS ? 'event' : 'event-available'} size={28} color={C.secondary} />
                 <View style={s.calendarToggleTextContainer}>
                   <Text style={s.calendarToggleTitle}>{isIOS ? 'Sync to Apple Calendar' : 'Sync to Google Calendar'}</Text>
-                  <Text style={s.calendarToggleSubtitle}>{isIOS ? 'Syncs directly to your Apple Calendar' : 'Opens Google Calendar to save event'}</Text>
+                  <Text style={s.calendarToggleSubtitle}>{isIOS ? 'Syncs directly to your Apple Calendar' : 'Syncs directly to your Google Calendar'}</Text>
                 </View>
               </View>
               <Switch
@@ -721,6 +719,19 @@ export default function EventEditorScreen() {
                 ios_backgroundColor={C.borderSub}
               />
             </View>
+          )}
+
+          {/* Calendar picker — which device calendar to write to (shown when sync is on) */}
+          {!isWeb && addToDeviceCal && (
+            <TouchableOpacity
+              testID="calendar-picker-btn"
+              style={[s.pickerBtn, { marginTop: 12 }]}
+              onPress={async () => { await loadCalendars({ prompt: true }); setShowCalendarPicker(true); }}
+            >
+              <MaterialIcons name="event" size={24} color={C.secondary} />
+              <Text style={s.pickerBtnText} numberOfLines={1}>{selectedCalendarLabel}</Text>
+              <MaterialIcons name="arrow-drop-down" size={28} color={C.borderSub} />
+            </TouchableOpacity>
           )}
 
           {/* Reminder */}
@@ -744,6 +755,33 @@ export default function EventEditorScreen() {
                     <MaterialIcons name={option.value === null ? 'notifications-off' : 'notifications'} size={22} color={reminderMinutes === option.value ? C.primaryFg : C.textSec} />
                     <Text style={[s.reminderOptionText, reminderMinutes === option.value && s.reminderOptionTextSelected]}>{option.label}</Text>
                     {reminderMinutes === option.value && <MaterialIcons name="check" size={22} color={C.primaryFg} />}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </TouchableOpacity>
+          </Modal>
+
+          {/* Calendar Picker Modal */}
+          <Modal testID="calendar-modal" visible={showCalendarPicker} transparent animationType="fade" onRequestClose={() => setShowCalendarPicker(false)}>
+            <TouchableOpacity style={s.modalOverlay} activeOpacity={1} onPress={() => setShowCalendarPicker(false)}>
+              <View style={s.reminderModal}>
+                <Text style={s.reminderModalTitle}>Choose Calendar</Text>
+                <TouchableOpacity style={[s.reminderOption, !preferredCalendarId && s.reminderOptionSelected]} onPress={() => selectCalendar(null)}>
+                  <MaterialIcons name="event" size={22} color={!preferredCalendarId ? C.primaryFg : C.textSec} />
+                  <Text style={[s.reminderOptionText, !preferredCalendarId && s.reminderOptionTextSelected]}>Default calendar</Text>
+                  {!preferredCalendarId && <MaterialIcons name="check" size={22} color={C.primaryFg} />}
+                </TouchableOpacity>
+                {calendars.map((cal) => (
+                  <TouchableOpacity
+                    key={cal.id}
+                    style={[s.reminderOption, preferredCalendarId === cal.id && s.reminderOptionSelected]}
+                    onPress={() => selectCalendar(cal.id)}
+                  >
+                    <MaterialIcons name="event-available" size={22} color={preferredCalendarId === cal.id ? C.primaryFg : C.textSec} />
+                    <Text style={[s.reminderOptionText, preferredCalendarId === cal.id && s.reminderOptionTextSelected]} numberOfLines={1}>
+                      {cal.title}{cal.source ? ` · ${cal.source}` : ''}
+                    </Text>
+                    {preferredCalendarId === cal.id && <MaterialIcons name="check" size={22} color={C.primaryFg} />}
                   </TouchableOpacity>
                 ))}
               </View>
