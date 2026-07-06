@@ -4143,6 +4143,38 @@ expo-crypto@~55.0.15:
   resolved "https://registry.npmjs.org/expo-crypto/-/expo-crypto-55.0.15.tgz"
   integrity sha512-nlxLguQyJM4MhDDERL30WZkq68/BujOcAp4QdGk+1pZmUmG1p2M8cF7GeFwYvWwjH0DVsIRtRh4ukeTvOZVTPg==
 
+expo-dev-client@~55.0.36:
+  version "55.0.36"
+  resolved "https://registry.yarnpkg.com/expo-dev-client/-/expo-dev-client-55.0.36.tgz#3c7fa45f496a7f442459234be824aa473cd951fa"
+  integrity sha512-Fq/Jx4YVMeR8hup1YK0omlmRwqgMW5FoAWrzwl0BdBygy8oixENLxsEp1p/CuaDhrNw38Kr9E4a1M3p6Gy/Q0w==
+  dependencies:
+    expo-dev-launcher "55.0.37"
+    expo-dev-menu "55.0.31"
+    expo-dev-menu-interface "55.0.2"
+    expo-manifests "~55.0.18"
+    expo-updates-interface "~55.1.6"
+
+expo-dev-launcher@55.0.37:
+  version "55.0.37"
+  resolved "https://registry.yarnpkg.com/expo-dev-launcher/-/expo-dev-launcher-55.0.37.tgz#b79734c7a7010330931bc104ae1762d4bd9e0fa1"
+  integrity sha512-Cwj/pvVEAftixQEV7Nj+XFDO3Kp/NOKxRCMY2n4lwb8sAHL0gBOFxwTjloZTyJDfwmxZagIJGANXnD8kdb+yog==
+  dependencies:
+    "@expo/schema-utils" "^55.0.4"
+    expo-dev-menu "55.0.31"
+    expo-manifests "~55.0.18"
+
+expo-dev-menu-interface@55.0.2:
+  version "55.0.2"
+  resolved "https://registry.yarnpkg.com/expo-dev-menu-interface/-/expo-dev-menu-interface-55.0.2.tgz#aead1b9980c904d61c59e9182e13b2b37bcb2161"
+  integrity sha512-DomUNvGzY/xliwnMdbAYY780sCv19N7zIbifc0ClcoCzJZpNSCkvJ2qGIFRPyM/7DmqmlHGCKi8di7kYYLKNEg==
+
+expo-dev-menu@55.0.31:
+  version "55.0.31"
+  resolved "https://registry.yarnpkg.com/expo-dev-menu/-/expo-dev-menu-55.0.31.tgz#3c4ec633500e59fe6f238b624e1834d097762111"
+  integrity sha512-GCHID6veeHL7P1D2w6bhuwqil7mo6+0Yh3/6O1cDaCCCNfF10K0Gm/GJgtv1wlHYz7ygevc+pbS0ErzqQQFhPQ==
+  dependencies:
+    expo-dev-menu-interface "55.0.2"
+
 expo-device@~55.0.17:
   version "55.0.17"
   resolved "https://registry.npmjs.org/expo-device/-/expo-device-55.0.17.tgz"
@@ -4196,6 +4228,11 @@ expo-image@^55.0.10, expo-image@~55.0.10:
   dependencies:
     sf-symbols-typescript "^2.2.0"
 
+expo-json-utils@~55.0.2:
+  version "55.0.2"
+  resolved "https://registry.yarnpkg.com/expo-json-utils/-/expo-json-utils-55.0.2.tgz#ef79888b881ef5b92d27245d3a758bc5debcbccf"
+  integrity sha512-QJMOZOPOG7CTnKcrdVaiummn2va1MCO56z++eyWkDv3GBRODldM6MFMDf/jTREWthFc2Nxo6TuyWRrEV9S6n/Q==
+
 expo-keep-awake@~55.0.8:
   version "55.0.8"
   resolved "https://registry.npmjs.org/expo-keep-awake/-/expo-keep-awake-55.0.8.tgz"
@@ -4223,6 +4260,13 @@ expo-localization@~55.0.14:
   integrity sha512-Q7VeW5gs0qMunYxIDB8+SpY/4T/h3CUE2kl6r6jnbYc6MPpmrK9bx/D9MeCfh0LmXW8oefy3MJYZQdPciEXU7Q==
   dependencies:
     rtl-detect "^1.0.2"
+
+expo-manifests@~55.0.18:
+  version "55.0.18"
+  resolved "https://registry.yarnpkg.com/expo-manifests/-/expo-manifests-55.0.18.tgz#7664c4787944d6971faabf4e856e991ca2e56fe1"
+  integrity sha512-8zIjEZ7x+aSj4NwvQuKwaghjd2835yjF5LDzSV0s0vP1KAa6fZ7LwPyjXBjmPAwfd9UFxlMeHbNGp+qAqu7hSQ==
+  dependencies:
+    expo-json-utils "~55.0.2"
 
 expo-modules-autolinking@55.0.23:
   version "55.0.23"
@@ -4337,6 +4381,11 @@ expo-system-ui@~55.0.18:
   dependencies:
     "@react-native/normalize-colors" "0.83.6"
     debug "^4.3.2"
+
+expo-updates-interface@~55.1.6:
+  version "55.1.6"
+  resolved "https://registry.yarnpkg.com/expo-updates-interface/-/expo-updates-interface-55.1.6.tgz#18a806d65a28229ed4a7f920fceb9dda678c5c09"
+  integrity sha512-evxNpagCkjT3lE6bGV570TFzRtKuIuLY8I37RYHoriXCJ+ZKCN1hbmklK29uAixya+BxGpeTI2K4FqYeJLvfrw==
 
 expo-video-thumbnails@~55.0.16:
   version "55.0.16"
