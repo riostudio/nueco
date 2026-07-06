@@ -8,8 +8,10 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import tempfile
+import httpx
+from pymongo import ReturnDocument
 from collections import defaultdict
 import time
 from openai import AsyncOpenAI
@@ -555,6 +557,34 @@ async def record_feature_event(body: FeatureEvent, current_user: dict = Depends(
     return {"ok": True}
 
 
+# ---- Reminder helpers ----
+
+REMINDER_LABELS = {5: "5 minutes", 15: "15 minutes", 30: "30 minutes", 60: "1 hour", 1440: "1 day"}
+
+
+def reminder_label(minutes) -> str:
+    if not minutes:
+        return "a moment"
+    return REMINDER_LABELS.get(minutes, f"{minutes} minutes")
+
+
+def compute_reminder_fields(start_time_iso: Optional[str], reminder_minutes: Optional[int]) -> dict:
+    """Derive the scheduler fields for an event. `reminder_fire_at` = start - reminder_minutes.
+    Past-due guard: if the fire time is already in the past (or no reminder), mark it 'sent' so a
+    backfilled / late-edited event never queues a reminder for something already over."""
+    if not reminder_minutes or not start_time_iso:
+        return {"reminder_fire_at": None, "reminder_status": "sent", "reminder_claimed_at": None}
+    try:
+        st = datetime.fromisoformat(start_time_iso.replace("Z", "+00:00"))
+        if st.tzinfo is None:
+            st = st.replace(tzinfo=timezone.utc)
+    except Exception:
+        return {"reminder_fire_at": None, "reminder_status": "sent", "reminder_claimed_at": None}
+    fire_at = st - timedelta(minutes=reminder_minutes)
+    status = "sent" if fire_at <= datetime.now(timezone.utc) else "pending"
+    return {"reminder_fire_at": fire_at.isoformat(), "reminder_status": status, "reminder_claimed_at": None}
+
+
 # ---- Events Endpoints ----
 
 @api_router.post("/events", response_model=EventResponse)
@@ -571,6 +601,7 @@ async def create_event(event: EventCreate, current_user: dict = Depends(get_curr
         "device_calendar_event_id": event.device_calendar_event_id,
         "user_id": user_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        **compute_reminder_fields(event.start_time, event.reminder_minutes),
     }
     await db.events.insert_one(doc)
     doc.pop("_id", None)
@@ -644,13 +675,22 @@ async def get_events_batch(
 @api_router.put("/events/{event_id}", response_model=EventResponse)
 async def update_event(event_id: str, update: EventUpdate, current_user: dict = Depends(get_current_user)):
     user_id = current_user.get("id") or str(current_user.get("_id", ""))
+    existing = await db.events.find_one({"id": event_id, "user_id": user_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Event not found")
     updates = {}
     for k, v in update.model_dump(exclude_unset=True).items():
         if v is not None:
             updates[k] = v
-    result = await db.events.update_one({"id": event_id, "user_id": user_id}, {"$set": updates})
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Event not found")
+    # Recompute the reminder scheduler fields when the timing changed. Only reset the send state
+    # when the fire time actually moves (so unrelated edits don't re-fire an already-sent reminder).
+    if "start_time" in updates or "reminder_minutes" in updates:
+        new_start = updates.get("start_time", existing.get("start_time"))
+        new_minutes = updates.get("reminder_minutes", existing.get("reminder_minutes"))
+        fields = compute_reminder_fields(new_start, new_minutes)
+        if fields["reminder_fire_at"] != existing.get("reminder_fire_at"):
+            updates.update(fields)
+    await db.events.update_one({"id": event_id, "user_id": user_id}, {"$set": updates})
     event = await db.events.find_one({"id": event_id, "user_id": user_id}, {"_id": 0})
     return EventResponse(**event)
 
@@ -662,6 +702,187 @@ async def delete_event(event_id: str, current_user: dict = Depends(get_current_u
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Event not found")
     return {"message": "Event deleted"}
+
+
+# ---- Push notifications (event reminders) ----
+
+EXPO_PUSH_SEND_URL = "https://exp.host/--/api/v2/push/send"
+EXPO_PUSH_RECEIPTS_URL = "https://exp.host/--/api/v2/push/getReceipts"
+
+
+def _expo_headers() -> dict:
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    token = os.environ.get("EXPO_ACCESS_TOKEN")  # optional but recommended for send security
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def _require_tick_secret(request: Request):
+    """Cron/internal endpoints are gated by a shared secret, not user auth."""
+    secret = os.environ.get("PUSH_TICK_SECRET")
+    if not secret or request.headers.get("X-Tick-Secret") != secret:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+class PushTokenBody(BaseModel):
+    token: str
+    platform: str = "android"
+
+
+@api_router.post("/push/register")
+async def register_push_token(body: PushTokenBody, current_user: dict = Depends(get_current_user)):
+    """Upsert a device push token for the current user (deduped on user_id + token)."""
+    user_id = current_user.get("id") or str(current_user.get("_id", ""))
+    if not body.token:
+        raise HTTPException(status_code=400, detail="Missing token")
+    await db.push_tokens.update_one(
+        {"user_id": user_id, "token": body.token},
+        {"$set": {
+            "user_id": user_id,
+            "token": body.token,
+            "platform": body.platform,
+            "active": True,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+        upsert=True,
+    )
+    return {"ok": True}
+
+
+@api_router.post("/push/unregister")
+async def unregister_push_token(body: PushTokenBody, current_user: dict = Depends(get_current_user)):
+    """Mark a token inactive (e.g. on logout). Kept, not deleted, so late receipts still resolve."""
+    user_id = current_user.get("id") or str(current_user.get("_id", ""))
+    await db.push_tokens.update_one(
+        {"user_id": user_id, "token": body.token},
+        {"$set": {"active": False}},
+    )
+    return {"ok": True}
+
+
+@api_router.post("/internal/push/tick")
+async def push_tick(request: Request):
+    """Cron-driven (once/minute). Claims due reminders atomically, sends them via Expo in batches,
+    handles per-item results, and records tickets for later receipt resolution."""
+    _require_tick_secret(request)
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+
+    # 1) Recover stuck claims — a prior tick crashed between claim and send. Return them to 'pending'.
+    stuck_before = (now - timedelta(minutes=5)).isoformat()
+    await db.events.update_many(
+        {"reminder_status": "claimed", "reminder_claimed_at": {"$lt": stuck_before}},
+        {"$set": {"reminder_status": "pending", "reminder_claimed_at": None}},
+    )
+
+    # 2) Atomically claim due, pending reminders (this is what stops overlapping ticks double-sending).
+    claimed = []
+    while len(claimed) < 500:
+        ev = await db.events.find_one_and_update(
+            {"reminder_minutes": {"$ne": None},
+             "reminder_status": "pending",
+             "reminder_fire_at": {"$lte": now_iso}},
+            {"$set": {"reminder_status": "claimed", "reminder_claimed_at": now_iso}},
+            return_document=ReturnDocument.AFTER,
+        )
+        if not ev:
+            break
+        claimed.append(ev)
+
+    if not claimed:
+        return {"claimed": 0, "sent": 0}
+
+    # 3) Build one Expo message per (event, active token). No tokens -> the reminder is done.
+    messages = []  # list of (event_id, token, message_dict)
+    for ev in claimed:
+        tokens = await db.push_tokens.find({"user_id": ev["user_id"], "active": True}).to_list(20)
+        if not tokens:
+            await db.events.update_one({"id": ev["id"]}, {"$set": {"reminder_status": "sent"}})
+            continue
+        for t in tokens:
+            messages.append((ev["id"], t["token"], {
+                "to": t["token"],
+                "title": f"⏰ {ev.get('title') or 'Event Reminder'}",
+                "body": f"Starts in {reminder_label(ev.get('reminder_minutes'))}",
+                "data": {"eventId": ev["id"], "kind": "event-reminder"},
+                "sound": "default",
+                "channelId": "event-reminders",
+            }))
+
+    # 4) Batch-send (<=100/call). Expo returns one result PER ITEM — walk them individually.
+    processed_event_ids = set()  # events whose batch got any response -> move to 'sent'
+    receipts = []
+    async with httpx.AsyncClient(timeout=30) as http:
+        for i in range(0, len(messages), 100):
+            batch = messages[i:i + 100]
+            try:
+                resp = await http.post(EXPO_PUSH_SEND_URL, headers=_expo_headers(),
+                                       json=[m for (_e, _t, m) in batch])
+                results = resp.json().get("data", [])
+            except Exception as e:
+                # Whole call failed (rate limit / 5xx) — leave events 'claimed'; recovery retries.
+                logger.error(f"Expo push send failed (batch left claimed): {e}")
+                continue
+            for (eid, token, _msg), result in zip(batch, results):
+                processed_event_ids.add(eid)
+                if result.get("status") == "ok" and result.get("id"):
+                    receipts.append({"ticket_id": result["id"], "event_id": eid, "token": token,
+                                     "created_at": now_iso, "checked": False})
+                else:
+                    err = (result.get("details") or {}).get("error")
+                    if err == "DeviceNotRegistered":
+                        await db.push_tokens.update_one({"token": token}, {"$set": {"active": False}})
+                    logger.warning(f"Expo push item error: {result}")
+
+    if processed_event_ids:
+        await db.events.update_many({"id": {"$in": list(processed_event_ids)}},
+                                    {"$set": {"reminder_status": "sent"}})
+    if receipts:
+        await db.push_receipts.insert_many(receipts)
+    return {"claimed": len(claimed), "sent": len(processed_event_ids), "tickets": len(receipts)}
+
+
+@api_router.post("/internal/push/receipts")
+async def push_receipts_tick(request: Request):
+    """Cron-driven (~every 15-20 min). Resolves Expo delivery receipts; prunes tokens Expo reports
+    as DeviceNotRegistered — the main way stale tokens (uninstall/reinstall) get cleaned up."""
+    _require_tick_secret(request)
+    now = datetime.now(timezone.utc)
+    ready_before = (now - timedelta(minutes=15)).isoformat()   # receipts are ready ~15 min after send
+    give_up_before = (now - timedelta(hours=24)).isoformat()   # stop chasing a receipt after 24h
+    pending = await db.push_receipts.find(
+        {"checked": False, "created_at": {"$lte": ready_before}}
+    ).to_list(1000)
+    if not pending:
+        return {"checked": 0}
+
+    checked = 0
+    async with httpx.AsyncClient(timeout=30) as http:
+        for i in range(0, len(pending), 300):
+            batch = pending[i:i + 300]
+            try:
+                resp = await http.post(EXPO_PUSH_RECEIPTS_URL, headers=_expo_headers(),
+                                       json={"ids": [r["ticket_id"] for r in batch]})
+                data = resp.json().get("data", {})
+            except Exception as e:
+                logger.error(f"Expo getReceipts failed: {e}")
+                continue
+            for r in batch:
+                rec = data.get(r["ticket_id"])
+                if rec is None:
+                    if r["created_at"] <= give_up_before:  # never resolved — stop chasing it
+                        await db.push_receipts.update_one({"_id": r["_id"]}, {"$set": {"checked": True}})
+                    continue
+                if rec.get("status") == "error":
+                    err = (rec.get("details") or {}).get("error")
+                    if err == "DeviceNotRegistered":
+                        await db.push_tokens.update_one({"token": r["token"]}, {"$set": {"active": False}})
+                    else:
+                        logger.warning(f"Push receipt error ({r['ticket_id']}): {rec}")
+                await db.push_receipts.update_one({"_id": r["_id"]}, {"$set": {"checked": True}})
+                checked += 1
+    return {"checked": checked}
 
 
 # ---- Transcription Endpoint ----
@@ -923,6 +1144,17 @@ async def create_indexes():
         await db.events.create_index([("user_id", 1), ("start_time", 1)])
         await db.events.create_index([("user_id", 1), ("id", 1)])
         await db.events.create_index("id")
+        # Reminder scheduler: PARTIAL index over only the small pending subset (the vast majority of
+        # historical events are 'sent'), so the per-minute tick query stays fast + small.
+        await db.events.create_index(
+            [("reminder_status", 1), ("reminder_fire_at", 1)],
+            partialFilterExpression={"reminder_status": "pending"},
+        )
+
+        # Push token indexes (reminder fire looks up the owner's active tokens on every send)
+        await db.push_tokens.create_index([("user_id", 1), ("active", 1)])
+        await db.push_tokens.create_index("token")
+        await db.push_receipts.create_index([("checked", 1), ("created_at", 1)])
         
         # Users indexes
         await db.users.create_index("email", unique=True, sparse=True)
