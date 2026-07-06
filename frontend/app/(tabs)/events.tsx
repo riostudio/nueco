@@ -7,10 +7,11 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { eventsApi } from '../../src/api';
 import { CalendarEvent } from '../../src/types';
 import { MONTH_NAMES } from '../../src/theme';
-import { UserAvatar } from '../../src/auth';
+import { UserAvatar, useAuth } from '../../src/auth';
 
 const C = {
   primary: '#D84315',
@@ -86,12 +87,14 @@ function groupEventsByDate(events: CalendarEvent[]): GroupedEvents {
 
 export default function EventsScreen() {
   const router = useRouter();
+  const { user } = useAuth();
+  const cacheKey = `events_cache_${user?.id ?? 'anon'}`; // per-user so events don't leak across accounts
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<'upcoming' | 'all'>('upcoming');
   const [fabExpanded, setFabExpanded] = useState(false);
-  const fabWidth = useRef(new Animated.Value(56)).current;
+  const fabWidth = useRef(new Animated.Value(64)).current; // collapsed size matches Notes/Calendar FAB height
   const textOpacity = useRef(new Animated.Value(0)).current;
   const lastScrollY = useRef(0);
 
@@ -104,13 +107,25 @@ export default function EventsScreen() {
     try {
       const data = await eventsApi.getAll();
       setEvents(data);
+      AsyncStorage.setItem(cacheKey, JSON.stringify(data)).catch(() => {});
     } catch (e) {
       console.error('Failed to load events:', e);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [cacheKey]);
+
+  // Instant: show the last-fetched events from cache while the network refresh runs.
+  useEffect(() => {
+    AsyncStorage.getItem(cacheKey).then((raw) => {
+      if (!raw) return;
+      try {
+        const cached = JSON.parse(raw);
+        if (Array.isArray(cached) && cached.length) setEvents((cur) => (cur.length ? cur : cached));
+      } catch {}
+    }).catch(() => {});
+  }, [cacheKey]);
 
   useFocusEffect(useCallback(() => { loadEvents(); }, [loadEvents]));
 
@@ -164,7 +179,7 @@ export default function EventsScreen() {
     if (!fabExpanded) return;
     setFabExpanded(false);
     Animated.parallel([
-      Animated.spring(fabWidth, { toValue: 56, useNativeDriver: false, friction: 8 }),
+      Animated.spring(fabWidth, { toValue: 64, useNativeDriver: false, friction: 8 }),
       Animated.timing(textOpacity, { toValue: 0, duration: 150, useNativeDriver: false }),
     ]).start();
   };
@@ -188,7 +203,8 @@ export default function EventsScreen() {
 
   const grouped = groupEventsByDate(filteredEvents);
 
-  if (loading) {
+  // Only block on a spinner when there's nothing cached yet; otherwise render cached events instantly.
+  if (loading && events.length === 0) {
     return (
       <SafeAreaView style={s.container} edges={['top']}>
         <View style={s.center}>
@@ -434,16 +450,17 @@ const s = StyleSheet.create({
     borderRadius: 8,
   },
   fab: {
-    position: 'absolute', bottom: 20, right: 20,
-    backgroundColor: C.primary, borderRadius: 28,
-    height: 56, overflow: 'hidden',
+    // Match the Notes/Calendar FAB position + size so the CTA sits in the same spot on every tab.
+    position: 'absolute', bottom: 24, right: 24,
+    backgroundColor: C.primary, borderRadius: 36,
+    height: 64, overflow: 'hidden',
     elevation: 4,
   },
   fabTouchable: {
     flex: 1, flexDirection: 'row', alignItems: 'center',
   },
   fabIconContainer: {
-    width: 56, height: 56, 
+    width: 64, height: 64,
     justifyContent: 'center', alignItems: 'center',
   },
   fabText: { fontSize: 16, fontWeight: '600', color: C.primaryFg, marginRight: 16 },

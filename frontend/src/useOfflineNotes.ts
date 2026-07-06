@@ -21,6 +21,8 @@ import {
   deleteLocalEvent,
   enqueueOperation,
   processSyncQueue,
+  createNoteOffline,
+  updateNoteOffline,
   fullSync,
   startBackgroundSync,
   stopBackgroundSync,
@@ -47,27 +49,26 @@ export function useOfflineNotes() {
     setNotes(local.filter(n => !n._pendingDelete));
   }, []);
 
-  // Sync and reload
+  // Sync and reload. Offline-first: show cached notes IMMEDIATELY, then sync in the background and
+  // refresh. Previously the full network sync ran before the first loadNotes, so the list (and its
+  // blocking spinner) waited on the network — the tab felt slow to open.
   const syncAndReload = useCallback(async () => {
+    await loadNotes(); // instant: cached notes on screen right away
     const token = await authStorage.getAccessToken();
-    if (!token) {
-      await loadNotes();
-      return;
-    }
+    if (!token) return;
     const online = await checkOnline();
     setOnline(online);
-    if (online) {
-      setIsSyncing(true);
-      setSyncError(null);
-      try {
-        await fullSync();
-      } catch (e: any) {
-        setSyncError(e?.message || 'Sync failed');
-      } finally {
-        setIsSyncing(false);
-      }
+    if (!online) return;
+    setIsSyncing(true);
+    setSyncError(null);
+    try {
+      await fullSync();
+      await loadNotes(); // reflect synced changes
+    } catch (e: any) {
+      setSyncError(e?.message || 'Sync failed');
+    } finally {
+      setIsSyncing(false);
     }
-    await loadNotes();
   }, [loadNotes]);
 
   // Re-run syncAndReload when isSyncReady flips to true (post-login fullSync complete)
@@ -103,77 +104,14 @@ export function useOfflineNotes() {
   // ---- CRUD ----
 
   const createNote = useCallback(async (data: Omit<LocalNote, 'id' | 'created_at' | 'updated_at' | '_isLocal'>): Promise<LocalNote> => {
-    const now = new Date().toISOString();
-    const tempId = `local_${uuid.v4()}`;
-    const note: LocalNote = {
-      ...data,
-      id: tempId,
-      created_at: now,
-      updated_at: now,
-      _isLocal: true,
-    };
-
-    // Always save locally first
-    await upsertLocalNote(note);
-
-    const online = await checkOnline();
-    if (online) {
-      // Try to sync immediately
-      await enqueueOperation({
-        id: tempId,
-        entity: 'note',
-        operation: 'create',
-        payload: data,
-        timestamp: now,
-      });
-      try {
-        await processSyncQueue();
-      } catch (e) {
-        // Sync failed but note is already saved locally
-      }
-      await loadNotes();
-    } else {
-      // Queue for later
-      await enqueueOperation({
-        id: tempId,
-        entity: 'note',
-        operation: 'create',
-        payload: data,
-        timestamp: now,
-      });
-      await loadNotes();
-    }
-
+    const note = await createNoteOffline(data);
+    await loadNotes();
     return note;
   }, [loadNotes]);
 
   const updateNote = useCallback(async (id: string, data: Partial<LocalNote>): Promise<void> => {
-    const now = new Date().toISOString();
-    const notes = await getLocalNotes();
-    const existing = notes.find(n => n.id === id);
-    if (!existing) return;
-
-    const updated: LocalNote = { ...existing, ...data, updated_at: now };
-    await upsertLocalNote(updated);
+    await updateNoteOffline(id, data);
     await loadNotes();
-
-    await enqueueOperation({
-      id,
-      entity: 'note',
-      operation: existing._isLocal ? 'create' : 'update',
-      payload: { ...data, updated_at: now },
-      timestamp: now,
-    });
-
-    const online = await checkOnline();
-    if (online) {
-      try {
-        await processSyncQueue();
-      } catch (e) {
-        // Sync failed but note is already saved locally
-      }
-      await loadNotes();
-    }
   }, [loadNotes]);
 
   const deleteNote = useCallback(async (id: string): Promise<void> => {
@@ -237,17 +175,17 @@ export function useOfflineEvents() {
   }, []);
 
   const syncAndReload = useCallback(async () => {
+    await loadEvents(); // instant: cached events on screen right away
     const online = await checkOnline();
     setOnline(online);
-    if (online) {
-      setIsSyncing(true);
-      try {
-        await processSyncQueue();
-      } finally {
-        setIsSyncing(false);
-      }
+    if (!online) return;
+    setIsSyncing(true);
+    try {
+      await processSyncQueue();
+      await loadEvents(); // reflect synced changes
+    } finally {
+      setIsSyncing(false);
     }
-    await loadEvents();
   }, [loadEvents]);
 
   useEffect(() => {

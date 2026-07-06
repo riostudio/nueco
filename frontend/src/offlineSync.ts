@@ -12,6 +12,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import NetInfo, { NetInfoState } from '@react-native-community/netinfo';
+import uuid from 'react-native-uuid';
 import { notesApi, eventsApi } from './api';
 import { encryptNoteForServer, decryptNoteFromServer, decryptNotesFromServer } from './crypto/noteCrypto';
 
@@ -38,6 +39,7 @@ export interface LocalNote {
   is_pinned: boolean;
   linked_event_id?: string | null;
   images: string[];
+  attachments?: any[];      // blob-storage attachment metadata (Attachment[])
   user_id?: string;
   created_at: string;
   updated_at: string;
@@ -213,6 +215,68 @@ export async function upsertLocalNote(note: LocalNote): Promise<void> {
 export async function deleteLocalNote(id: string): Promise<void> {
   const notes = await getLocalNotes();
   await saveLocalNotes(notes.filter(n => n.id !== id));
+}
+
+// ---- Offline-first note create/update (shared by useOfflineNotes + the editor) ----
+// Local write first, then enqueue and (if online) push. Encryption happens once, at
+// the push boundary in processNoteOperation — callers pass plaintext. Returns the
+// LocalNote so callers can track its (temp) id until the queue swaps in the server id.
+
+// `push: false` writes locally + enqueues but does NOT sync now. The editor uses this
+// during autosave so a mid-session push can't swap a note's temp id for its server id
+// out from under `noteIdRef` (which would lose subsequent edits). Deferred ops are
+// flushed on editor exit / background sync. Default `true` preserves list-screen behavior.
+export async function createNoteOffline(
+  data: Omit<LocalNote, 'id' | 'created_at' | 'updated_at' | '_isLocal'>,
+  opts: { push?: boolean } = {},
+): Promise<LocalNote> {
+  const now = new Date().toISOString();
+  const tempId = `local_${uuid.v4()}`;
+  const note: LocalNote = { ...data, id: tempId, created_at: now, updated_at: now, _isLocal: true };
+
+  await upsertLocalNote(note);
+  await enqueueOperation({ id: tempId, entity: 'note', operation: 'create', payload: data, timestamp: now });
+
+  if (opts.push !== false && (await isOnline())) {
+    try {
+      await processSyncQueue();
+    } catch {
+      // Sync failed — note is already saved locally and stays queued.
+    }
+  }
+  return note;
+}
+
+export async function updateNoteOffline(
+  id: string,
+  data: Partial<LocalNote>,
+  opts: { push?: boolean } = {},
+): Promise<void> {
+  const now = new Date().toISOString();
+  const notes = await getLocalNotes();
+  const existing = notes.find(n => n.id === id);
+  if (!existing) return;
+
+  const updated: LocalNote = { ...existing, ...data, updated_at: now };
+  await upsertLocalNote(updated);
+
+  await enqueueOperation({
+    id,
+    entity: 'note',
+    // A note still local (never synced) stays a pending 'create' — enqueueOperation
+    // merges this into its existing create op rather than emitting a doomed 'update'.
+    operation: existing._isLocal ? 'create' : 'update',
+    payload: { ...data, updated_at: now },
+    timestamp: now,
+  });
+
+  if (opts.push !== false && (await isOnline())) {
+    try {
+      await processSyncQueue();
+    } catch {
+      // Sync failed — update is saved locally and stays queued.
+    }
+  }
 }
 
 // ---- Event Operations (Offline-aware) ----

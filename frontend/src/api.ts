@@ -10,8 +10,20 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
   return {};
 }
 
+// Single-flight guard: coalesce concurrent token refreshes so only ONE /auth/refresh runs. The
+// backend ROTATES refresh tokens, so two concurrent refreshes with the same token make the second
+// use an already-invalidated token → "Session expired". (Surfaced once post-login sync moved to the
+// background, which makes the notes/events/calendar loads hit refresh concurrently.)
+let refreshInFlight: Promise<boolean> | null = null;
+
+function refreshAccessToken(): Promise<boolean> {
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = doRefreshAccessToken().finally(() => { refreshInFlight = null; });
+  return refreshInFlight;
+}
+
 // Refresh the access token using the refresh token
-async function refreshAccessToken(): Promise<boolean> {
+async function doRefreshAccessToken(): Promise<boolean> {
   try {
     const refreshToken = await authStorage.getRefreshToken();
     if (!refreshToken) {
@@ -142,12 +154,16 @@ export const attachmentsApi = {
  * straight to object storage — never base64-inlined into the note (that caused the
  * AsyncStorage CursorWindow bug).
  */
-export async function uploadAttachment(file: {
-  uri: string;
-  name: string;
-  mimeType: string;
-  size: number;
-}): Promise<AttachmentMeta> {
+export type UploadFile = { uri: string; name: string; mimeType: string; size: number };
+
+/**
+ * Upload with progress. Uses XMLHttpRequest for the S3 POST because `fetch` can't report
+ * upload progress; `onProgress` receives 0..1. Returns the metadata to embed in a note.
+ */
+export async function uploadAttachmentWithProgress(
+  file: UploadFile,
+  onProgress?: (fraction: number) => void,
+): Promise<AttachmentMeta> {
   const presign = await attachmentsApi.presign(file.name, file.mimeType, file.size);
 
   const form = new FormData();
@@ -158,11 +174,23 @@ export async function uploadAttachment(file: {
   // React Native file part shape.
   form.append('file', { uri: file.uri, name: file.name, type: file.mimeType } as any);
 
-  const res = await fetch(presign.upload_url, { method: 'POST', body: form });
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`Upload failed: ${res.status} ${text.slice(0, 200)}`);
-  }
+  await new Promise<void>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', presign.upload_url);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total);
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress?.(1);
+        resolve();
+      } else {
+        reject(new Error(`Upload failed: ${xhr.status} ${String(xhr.responseText).slice(0, 200)}`));
+      }
+    };
+    xhr.onerror = () => reject(new Error('Upload failed: network error'));
+    xhr.send(form);
+  });
 
   return {
     id: presign.id,
@@ -173,6 +201,11 @@ export async function uploadAttachment(file: {
     size_bytes: file.size,
     uploaded_at: new Date().toISOString(),
   };
+}
+
+/** Upload without progress (back-compat wrapper). */
+export function uploadAttachment(file: UploadFile): Promise<AttachmentMeta> {
+  return uploadAttachmentWithProgress(file);
 }
 
 export const transcribeApi = {

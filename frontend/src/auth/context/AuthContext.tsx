@@ -119,30 +119,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     }
 
-    // Run fullSync after tokens are saved
-    try {
-      await fullSync();
-    } catch (e) {
-      console.warn('Post-login sync failed:', e);
-    } finally {
-      // Signal that sync is complete so the notes screen can reload from AsyncStorage
-      setIsSyncReady(true);
-    }
-
-    // One-time eager migration of legacy plaintext notes -> ciphertext (Stage 4).
-    // Runs only when the DEK is in the keystore (so not for the needs_recovery path,
-    // which migrates on a later normal login) and is gated OFF by default; safe to
-    // await here since it's a no-op unless explicitly enabled + an Atlas snapshot.
-    if (E2EE_KEYS_ENABLED && bootstrap?.status !== 'needs_recovery') {
+    // Run the post-login sync (and the gated one-time E2EE migration) in the BACKGROUND so login
+    // returns immediately and the app appears at once — the notes screen shows cached notes and
+    // refreshes when isSyncReady flips. Previously login awaited fullSync, blocking the whole UI on
+    // the network. The E2EE key bootstrap above is still awaited (needed to decrypt notes).
+    (async () => {
       try {
-        const m = await migrateNotesToEncrypted(result.user?.id);
-        if (m.status === 'done') {
-          console.log(`E2EE migration: ${m.migrated}/${m.total} notes encrypted, ${m.failed} failed`);
-        }
+        await fullSync();
       } catch (e) {
-        console.warn('E2EE note migration failed (will retry next login):', e);
+        console.warn('Post-login sync failed:', e);
+      } finally {
+        // Signal that sync is complete so the notes screen can reload from AsyncStorage.
+        setIsSyncReady(true);
       }
-    }
+      // One-time eager migration of legacy plaintext notes -> ciphertext (Stage 4). Gated OFF by
+      // default (no-op unless explicitly enabled + an Atlas snapshot); safe to run after sync.
+      if (E2EE_KEYS_ENABLED && bootstrap?.status !== 'needs_recovery') {
+        try {
+          const m = await migrateNotesToEncrypted(result.user?.id);
+          if (m.status === 'done') {
+            console.log(`E2EE migration: ${m.migrated}/${m.total} notes encrypted, ${m.failed} failed`);
+          }
+        } catch (e) {
+          console.warn('E2EE note migration failed (will retry next login):', e);
+        }
+      }
+    })();
+
     return bootstrap;
   }, []);
 

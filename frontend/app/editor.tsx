@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   ScrollView, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
@@ -10,10 +10,18 @@ import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { useAudioRecorder, AudioModule, RecordingPresets, setAudioModeAsync } from 'expo-audio';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as WebBrowser from 'expo-web-browser';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { notesApi, eventsApi, transcribeApi, textProcessApi, attachmentsApi, uploadAttachment } from '../src/api';
-import { encryptNoteForServer, decryptNoteFromServer } from '../src/crypto/noteCrypto';
+import { notesApi, eventsApi, transcribeApi, textProcessApi, attachmentsApi, uploadAttachmentWithProgress, type UploadFile } from '../src/api';
+import { RadialProgress, SharedPostCard } from '../src/components';
+import { decryptNoteFromServer } from '../src/crypto/noteCrypto';
+import { createNoteOffline, updateNoteOffline, getLocalNotes, processSyncQueue } from '../src/offlineSync';
+import { takePendingShareDraft } from '../src/share/pendingShareDraft';
+import { parseSourcePost, serializeSourcePost, type SourcePost } from '../src/share/socialSource';
+import { unfurl, needsUnfurl } from '../src/share/unfurl';
+import { plainTextFromContent } from '../src/textContent';
+import { RichText, useEditorBridge, useEditorContent, useBridgeState } from '@10play/tentap-editor';
 import { Tag, CalendarEvent, Attachment } from '../src/types';
 import { TAG_COLORS, C } from '../src/theme';
 import { 
@@ -34,13 +42,75 @@ import {
   trackVoiceTranscriptionInserted,
 } from '../src/analytics';
 
+// Extension → MIME, aligned with the backend's attachment allowlist. Used to recover a usable
+// content type when the picker reports none (Android cloud/content URIs often omit it, which
+// otherwise defaults to application/octet-stream and gets rejected by presign).
+const EXT_MIME: Record<string, string> = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', heic: 'image/heic',
+  mp4: 'video/mp4', mov: 'video/quicktime', webm: 'video/webm', avi: 'video/x-msvideo', mkv: 'video/x-matroska', '3gp': 'video/3gpp', m4v: 'video/mp4',
+  mp3: 'audio/mpeg', m4a: 'audio/mp4', wav: 'audio/wav', aac: 'audio/aac', ogg: 'audio/ogg', oga: 'audio/ogg',
+  pdf: 'application/pdf', txt: 'text/plain', csv: 'text/csv',
+  doc: 'application/msword', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ppt: 'application/vnd.ms-powerpoint', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+};
+
+// Imperative handle the parent uses to drive the editor (voice/AI insert + toolbar buttons).
+type EditorApi = {
+  getHTML: () => Promise<string>;
+  setContent: (html: string) => void;
+  toggleBold: () => void;
+  toggleItalic: () => void;
+  toggleBulletList: () => void;
+};
+type EditorUiState = { isFocused: boolean; isBoldActive: boolean; isItalicActive: boolean; isBulletListActive: boolean };
+
+// The TenTap rich-text body, isolated so the bridge is created with the note's content as
+// `initialContent`. That's the reliable way to load existing content: `setContent` after mount
+// races the webview's readiness (it logs "Editor isn't ready yet" and drops the call, leaving the
+// body empty until tapped). Mounting this only once the content is known sidesteps the race.
+const NoteBodyEditor = forwardRef<EditorApi, {
+  initialContent: string;
+  onChange: (html: string) => void;
+  onStateChange: (s: EditorUiState) => void;
+}>(function NoteBodyEditor({ initialContent, onChange, onStateChange }, ref) {
+  // No dynamicHeight: it overshoots to a huge height then snaps down while the webview boots, which
+  // reads as a glitchy open. A fixed-height box (styles below) + internal scroll stays stable.
+  const editor = useEditorBridge({ autofocus: false, avoidIosKeyboard: true, initialContent });
+  const state = useBridgeState(editor);
+  const html = useEditorContent(editor, { type: 'html', debounceInterval: 400 });
+
+  useImperativeHandle(ref, () => ({
+    getHTML: () => editor.getHTML(),
+    setContent: (h: string) => editor.setContent(h),
+    toggleBold: () => editor.toggleBold(),
+    toggleItalic: () => editor.toggleItalic(),
+    toggleBulletList: () => editor.toggleBulletList(),
+  }), [editor]);
+
+  useEffect(() => { if (html != null) onChange(html); }, [html]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    onStateChange({
+      isFocused: state.isFocused,
+      isBoldActive: state.isBoldActive,
+      isItalicActive: state.isItalicActive,
+      isBulletListActive: state.isBulletListActive,
+    });
+  }, [state.isFocused, state.isBoldActive, state.isItalicActive, state.isBulletListActive]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <View style={s.richTextWrap}>
+      <RichText editor={editor} style={s.richText} scrollEnabled />
+    </View>
+  );
+});
+
 export default function EditorScreen() {
   const router = useRouter();
-  const { noteId } = useLocalSearchParams<{ noteId: string }>();
+  const { noteId, shared } = useLocalSearchParams<{ noteId: string; shared?: string }>();
   const isNew = !noteId || noteId === 'new';
 
   const [title, setTitle] = useState('');
-  const [content, setContent] = useState('');
   const [tags, setTags] = useState<Tag[]>([]);
   const [isPinned, setIsPinned] = useState(false);
   const [linkedEventId, setLinkedEventId] = useState<string | null>(null);
@@ -57,9 +127,15 @@ export default function EditorScreen() {
   const [showAiSuggestion, setShowAiSuggestion] = useState(false);
   const [transcribedText, setTranscribedText] = useState('');
   const [images, setImages] = useState<string[]>([]);
+  // A social post shared into the app (Instagram/Facebook/…) rendered as a card above the body.
+  const [sourcePost, setSourcePost] = useState<SourcePost | null>(null);
+  // True when images[0] is the card's thumbnail (kept out of the "Attached Images" gallery).
+  const [thumbInImages0, setThumbInImages0] = useState(false);
   const [showImagePicker, setShowImagePicker] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
+  // In-flight uploads (shared files + in-app picks): shown as filename + radial progress.
+  const [pendingUploads, setPendingUploads] = useState<{ id: string; name: string; progress: number }[]>([]);
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   
   // Recording duration tracking for analytics
@@ -70,15 +146,15 @@ export default function EditorScreen() {
   const [newTagName, setNewTagName] = useState('');
   const [selectedTagColor, setSelectedTagColor] = useState(TAG_COLORS[0].value);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
-  const [isBoldActive, setIsBoldActive] = useState(false);
-  const [isItalicActive, setIsItalicActive] = useState(false);
-
-  const [selection, setSelection] = useState({ start: 0, end: 0 });
-  const contentInputRef = useRef<TextInput>(null);
-  const lastContentLength = useRef(0);
-  
-  // Track if content input is focused
-  const [isContentFocused, setIsContentFocused] = useState(false);
+  // Rich-text editor (TenTap). Content is the note body HTML; `contentRef` holds the latest for
+  // saving. The editor lives in <NoteBodyEditor>, mounted with the loaded content as initialContent
+  // (below). We drive it imperatively via editorApiRef and mirror its UI state for the toolbar.
+  const editorApiRef = useRef<EditorApi | null>(null);
+  const [editorUi, setEditorUi] = useState<EditorUiState>({ isFocused: false, isBoldActive: false, isItalicActive: false, isBulletListActive: false });
+  // HTML to load into the editor once the note is available (null until loaded — editor waits).
+  const [seedHtml, setSeedHtml] = useState<string | null>(isNew && shared !== '1' ? '' : null);
+  const seededRef = useRef(false);
+  const seedPlainRef = useRef(''); // plaintext of the seed, to detect the "seed echo" vs a real edit
 
   // Auth state from context
   const { user: authUser } = useAuth();
@@ -97,34 +173,155 @@ export default function EditorScreen() {
   const noteIdRef = useRef(isNew ? '' : (noteId || ''));
   const isCreatedRef = useRef(!isNew);
   const titleRef = useRef(title);
-  const contentRef = useRef(content);
+  const contentRef = useRef('');
   const tagsRef = useRef(tags);
   const isPinnedRef = useRef(isPinned);
   const linkedEventIdRef = useRef<string | null>(linkedEventId);
   const imagesRef = useRef<string[]>(images);
   const attachmentsRef = useRef<Attachment[]>(attachments);
+  const sourcePostRef = useRef<SourcePost | null>(sourcePost);
+  const thumbInImages0Ref = useRef(thumbInImages0);
+  // URL we've already attempted a client-side unfurl for (avoids re-fetching in a loop).
+  const unfurlTriedRef = useRef<string | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // True when this note originated from a share intent (analytics + discard-on-cancel).
+  const isSharedRef = useRef(false);
+  // True once the user actually edits — a pre-filled shared draft that's never touched
+  // is discarded on back rather than silently saved.
+  const userEditedRef = useRef(false);
   
   // State to track if note exists (for UI rendering like delete button)
   const [noteExists, setNoteExists] = useState(!isNew);
 
   useEffect(() => { titleRef.current = title; }, [title]);
-  useEffect(() => { contentRef.current = content; }, [content]);
   useEffect(() => { tagsRef.current = tags; }, [tags]);
   useEffect(() => { isPinnedRef.current = isPinned; }, [isPinned]);
   useEffect(() => { linkedEventIdRef.current = linkedEventId; }, [linkedEventId]);
   useEffect(() => { imagesRef.current = images; }, [images]);
   useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
+  useEffect(() => { sourcePostRef.current = sourcePost; }, [sourcePost]);
+  useEffect(() => { thumbInImages0Ref.current = thumbInImages0; }, [thumbInImages0]);
+
+  // Once the note body is known, record it for save + seed-echo detection. <NoteBodyEditor> is
+  // mounted with this as initialContent (below), so the editor itself loads reliably without a
+  // setContent-after-mount race.
+  useEffect(() => {
+    if (seedHtml == null || seededRef.current) return;
+    seededRef.current = true;
+    contentRef.current = seedHtml;
+    seedPlainRef.current = plainTextFromContent(seedHtml);
+  }, [seedHtml]);
+
+  // Editor edits (debounced HTML from <NoteBodyEditor>) → keep contentRef fresh + autosave. Ignore
+  // the initial-content echo so loading a pristine note doesn't mark it dirty or create an empty one.
+  const handleBodyChange = useCallback((html: string) => {
+    contentRef.current = html;
+    if (!userEditedRef.current && plainTextFromContent(html) === seedPlainRef.current) return;
+    triggerAutoSave();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Progressive enhancement for social cards without a thumbnail yet: fetch one (TikTok oEmbed,
+  // or best-effort Open Graph for IG/FB/Threads) in the background, then fill in + persist. The
+  // card shows instantly; this only upgrades it. Runs once per URL (retries on a fresh open).
+  useEffect(() => {
+    const sp = sourcePost;
+    if (!sp || !needsUnfurl(sp.platform)) return;
+    if (sp.thumbnail || sp.thumbUrl) return; // already have a thumbnail
+    if (unfurlTriedRef.current === sp.url) return; // don't refetch the same url
+    unfurlTriedRef.current = sp.url;
+    let cancelled = false;
+    (async () => {
+      const res = await unfurl(sp.url, sp.platform);
+      if (cancelled || (!res.thumbnailUrl && !res.title)) return;
+      setSourcePost(prev => {
+        if (!prev || prev.url !== sp.url) return prev;
+        return {
+          ...prev,
+          title: prev.title || res.title || '',
+          thumbUrl: res.thumbnailUrl || prev.thumbUrl,
+          // Reddit reports image/video directly; a TikTok thumbnail is always a video poster.
+          kind: res.kind || (prev.platform === 'tiktok' && res.thumbnailUrl ? 'video' : prev.kind),
+        };
+      });
+      triggerAutoSave(); // persist the resolved thumbnail/title into the note marker
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourcePost]);
 
   useEffect(() => {
     if (!isNew && noteId) loadNote(noteId);
   }, [noteId]);
 
+  // Pre-fill from a shared draft (staged by ShareIntentHandler), then autosave it so the
+  // shared note persists automatically — no manual save/edit required.
+  useEffect(() => {
+    if (!(isNew && shared === '1')) return;
+    const draft = takePendingShareDraft();
+    if (!draft) return;
+    isSharedRef.current = true;
+    if (draft.title) setTitle(draft.title);
+    contentRef.current = draft.content || ''; // hold body before the WebView seeds
+    setSeedHtml(draft.content || ''); // seed the editor with the shared body (or empty)
+    if (draft.tags?.length) setTags(draft.tags as Tag[]);
+    if (draft.images?.length) setImages(draft.images);
+    // A recognized social post → show its card. The normalizer already put its thumbnail at
+    // images[0] (image share or generated video frame), so flag it out of the gallery.
+    if (draft.sourcePost) {
+      setSourcePost(draft.sourcePost);
+      setThumbInImages0(!!draft.sourcePost.thumbnail);
+    }
+    // Big shared files upload here (in the editor) with visible radial progress.
+    if (draft.pendingFiles?.length) uploadFiles(draft.pendingFiles);
+    // Autosave the shared draft (marks it committed + schedules the debounced save). The
+    // debounced save reads refs, which are populated by the sync effects after this render.
+    triggerAutoSave();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const loadNote = async (id: string) => {
     try {
-      const note = await decryptNoteFromServer(await notesApi.get(id));
+      // Local-first seed: MemoPad is offline-first, so the local copy is the editing-session source
+      // of truth. Seed the editor from it immediately (no network wait) so the body appears at once;
+      // reconcile metadata with the server below. Avoids the visible lag of waiting on notesApi.get.
+      const localCopy = (await getLocalNotes()).find(n => n.id === id);
+      let bodySeeded = false;
+      if (localCopy) {
+        const lp = parseSourcePost(localCopy.content || '');
+        contentRef.current = lp.content || '';
+        setSeedHtml(lp.content || '');
+        bodySeeded = true;
+        if (lp.sourcePost) { setSourcePost(lp.sourcePost); setThumbInImages0(lp.thumbInImages0); }
+      }
+
+      let note: any;
+      if (id.startsWith('local_')) {
+        // Not-yet-synced note — the local copy is all there is.
+        note = localCopy;
+        if (!note) throw new Error('local note not found');
+      } else {
+        try {
+          note = await decryptNoteFromServer(await notesApi.get(id));
+        } catch (e) {
+          // Offline / fetch failed — fall back to the local copy if we have one.
+          if (!localCopy) throw e;
+          note = localCopy;
+        }
+      }
       setTitle(note.title);
-      setContent(note.content);
+      // A shared-post card is persisted as a marker at the end of content; split it back out.
+      const parsed = parseSourcePost(note.content || '');
+      // Body already seeded from local (instant). Only seed from the server copy if we had no local
+      // copy — re-seeding after the WebView mounts can't take effect (initialContent is fixed).
+      if (!bodySeeded) {
+        contentRef.current = parsed.content || '';
+        setSeedHtml(parsed.content || '');
+        if (parsed.sourcePost) {
+          setSourcePost(parsed.sourcePost);
+          setThumbInImages0(parsed.thumbInImages0);
+        }
+      }
       setTags(note.tags);
       setIsPinned(note.is_pinned);
       setLinkedEventId(note.linked_event_id);
@@ -187,8 +384,9 @@ export default function EditorScreen() {
           console.error('Error checking pending event:', e);
         }
         
-        // If we have a saved note, reload it to get the latest linked_event_id
-        if (noteIdRef.current && isCreatedRef.current) {
+        // If we have a synced note, reload it to get the latest linked_event_id.
+        // Skip for not-yet-synced local notes (no server row yet → would 404).
+        if (noteIdRef.current && isCreatedRef.current && !noteIdRef.current.startsWith('local_')) {
           try {
             const note = await notesApi.get(noteIdRef.current);
             if (note.linked_event_id) {
@@ -219,241 +417,87 @@ export default function EditorScreen() {
     }, [linkedEventId])
   );
 
-  // Retry helper for network resilience
-  const retryOperation = async (operation: () => Promise<any>, maxRetries = 3): Promise<any> => {
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        return await operation();
-      } catch (e) {
-        console.log(`Save attempt ${attempt} failed:`, e);
-        if (attempt === maxRetries) throw e;
-        // Wait before retrying (exponential backoff)
-        await new Promise(resolve => setTimeout(resolve, attempt * 500));
-      }
+  // Offline-first save: writes locally + enqueues for sync. Encryption happens once,
+  // at the offlineSync push boundary. `push: false` (autosave) defers the network sync
+  // so a mid-session id swap can't strand `noteIdRef`; the queue is flushed on exit.
+  const persistLocal = useCallback(async (opts: { push?: boolean } = {}): Promise<void> => {
+    const draft = {
+      title: titleRef.current,
+      // The shared-post card rides along as a marker appended to the body (stripped on load).
+      content: contentRef.current + serializeSourcePost(sourcePostRef.current, thumbInImages0Ref.current),
+      tags: tagsRef.current,
+      is_pinned: isPinnedRef.current,
+      linked_event_id: linkedEventIdRef.current,
+      images: imagesRef.current,
+      attachments: attachmentsRef.current,
+    };
+    if (!isCreatedRef.current) {
+      const created = await createNoteOffline(draft, { push: opts.push });
+      noteIdRef.current = created.id;
+      isCreatedRef.current = true;
+      setNoteExists(true);
+      trackNoteCreated({
+        has_scheduled_event: !!linkedEventIdRef.current,
+        has_image_attached: imagesRef.current.length > 0,
+        is_shared: isSharedRef.current,
+      });
+    } else if (noteIdRef.current) {
+      await updateNoteOffline(noteIdRef.current, draft, { push: opts.push });
+      trackNoteEdited();
     }
-  };
+  }, []);
 
   const triggerAutoSave = useCallback(() => {
+    userEditedRef.current = true; // any edit commits a shared draft (no longer discardable)
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     setSaveStatus('Unsaved changes');
     saveTimerRef.current = setTimeout(async () => {
       setSaveStatus('Saving...');
       try {
-        if (!isCreatedRef.current) {
-          const created = await retryOperation(async () => notesApi.create(await encryptNoteForServer({
-            title: titleRef.current,
-            content: contentRef.current,
-            tags: tagsRef.current,
-            is_pinned: isPinnedRef.current,
-            linked_event_id: linkedEventIdRef.current,
-            images: imagesRef.current,
-            attachments: attachmentsRef.current,
-          })));
-          noteIdRef.current = created.id;
-          isCreatedRef.current = true;
-          setNoteExists(true);
-          // Track note creation
-          trackNoteCreated({
-            has_scheduled_event: !!linkedEventIdRef.current,
-            has_image_attached: imagesRef.current.length > 0,
-            is_shared: false,
-          });
-        } else if (noteIdRef.current) {
-          await retryOperation(async () => notesApi.update(noteIdRef.current, await encryptNoteForServer({
-            title: titleRef.current,
-            content: contentRef.current,
-            tags: tagsRef.current,
-            is_pinned: isPinnedRef.current,
-            linked_event_id: linkedEventIdRef.current,
-            images: imagesRef.current,
-            attachments: attachmentsRef.current,
-          })));
-          // Track note edit
-          trackNoteEdited();
-        }
+        // Local write only (push deferred to exit/background) — always succeeds offline.
+        await persistLocal({ push: false });
         setSaveStatus('All changes saved');
       } catch (e: any) {
-        // Show more helpful error message
-        const errorMsg = e?.message?.includes('Network') 
-          ? 'Network error - tap to retry' 
-          : 'Failed to save';
-        setSaveStatus(errorMsg);
-        console.error('Save error after retries:', e);
+        setSaveStatus('Failed to save');
+        console.error('Autosave error:', e);
       }
     }, 2000);
-  }, []);
+  }, [persistLocal]);
 
   const handleBack = useCallback(async () => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     try {
-      if (!isCreatedRef.current && (titleRef.current || contentRef.current || linkedEventIdRef.current || imagesRef.current.length > 0 || attachmentsRef.current.length > 0)) {
-        await retryOperation(async () => notesApi.create(await encryptNoteForServer({
-          title: titleRef.current,
-          content: contentRef.current,
-          tags: tagsRef.current,
-          is_pinned: isPinnedRef.current,
-          linked_event_id: linkedEventIdRef.current,
-          images: imagesRef.current,
-          attachments: attachmentsRef.current,
-        })));
-      } else if (isCreatedRef.current && noteIdRef.current) {
-        await retryOperation(async () => notesApi.update(noteIdRef.current, await encryptNoteForServer({
-          title: titleRef.current,
-          content: contentRef.current,
-          tags: tagsRef.current,
-          is_pinned: isPinnedRef.current,
-          linked_event_id: linkedEventIdRef.current,
-          images: imagesRef.current,
-          attachments: attachmentsRef.current,
-        })));
+      const hasContent = !!(titleRef.current || contentRef.current || linkedEventIdRef.current || imagesRef.current.length > 0 || attachmentsRef.current.length > 0 || sourcePostRef.current);
+      // Persist locally; only create a brand-new note if it actually has content.
+      if (isCreatedRef.current ? !!noteIdRef.current : hasContent) {
+        await persistLocal({ push: true });
+        // Flush the queue so the note reaches the server on exit (best-effort).
+        processSyncQueue().catch(() => {});
       }
     } catch (e) {
-      console.error('Save on back failed after retries:', e);
+      console.error('Save on back failed:', e);
     }
     router.back();
-  }, [router]);
+  }, [router, persistLocal]);
 
   const handleTitleChange = (text: string) => {
     setTitle(text);
     triggerAutoSave();
   };
 
-  const handleContentChange = (newText: string) => {
-    setContent(newText);
-    lastContentLength.current = newText.length;
+  // Insert plain text (voice transcription / AI output) into the rich editor as new paragraphs.
+  const escapeHtml = (t: string) =>
+    t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const appendToEditor = async (text: string) => {
+    const clean = (text || '').trim();
+    if (!clean) return;
+    const paras = clean.split(/\n{2,}/).map(p => `<p>${escapeHtml(p).replace(/\n/g, '<br>')}</p>`).join('');
+    let current = '';
+    try { current = (await editorApiRef.current?.getHTML()) || ''; } catch {}
+    const base = current.replace(/<p><\/p>\s*$/i, ''); // drop a trailing empty paragraph
+    editorApiRef.current?.setContent(base + paras);
+    userEditedRef.current = true;
     triggerAutoSave();
-  };
-
-  // Toggle format button state and apply to selected text
-  // Note: True WYSIWYG requires a rich text editor library
-  // For now, we apply formatting to selected text
-  const toggleBold = () => {
-    const newBoldState = !isBoldActive;
-    setIsBoldActive(newBoldState);
-    
-    // If there's selected text, wrap it with bold markers
-    if (selection.start !== selection.end) {
-      const before = content.substring(0, selection.start);
-      const selected = content.substring(selection.start, selection.end);
-      const after = content.substring(selection.end);
-      
-      // Check if already bold (wrapped in **)
-      if (selected.startsWith('**') && selected.endsWith('**')) {
-        // Remove bold
-        const unbolded = selected.slice(2, -2);
-        const newContent = before + unbolded + after;
-        setContent(newContent);
-      } else {
-        // Add bold
-        const bolded = `**${selected}**`;
-        const newContent = before + bolded + after;
-        setContent(newContent);
-      }
-      triggerAutoSave();
-    }
-    
-    contentInputRef.current?.focus();
-  };
-
-  const toggleItalic = () => {
-    const newItalicState = !isItalicActive;
-    setIsItalicActive(newItalicState);
-    
-    // If there's selected text, wrap it with italic markers
-    if (selection.start !== selection.end) {
-      const before = content.substring(0, selection.start);
-      const selected = content.substring(selection.start, selection.end);
-      const after = content.substring(selection.end);
-      
-      // Check if already italic (wrapped in single *)
-      // But not bold (which is **)
-      if (selected.startsWith('*') && selected.endsWith('*') && 
-          !selected.startsWith('**') && !selected.endsWith('**')) {
-        // Remove italic
-        const unitaliced = selected.slice(1, -1);
-        const newContent = before + unitaliced + after;
-        setContent(newContent);
-      } else {
-        // Add italic
-        const italiced = `*${selected}*`;
-        const newContent = before + italiced + after;
-        setContent(newContent);
-      }
-      triggerAutoSave();
-    }
-    
-    contentInputRef.current?.focus();
-  };
-
-  const insertBullet = () => {
-    // Insert a bullet point character directly
-    const bulletChar = '\u2022 '; // bullet character
-    const newContent = content + (content.endsWith('\n') || content === '' ? '' : '\n') + bulletChar;
-    setContent(newContent);
-    lastContentLength.current = newContent.length;
-    triggerAutoSave();
-    contentInputRef.current?.focus();
-  };
-
-  // Convert content to plain text for sharing (remove bullet chars)
-  const convertToPlainText = (text: string): string => {
-    return text.replace(/\u2022 /g, '- '); // Convert bullet chars back to dashes
-  };
-
-  // Render formatted text (bold/italic) without showing markdown syntax
-  const renderFormattedText = (text: string): React.ReactNode => {
-    if (!text) return null;
-    
-    const parts: React.ReactNode[] = [];
-    let key = 0;
-    
-    // Regex to match **bold**, *italic*, and plain text
-    // Order matters: check bold (**) before italic (*)
-    const regex = /(\*\*[^*]+\*\*|\*[^*]+\*)/g;
-    let lastIndex = 0;
-    let match;
-    
-    while ((match = regex.exec(text)) !== null) {
-      // Add plain text before match
-      if (match.index > lastIndex) {
-        parts.push(
-          <Text key={key++} style={s.contentText}>
-            {text.slice(lastIndex, match.index)}
-          </Text>
-        );
-      }
-      
-      const matchedText = match[0];
-      
-      if (matchedText.startsWith('**') && matchedText.endsWith('**')) {
-        // Bold text
-        parts.push(
-          <Text key={key++} style={[s.contentText, s.boldText]}>
-            {matchedText.slice(2, -2)}
-          </Text>
-        );
-      } else if (matchedText.startsWith('*') && matchedText.endsWith('*')) {
-        // Italic text
-        parts.push(
-          <Text key={key++} style={[s.contentText, s.italicText]}>
-            {matchedText.slice(1, -1)}
-          </Text>
-        );
-      }
-      
-      lastIndex = match.index + matchedText.length;
-    }
-    
-    // Add remaining plain text
-    if (lastIndex < text.length) {
-      parts.push(
-        <Text key={key++} style={s.contentText}>
-          {text.slice(lastIndex)}
-        </Text>
-      );
-    }
-    
-    return parts.length > 0 ? parts : <Text style={s.contentText}>{text}</Text>;
   };
 
   // Format date/time for display
@@ -481,13 +525,12 @@ export default function EditorScreen() {
   };
 
   const handleShare = async () => {
-    if (!title && !content && !linkedEvent) {
+    const plainContent = plainTextFromContent(contentRef.current);
+    if (!title && !plainContent && !linkedEvent) {
       Alert.alert('Nothing to Share', 'Please add a title or content to your note first.');
       return;
     }
 
-    const plainContent = convertToPlainText(content);
-    
     // Build share text with all details - clean format without horizontal lines
     let shareText = '';
     
@@ -641,28 +684,22 @@ export default function EditorScreen() {
     
     if (action === 'keep') {
       // Just add the transcribed text as-is
-      const newContent = content + (content ? ' ' : '') + transcribedText;
-      setContent(newContent);
+      await appendToEditor(transcribedText);
       insertTranscription(transcribedText);
-      triggerAutoSave();
       return;
     }
 
     try {
       setIsProcessingText(true);
       const result = await textProcessApi.processText(transcribedText, action);
-      const newContent = content + (content ? '\n\n' : '') + result.text;
-      setContent(newContent);
+      await appendToEditor(result.text);
       insertTranscription(result.text);
-      triggerAutoSave();
     } catch (e) {
       console.error('Text processing failed:', e);
       Alert.alert('Error', 'AI processing failed. Adding original text.');
       // Fallback to original text
-      const newContent = content + (content ? ' ' : '') + transcribedText;
-      setContent(newContent);
+      await appendToEditor(transcribedText);
       insertTranscription(transcribedText);
-      triggerAutoSave();
     } finally {
       setIsProcessingText(false);
       setTranscribedText('');
@@ -740,10 +777,75 @@ export default function EditorScreen() {
     triggerAutoSave();
   };
 
+  // Open the original social post in the browser.
+  const openSourcePost = () => {
+    if (sourcePost?.url) WebBrowser.openBrowserAsync(sourcePost.url).catch(() => {});
+  };
+
+  // Drop the shared-post card (and its thumbnail, which lives at images[0]).
+  const removeSourcePost = () => {
+    if (thumbInImages0) {
+      setImages(prev => prev.slice(1));
+      setThumbInImages0(false);
+    }
+    setSourcePost(null);
+    triggerAutoSave();
+  };
+
   // File attachment (paperclip) — picks a file, uploads to storage, embeds metadata.
   // Online-direct, matching the editor's existing save model. Never base64-inlines.
   const MAX_ATTACHMENT_MB = 100;
   const MAX_PICK_AT_ONCE = 10;
+
+  // Upload files (shared or in-app-picked) with per-file radial progress. Each completed
+  // upload is appended to attachments[] and autosaved. Used by both the share pre-fill
+  // and pickAttachment (new + edit), so progress shows consistently everywhere.
+  const uploadFiles = useCallback(async (files: UploadFile[]) => {
+    for (const raw of files) {
+      // Recover missing size/MIME before presign. The picker (and Android cloud/content URIs) can
+      // omit both: a missing size gets sent as 0 and rejected as "too large", and a missing MIME
+      // defaults to octet-stream and is rejected as "type not allowed". copyToCacheDirectory makes
+      // the uri a local file, so getInfoAsync reliably yields the size.
+      const ext = (raw.name.includes('.') ? raw.name.split('.').pop() : '')?.toLowerCase() || '';
+      let size = raw.size ?? 0;
+      if (!size) {
+        try {
+          const info = await FileSystem.getInfoAsync(raw.uri);
+          if (info.exists && info.size) size = info.size;
+        } catch { /* fall through — presign will surface a clear error */ }
+      }
+      const mimeType = (!raw.mimeType || raw.mimeType === 'application/octet-stream')
+        ? (EXT_MIME[ext] || raw.mimeType || 'application/octet-stream')
+        : raw.mimeType;
+      const file: UploadFile = { ...raw, size, mimeType };
+
+      if (size > MAX_ATTACHMENT_MB * 1024 * 1024) {
+        Alert.alert('File too large', `${file.name} is over ${MAX_ATTACHMENT_MB}MB and can’t be attached.`);
+        continue;
+      }
+      const uploadId = `up_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      setPendingUploads(prev => [...prev, { id: uploadId, name: file.name, progress: 0 }]);
+      try {
+        const meta = await uploadAttachmentWithProgress(file, (p) =>
+          setPendingUploads(prev => prev.map(u => (u.id === uploadId ? { ...u, progress: p } : u))),
+        );
+        setAttachments(prev => [...prev, meta]);
+        triggerAutoSave();
+      } catch (e: any) {
+        // Surface the real reason (and log it) instead of a blanket "Couldn't upload".
+        const msg = String(e?.message || '');
+        console.error('Attachment upload failed:', file.name, file.mimeType, size, '→', msg);
+        let reason = `Couldn’t upload ${file.name}.`;
+        if (msg.includes('503') || msg.includes('not enabled')) reason = 'File attachments aren’t enabled on the server yet.';
+        else if (msg.includes('File type not allowed')) reason = `${file.name}: that file type isn’t supported.`;
+        else if (msg.includes('File too large') || msg.includes('EntityTooLarge')) reason = `${file.name} is too large to attach.`;
+        else if (msg.includes('network error')) reason = `Network error uploading ${file.name}. Check your connection and try again.`;
+        Alert.alert('Upload failed', reason);
+      } finally {
+        setPendingUploads(prev => prev.filter(u => u.id !== uploadId));
+      }
+    }
+  }, [triggerAutoSave]);
 
   // Pick up to MAX_PICK_AT_ONCE files at once and upload each (online-direct).
   const pickAttachment = async () => {
@@ -759,47 +861,15 @@ export default function EditorScreen() {
         Alert.alert('Too many files', `You can attach up to ${MAX_PICK_AT_ONCE} files at once. Adding the first ${MAX_PICK_AT_ONCE}.`);
         assets = assets.slice(0, MAX_PICK_AT_ONCE);
       }
-
-      setIsUploadingAttachment(true);
-      const uploaded: Attachment[] = [];
-      const failures: string[] = [];
-      let notEnabled = false;
-
-      for (const asset of assets) {
-        const size = asset.size ?? 0;
-        const name = asset.name || 'file';
-        const mimeType = asset.mimeType || 'application/octet-stream';
-
-        if (size > MAX_ATTACHMENT_MB * 1024 * 1024) {
-          failures.push(`${name} (over ${MAX_ATTACHMENT_MB}MB)`);
-          continue;
-        }
-        try {
-          const meta = await uploadAttachment({ uri: asset.uri, name, mimeType, size });
-          uploaded.push(meta);
-        } catch (e: any) {
-          if (e?.message?.includes('503') || e?.message?.includes('not enabled')) notEnabled = true;
-          failures.push(name);
-        }
-      }
-
-      if (uploaded.length > 0) {
-        setAttachments(prev => [...prev, ...uploaded]);
-        triggerAutoSave();
-      }
-      setIsUploadingAttachment(false);
-
-      if (failures.length > 0) {
-        Alert.alert(
-          uploaded.length > 0 ? 'Some files were not added' : 'Upload failed',
-          notEnabled
-            ? 'File attachments aren’t enabled on the server yet.'
-            : `Couldn’t upload: ${failures.join(', ')}`,
-        );
-      }
+      // Upload with visible radial progress (same path as shared files).
+      uploadFiles(assets.map(a => ({
+        uri: a.uri,
+        name: a.name || 'file',
+        mimeType: a.mimeType || 'application/octet-stream',
+        size: a.size ?? 0,
+      })));
     } catch (e) {
       console.error('Attachment pick failed:', e);
-      setIsUploadingAttachment(false);
     }
   };
 
@@ -840,7 +910,7 @@ export default function EditorScreen() {
     // from the still-stale server value.
     const clearLinkOnServer = async () => {
       if (noteIdRef.current && isCreatedRef.current) {
-        await notesApi.update(noteIdRef.current, { linked_event_id: null });
+        await updateNoteOffline(noteIdRef.current, { linked_event_id: null });
       }
     };
 
@@ -944,45 +1014,28 @@ export default function EditorScreen() {
 
   // Save note and show sign-up prompt (only on first note save)
   const handleSaveAndBack = async () => {
-    // Check if there's content to save (also save if there's a linked event)
-    if (!title.trim() && !content.trim() && !linkedEventIdRef.current) {
+    // Cancel any pending autosave timer so it can't double-fire with the save below.
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    // Nothing to save? (also save if there's a linked event, images, or attachments —
+    // e.g. a photo/audio/video share with no typed title/body)
+    if (!title.trim() && !plainTextFromContent(contentRef.current) && !linkedEventIdRef.current
+        && imagesRef.current.length === 0 && attachmentsRef.current.length === 0
+        && !sourcePostRef.current) {
       router.replace('/(tabs)');
       return;
     }
 
     setSaveStatus('Saving...');
     let saveSucceeded = false;
-    
+
     try {
-      if (!isCreatedRef.current) {
-        const created = await retryOperation(async () => notesApi.create(await encryptNoteForServer({
-          title: titleRef.current,
-          content: contentRef.current,
-          tags: tagsRef.current,
-          is_pinned: isPinnedRef.current,
-          linked_event_id: linkedEventIdRef.current,
-        })));
-        noteIdRef.current = created.id;
-        isCreatedRef.current = true;
-        setNoteExists(true);
-        saveSucceeded = true;
-      } else if (noteIdRef.current) {
-        await retryOperation(async () => notesApi.update(noteIdRef.current, await encryptNoteForServer({
-          title: titleRef.current,
-          content: contentRef.current,
-          tags: tagsRef.current,
-          is_pinned: isPinnedRef.current,
-          linked_event_id: linkedEventIdRef.current,
-        })));
-        saveSucceeded = true;
-      }
+      await persistLocal({ push: true });
+      processSyncQueue().catch(() => {});
+      saveSucceeded = true;
       setSaveStatus('All changes saved');
     } catch (e: any) {
-      const errorMsg = e?.message?.includes('Network') 
-        ? 'Network error - changes may not be saved' 
-        : 'Could not save - please try again later';
-      setSaveStatus(errorMsg);
-      console.error('Save error after retries:', e);
+      setSaveStatus('Could not save - please try again later');
+      console.error('Save error:', e);
       // Continue to navigate back even if save failed - don't trap the user
     }
     
@@ -1039,15 +1092,9 @@ export default function EditorScreen() {
     ]);
   };
 
-  if (loading) {
-    return (
-      <SafeAreaView style={s.container}>
-        <View style={s.center}>
-          <ActivityIndicator size="large" color={C.primary} />
-        </View>
-      </SafeAreaView>
-    );
-  }
+  // No full-screen loader: render the editor chrome immediately. The body seeds instantly from the
+  // local copy (local-first in loadNote) and metadata fills in as it resolves — so the screen opens
+  // at once instead of blocking on a spinner until the network load finishes.
 
   return (
     <SafeAreaView style={s.container}>
@@ -1159,44 +1206,61 @@ export default function EditorScreen() {
             )}
           </View>
 
-          {/* Content - Simple plain text input */}
+          {/* Content — the shared-post card sits at the top of the input box, then the writing area */}
           <View style={s.contentContainer}>
-            <TextInput
-              ref={contentInputRef}
-              testID="note-content-input"
-              style={s.contentInput}
-              value={content}
-              onChangeText={handleContentChange}
-              multiline
-              textAlignVertical="top"
-              placeholder="Tap here to start writing..."
-              placeholderTextColor={C.borderSub}
-              onSelectionChange={(e) => setSelection(e.nativeEvent.selection)}
-              onFocus={() => setIsContentFocused(true)}
-              onBlur={() => setIsContentFocused(false)}
-              autoCorrect={true}
-              autoCapitalize="sentences"
-            />
-            {/* Paperclip — pinned to the bottom-left of the input box */}
-            <TouchableOpacity
-              testID="attach-file-btn"
-              style={s.attachBtn}
-              onPress={pickAttachment}
-              disabled={isUploadingAttachment}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              {isUploadingAttachment ? (
-                <ActivityIndicator size="small" color={C.secondary} />
-              ) : (
-                <MaterialIcons name="attach-file" size={22} color={C.secondary} />
+            <View style={s.inputBox}>
+              {/* Shared social post card (Instagram/Facebook/WhatsApp/YouTube/…) — links back to the post */}
+              {sourcePost && (
+                <SharedPostCard
+                  style={s.cardInInput}
+                  source={thumbInImages0 && images[0] ? { ...sourcePost, thumbnail: images[0] } : sourcePost}
+                  onOpen={openSourcePost}
+                  onRemove={removeSourcePost}
+                />
               )}
-            </TouchableOpacity>
+              {/* Rich-text body (TenTap WebView). Mounted only once the note content is known, so the
+                  bridge is created with it as initialContent — reliable load, no setContent race. */}
+              {seedHtml != null ? (
+                <NoteBodyEditor
+                  ref={editorApiRef}
+                  initialContent={seedHtml}
+                  onChange={handleBodyChange}
+                  onStateChange={setEditorUi}
+                />
+              ) : (
+                <View style={s.richTextWrap}><View style={{ height: 180 }} /></View>
+              )}
+              {/* Attach-file footer — a WebView can't be overlaid, so the paperclip sits below it */}
+              <View style={s.editorFooter}>
+                <TouchableOpacity
+                  testID="attach-file-btn"
+                  style={s.attachInline}
+                  onPress={pickAttachment}
+                  disabled={isUploadingAttachment}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  {isUploadingAttachment ? (
+                    <ActivityIndicator size="small" color={C.secondary} />
+                  ) : (
+                    <MaterialIcons name="attach-file" size={22} color={C.secondary} />
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
           </View>
 
           {/* Attachments Section */}
-          {attachments.length > 0 && (
+          {(attachments.length > 0 || pendingUploads.length > 0) && (
             <View style={s.imagesContainer}>
               <Text style={s.imagesSectionTitle}>Attachments</Text>
+              {/* In-flight uploads: filename + radial progress */}
+              {pendingUploads.map((u) => (
+                <View key={u.id} style={s.attachmentRow} testID={`uploading-${u.id}`}>
+                  <MaterialIcons name="upload-file" size={22} color={C.secondary} />
+                  <Text style={s.attachmentName} numberOfLines={1}>{u.name}</Text>
+                  <RadialProgress progress={u.progress} size={22} />
+                </View>
+              ))}
               {attachments.map((att) => (
                 <TouchableOpacity
                   key={att.id}
@@ -1220,22 +1284,25 @@ export default function EditorScreen() {
             </View>
           )}
 
-          {/* Images Section */}
-          {images.length > 0 && (
+          {/* Images Section (the card's thumbnail lives at images[0] and is shown by the card, not here) */}
+          {images.filter((_, i) => !(thumbInImages0 && i === 0)).length > 0 && (
             <View style={s.imagesContainer}>
               <Text style={s.imagesSectionTitle}>Attached Images</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.imagesScroll}>
-                {images.map((uri, index) => (
-                  <View key={index} style={s.imageWrapper}>
-                    <Image source={{ uri }} style={s.attachedImage} />
-                    <TouchableOpacity
-                      style={s.removeImageBtn}
-                      onPress={() => removeImage(index)}
-                    >
-                      <MaterialIcons name="close" size={16} color={C.primaryFg} />
-                    </TouchableOpacity>
-                  </View>
-                ))}
+                {images.map((uri, index) => {
+                  if (thumbInImages0 && index === 0) return null;
+                  return (
+                    <View key={index} style={s.imageWrapper}>
+                      <Image source={{ uri }} style={s.attachedImage} />
+                      <TouchableOpacity
+                        style={s.removeImageBtn}
+                        onPress={() => removeImage(index)}
+                      >
+                        <MaterialIcons name="close" size={16} color={C.primaryFg} />
+                      </TouchableOpacity>
+                    </View>
+                  );
+                })}
               </ScrollView>
             </View>
           )}
@@ -1333,44 +1400,32 @@ export default function EditorScreen() {
 
         {/* Voice Input Bar + Format Toolbar */}
         <View style={s.bottomBar}>
-          {/* Format Toolbar - shows only when content input is focused (disabled on web) */}
-          {isContentFocused && Platform.OS !== 'web' && (
+          {/* Format Toolbar — drives the TenTap editor; shows while it's focused (disabled on web) */}
+          {editorUi.isFocused && Platform.OS !== 'web' && (
             <View style={s.formatBar}>
-              <TouchableOpacity 
-                testID="fmt-bold" 
-                style={[s.fmtBtn, isBoldActive && s.fmtBtnActive]} 
-                onPress={() => {
-                  toggleBold();
-                  // Keep focus on content input
-                  contentInputRef.current?.focus();
-                }}
+              <TouchableOpacity
+                testID="fmt-bold"
+                style={[s.fmtBtn, editorUi.isBoldActive && s.fmtBtnActive]}
+                onPress={() => editorApiRef.current?.toggleBold()}
               >
-                <Text style={[s.fmtBold, isBoldActive && s.fmtTextActive]}>B</Text>
-                <Text style={[s.fmtLabel, isBoldActive && s.fmtLabelActive]}>Bold</Text>
+                <Text style={[s.fmtBold, editorUi.isBoldActive && s.fmtTextActive]}>B</Text>
+                <Text style={[s.fmtLabel, editorUi.isBoldActive && s.fmtLabelActive]}>Bold</Text>
               </TouchableOpacity>
-              <TouchableOpacity 
-                testID="fmt-italic" 
-                style={[s.fmtBtn, isItalicActive && s.fmtBtnActive]} 
-                onPress={() => {
-                  toggleItalic();
-                  // Keep focus on content input
-                  contentInputRef.current?.focus();
-                }}
+              <TouchableOpacity
+                testID="fmt-italic"
+                style={[s.fmtBtn, editorUi.isItalicActive && s.fmtBtnActive]}
+                onPress={() => editorApiRef.current?.toggleItalic()}
               >
-                <Text style={[s.fmtItalic, isItalicActive && s.fmtTextActive]}>I</Text>
-                <Text style={[s.fmtLabel, isItalicActive && s.fmtLabelActive]}>Italic</Text>
+                <Text style={[s.fmtItalic, editorUi.isItalicActive && s.fmtTextActive]}>I</Text>
+                <Text style={[s.fmtLabel, editorUi.isItalicActive && s.fmtLabelActive]}>Italic</Text>
               </TouchableOpacity>
-              <TouchableOpacity 
-                testID="fmt-bullet" 
-                style={s.fmtBtn} 
-                onPress={() => {
-                  insertBullet();
-                  // Keep focus on content input
-                  contentInputRef.current?.focus();
-                }}
+              <TouchableOpacity
+                testID="fmt-bullet"
+                style={[s.fmtBtn, editorUi.isBulletListActive && s.fmtBtnActive]}
+                onPress={() => editorApiRef.current?.toggleBulletList()}
               >
-                <MaterialIcons name="format-list-bulleted" size={22} color={C.text} />
-                <Text style={s.fmtLabel}>List</Text>
+                <MaterialIcons name="format-list-bulleted" size={22} color={editorUi.isBulletListActive ? C.primary : C.text} />
+                <Text style={[s.fmtLabel, editorUi.isBulletListActive && s.fmtLabelActive]}>List</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -1635,17 +1690,49 @@ const s = StyleSheet.create({
     flex: 1,
     marginBottom: 16,
   },
-  contentInput: {
-    minHeight: 150,
+  // The bordered box that visually contains both the shared-post card and the writing area.
+  inputBox: {
     backgroundColor: C.surface,
     borderRadius: 12,
-    padding: 16,
-    paddingBottom: 52, // leave room for the pinned paperclip so text never overlaps it
     borderWidth: 2,
     borderColor: C.borderSub,
-    fontSize: 18,
-    color: C.text,
-    lineHeight: 28,
+    paddingBottom: 4,
+  },
+  // The shared-post card nested inside the input box: inset from the border, small gap before text.
+  cardInInput: {
+    marginHorizontal: 10,
+    marginTop: 10,
+    marginBottom: 2,
+  },
+  // Insets the editor from the box border so the text has breathing room on all sides.
+  richTextWrap: {
+    paddingHorizontal: 14,
+    paddingTop: 8,
+    paddingBottom: 4,
+  },
+  // TenTap rich editor (WebView). FIXED height (not dynamicHeight) so the box is the same size from
+  // the first frame — no resize glitch while the webview boots. Long notes scroll internally.
+  // Opaque (surface-colored, matching the inputBox) — a transparent Android WebView stops repainting
+  // after a parent re-render/blur (e.g. autosave), blanking the text until a tap forces a redraw.
+  richText: {
+    height: 180,
+    backgroundColor: C.surface,
+  },
+  // Footer row inside the input box holding the attach-file button (below the WebView editor).
+  editorFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingBottom: 8,
+    paddingTop: 2,
+  },
+  attachInline: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: C.bg,
   },
   attachBtn: {
     position: 'absolute',

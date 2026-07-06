@@ -5,6 +5,8 @@ import React from 'react';
 import { UserAvatar, useAuth } from '../../src/auth';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useRouter } from 'expo-router';
+import { WebView } from 'react-native-webview';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const C = {
   primary: '#D84315',
@@ -38,6 +40,7 @@ function HeaderRight() {
 export default function TabLayout() {
   const { logout } = useAuth();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
 
   const handleLogout = () => {
     Alert.alert(
@@ -62,7 +65,9 @@ export default function TabLayout() {
       <Tabs
         screenOptions={{
           headerShown: false,
-          tabBarStyle: styles.tabBar,
+          // Lift the tab bar above the Android system navigation bar. An explicit height disables
+          // react-navigation's automatic safe-area handling, so add the bottom inset ourselves.
+          tabBarStyle: [styles.tabBar, { height: 80 + insets.bottom, paddingBottom: 16 + insets.bottom }],
           tabBarActiveTintColor: C.primary,
           tabBarInactiveTintColor: C.inactiveTab,
           tabBarLabelStyle: styles.tabLabel,
@@ -96,11 +101,18 @@ export default function TabLayout() {
           }}
         />
       </Tabs>
+      {/* Off-screen 1px WebView that pre-warms the Android System WebView engine while the user is in
+          the tabs, so the first note editor (TenTap = a WebView) opens fast instead of paying the
+          engine cold-start on demand. */}
+      <View style={styles.prewarm} pointerEvents="none">
+        <WebView source={{ html: '<html></html>' }} style={{ flex: 1, opacity: 0 }} />
+      </View>
     </GestureHandlerRootView>
   );
 }
 
 const styles = StyleSheet.create({
+  prewarm: { position: 'absolute', width: 1, height: 1, left: -100, top: -100, opacity: 0 },
   header: {
     backgroundColor: C.bg,
     borderBottomWidth: 1,
