@@ -1092,15 +1092,9 @@ export default function EditorScreen() {
     ]);
   };
 
-  if (loading) {
-    return (
-      <SafeAreaView style={s.container}>
-        <View style={s.center}>
-          <ActivityIndicator size="large" color={C.primary} />
-        </View>
-      </SafeAreaView>
-    );
-  }
+  // No full-screen loader: render the editor chrome immediately. The body seeds instantly from the
+  // local copy (local-first in loadNote) and metadata fills in as it resolves — so the screen opens
+  // at once instead of blocking on a spinner until the network load finishes.
 
   return (
     <SafeAreaView style={s.container}>
