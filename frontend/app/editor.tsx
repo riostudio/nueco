@@ -74,7 +74,9 @@ const NoteBodyEditor = forwardRef<EditorApi, {
   onChange: (html: string) => void;
   onStateChange: (s: EditorUiState) => void;
 }>(function NoteBodyEditor({ initialContent, onChange, onStateChange }, ref) {
-  const editor = useEditorBridge({ autofocus: false, avoidIosKeyboard: true, dynamicHeight: true, initialContent });
+  // No dynamicHeight: it overshoots to a huge height then snaps down while the webview boots, which
+  // reads as a glitchy open. A fixed-height box (styles below) + internal scroll stays stable.
+  const editor = useEditorBridge({ autofocus: false, avoidIosKeyboard: true, initialContent });
   const state = useBridgeState(editor);
   const html = useEditorContent(editor, { type: 'html', debounceInterval: 400 });
 
@@ -98,7 +100,7 @@ const NoteBodyEditor = forwardRef<EditorApi, {
 
   return (
     <View style={s.richTextWrap}>
-      <RichText editor={editor} style={s.richText} scrollEnabled={false} />
+      <RichText editor={editor} style={s.richText} scrollEnabled />
     </View>
   );
 });
@@ -280,31 +282,45 @@ export default function EditorScreen() {
 
   const loadNote = async (id: string) => {
     try {
+      // Local-first seed: MemoPad is offline-first, so the local copy is the editing-session source
+      // of truth. Seed the editor from it immediately (no network wait) so the body appears at once;
+      // reconcile metadata with the server below. Avoids the visible lag of waiting on notesApi.get.
+      const localCopy = (await getLocalNotes()).find(n => n.id === id);
+      let bodySeeded = false;
+      if (localCopy) {
+        const lp = parseSourcePost(localCopy.content || '');
+        contentRef.current = lp.content || '';
+        setSeedHtml(lp.content || '');
+        bodySeeded = true;
+        if (lp.sourcePost) { setSourcePost(lp.sourcePost); setThumbInImages0(lp.thumbInImages0); }
+      }
+
       let note: any;
       if (id.startsWith('local_')) {
-        // Not-yet-synced note — read the plaintext copy from local storage.
-        note = (await getLocalNotes()).find(n => n.id === id);
+        // Not-yet-synced note — the local copy is all there is.
+        note = localCopy;
         if (!note) throw new Error('local note not found');
       } else {
         try {
           note = await decryptNoteFromServer(await notesApi.get(id));
         } catch (e) {
           // Offline / fetch failed — fall back to the local copy if we have one.
-          const local = (await getLocalNotes()).find(n => n.id === id);
-          if (!local) throw e;
-          note = local;
+          if (!localCopy) throw e;
+          note = localCopy;
         }
       }
       setTitle(note.title);
       // A shared-post card is persisted as a marker at the end of content; split it back out.
       const parsed = parseSourcePost(note.content || '');
-      // Hold the loaded body immediately so a quick back-out before the WebView seeds can't
-      // overwrite the note with empty content.
-      contentRef.current = parsed.content || '';
-      setSeedHtml(parsed.content || ''); // seed the rich editor with the note body (HTML or legacy text)
-      if (parsed.sourcePost) {
-        setSourcePost(parsed.sourcePost);
-        setThumbInImages0(parsed.thumbInImages0);
+      // Body already seeded from local (instant). Only seed from the server copy if we had no local
+      // copy — re-seeding after the WebView mounts can't take effect (initialContent is fixed).
+      if (!bodySeeded) {
+        contentRef.current = parsed.content || '';
+        setSeedHtml(parsed.content || '');
+        if (parsed.sourcePost) {
+          setSourcePost(parsed.sourcePost);
+          setThumbInImages0(parsed.thumbInImages0);
+        }
       }
       setTags(note.tags);
       setIsPinned(note.is_pinned);
@@ -1218,7 +1234,7 @@ export default function EditorScreen() {
                   onStateChange={setEditorUi}
                 />
               ) : (
-                <View style={s.richTextWrap}><View style={{ minHeight: 150 }} /></View>
+                <View style={s.richTextWrap}><View style={{ height: 180 }} /></View>
               )}
               {/* Attach-file footer — a WebView can't be overlaid, so the paperclip sits below it */}
               <View style={s.editorFooter}>
@@ -1700,12 +1716,12 @@ const s = StyleSheet.create({
     paddingTop: 8,
     paddingBottom: 4,
   },
-  // TenTap rich editor (WebView). dynamicHeight grows it to content; minHeight gives tap space.
-  // Opaque (surface-colored, matching the inputBox) — a transparent Android WebView stops
-  // repainting after a parent re-render/blur (e.g. autosave), blanking the text until a tap
-  // forces a redraw. Solid bg keeps the WebView opaque so content always paints.
+  // TenTap rich editor (WebView). FIXED height (not dynamicHeight) so the box is the same size from
+  // the first frame — no resize glitch while the webview boots. Long notes scroll internally.
+  // Opaque (surface-colored, matching the inputBox) — a transparent Android WebView stops repainting
+  // after a parent re-render/blur (e.g. autosave), blanking the text until a tap forces a redraw.
   richText: {
-    minHeight: 150,
+    height: 180,
     backgroundColor: C.surface,
   },
   // Footer row inside the input box holding the attach-file button (below the WebView editor).
