@@ -2,7 +2,7 @@
  * Unit tests for note-content → plain text. Framework-free:
  *   node --import ./src/crypto/_ts-resolver.mjs src/textContent.test.ts
  */
-import { plainTextFromContent, decodeEntities } from './textContent.ts';
+import { plainTextFromContent, decodeEntities, textToHtml } from './textContent.ts';
 import { serializeSourcePost, type SourcePost } from './share/socialSource.ts';
 
 let passed = 0;
@@ -13,6 +13,19 @@ function ok(name: string, cond: boolean, detail = '') {
 }
 
 function main() {
+  console.log('textToHtml — plain text → structured HTML:');
+  {
+    ok('single line → one <p>', textToHtml('hello there') === '<p>hello there</p>', textToHtml('hello there'));
+    ok('single newline → <br>', textToHtml('a\nb') === '<p>a<br>b</p>', textToHtml('a\nb'));
+    ok('blank line → new <p>', textToHtml('p1\n\np2') === '<p>p1</p><p>p2</p>', textToHtml('p1\n\np2'));
+    ok('CRLF normalized', textToHtml('a\r\nb') === '<p>a<br>b</p>', textToHtml('a\r\nb'));
+    ok('escapes html', textToHtml('x < y & z') === '<p>x &lt; y &amp; z</p>', textToHtml('x < y & z'));
+    ok('empty → empty', textToHtml('') === '' && textToHtml('   \n  ') === '');
+    // round-trips back to the same plain text
+    ok('round-trip', plainTextFromContent(textToHtml('one\ntwo\n\nthree')) === 'one\ntwo\nthree',
+      plainTextFromContent(textToHtml('one\ntwo\n\nthree')));
+  }
+
   console.log('plainTextFromContent — rich HTML:');
   {
     ok('paragraph + bold/italic', plainTextFromContent('<p>Hello <strong>world</strong> and <em>more</em></p>') === 'Hello world and more');

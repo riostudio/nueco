@@ -31,6 +31,22 @@ export function decodeEntities(s: string): string {
 }
 
 /**
+ * Plain text (shared/dictated) → HTML for the rich-text editor, preserving structure: a blank line
+ * starts a new paragraph and a single newline becomes a <br>. HTML-escapes the text so it renders
+ * literally and can't inject markup. Roughly the inverse of plainTextFromContent — used so shared
+ * text keeps its line breaks/paragraphs instead of collapsing when dropped into the HTML editor.
+ */
+export function textToHtml(text: string): string {
+  const clean = (text || '').replace(/\r\n?/g, '\n').trim();
+  if (!clean) return '';
+  const escape = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return clean
+    .split(/\n{2,}/)
+    .map((para) => `<p>${escape(para).replace(/\n/g, '<br>')}</p>`)
+    .join('');
+}
+
+/**
  * Note content (rich HTML for new notes, plain text for legacy ones) → clean plain text for previews,
  * search, and share. Strips the shared-post marker, turns block boundaries into newlines, drops tags,
  * decodes entities, and clears leftover legacy markdown.

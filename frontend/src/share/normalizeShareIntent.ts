@@ -15,6 +15,7 @@
  */
 
 import { detectSocialSource, derivePosterUrl, type SourcePost } from './socialSource';
+import { textToHtml } from '../textContent';
 
 export interface NoteDraftTag {
   name: string;
@@ -102,7 +103,9 @@ export async function normalizeShareIntent(intent: RawShareIntent, deps: ShareDe
     draft.sourcePost = { platform: brand.platform, label: brand.label, url, title: caption, kind: 'link' };
     draft.tags = [LINK_TAG];
   } else if (text) {
-    draft.content = text;
+    // Preserve the shared text's paragraphs/line breaks by converting to HTML — otherwise the
+    // newlines collapse when the plain text is seeded into the rich-text (HTML) editor.
+    draft.content = textToHtml(text);
     draft.needsTitle = true; // body-only note — prompt for a title
   }
 

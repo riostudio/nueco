@@ -39,9 +39,20 @@ async function main() {
   console.log('plain text:');
   {
     const d = await normalizeShareIntent({ text: 'forwarded message body' }, deps);
-    ok('content = text', d.content === 'forwarded message body');
+    ok('content = text as html', d.content === '<p>forwarded message body</p>', d.content);
     ok('no title, needsTitle=true', d.title === '' && d.needsTitle === true);
     ok('no tags', d.tags.length === 0);
+  }
+
+  console.log('multi-line text keeps structure:');
+  {
+    const d = await normalizeShareIntent({ text: 'line one\nline two\n\nsecond para' }, deps);
+    ok('paragraphs + <br> preserved',
+      d.content === '<p>line one<br>line two</p><p>second para</p>', d.content);
+    // HTML in shared text is escaped, not injected.
+    const e = await normalizeShareIntent({ text: 'a <b>bold</b> & <script>x</script>' }, deps);
+    ok('shared html escaped',
+      e.content === '<p>a &lt;b&gt;bold&lt;/b&gt; &amp; &lt;script&gt;x&lt;/script&gt;</p>', e.content);
   }
 
   console.log('image files:');
