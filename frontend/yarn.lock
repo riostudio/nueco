@@ -981,7 +981,7 @@
   dependencies:
     node-forge "^1.3.3"
 
-"@expo/config-plugins@~55.0.6":
+"@expo/config-plugins@^55.0.10", "@expo/config-plugins@~55.0.6":
   version "55.0.10"
   resolved "https://registry.yarnpkg.com/@expo/config-plugins/-/config-plugins-55.0.10.tgz#d54e95f2d8cf805d0c23885d5b525afb03b41437"
   integrity sha512-1txnRnMLIO5lM/Of/VyvDkCwZap0YFvCyfSTIlUQamhwhx6Rh7r8TXfcIstaDYUQ7X6GTMkNxLXWbcYS6ZAFDw==
@@ -4346,6 +4346,15 @@ expo-share-intent@6.1.1:
     "@expo/config-plugins" "~55.0.6"
     expo-constants "~55.0.7"
     expo-linking "~55.0.7"
+
+expo-sharing@~55.0.21:
+  version "55.0.21"
+  resolved "https://registry.yarnpkg.com/expo-sharing/-/expo-sharing-55.0.21.tgz#c56afc3c1c5119349c0c0d715db69e353172446b"
+  integrity sha512-iiM9nAIIouPRxms41F7ytacna1BzImb5KSI1a9ZlrvrW2ybKx8YDw7+3mClFplMrWp+sy8A+bWkR75mmhKE78w==
+  dependencies:
+    "@expo/config-plugins" "^55.0.10"
+    "@expo/config-types" "^55.0.5"
+    "@expo/plist" "^0.5.4"
 
 expo-speech-recognition@^3.1.1:
   version "3.1.1"

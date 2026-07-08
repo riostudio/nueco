@@ -4,16 +4,26 @@ import * as Application from 'expo-application';
 import { Platform, Dimensions } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// GDPR opt-out: usage analytics default ON, user can disable in Settings. When opted out, PostHog's
-// capture() calls become no-ops (no events sent).
-const ANALYTICS_OPT_OUT_KEY = 'analytics_opt_out';
+// GDPR opt-IN consent: usage analytics stay OFF until the user explicitly grants consent. Stored as
+// 'granted' | 'denied'; unset = undecided (treated as OFF). capture() no-ops until granted.
+const ANALYTICS_CONSENT_KEY = 'analytics_consent';
 
-export const isAnalyticsEnabled = async (): Promise<boolean> => {
-  try { return (await AsyncStorage.getItem(ANALYTICS_OPT_OUT_KEY)) !== '1'; } catch { return true; }
+export const getAnalyticsConsent = async (): Promise<'granted' | 'denied' | null> => {
+  try { return (await AsyncStorage.getItem(ANALYTICS_CONSENT_KEY)) as 'granted' | 'denied' | null; }
+  catch { return null; }
 };
 
+/** Whether the user has already answered the consent prompt (so we don't ask again). */
+export const hasAnalyticsDecision = async (): Promise<boolean> => {
+  const v = await getAnalyticsConsent();
+  return v === 'granted' || v === 'denied';
+};
+
+export const isAnalyticsEnabled = async (): Promise<boolean> =>
+  (await getAnalyticsConsent()) === 'granted';
+
 export const setAnalyticsEnabled = async (enabled: boolean): Promise<void> => {
-  try { await AsyncStorage.setItem(ANALYTICS_OPT_OUT_KEY, enabled ? '0' : '1'); } catch {}
+  try { await AsyncStorage.setItem(ANALYTICS_CONSENT_KEY, enabled ? 'granted' : 'denied'); } catch {}
   if (posthogInstance) {
     if (enabled) posthogInstance.optIn();
     else posthogInstance.optOut();

@@ -11,6 +11,7 @@ import { UserAvatar, useAuth } from '../../src/auth';
 import { accountApi } from '../../src/api';
 import { isAnalyticsEnabled, setAnalyticsEnabled } from '../../src/analytics';
 import { clearLocalData } from '../../src/offlineSync';
+import { exportMyData } from '../../src/dataExport';
 
 // TODO: replace with your real hosted privacy policy URL.
 const PRIVACY_POLICY_URL = 'https://memopad.app/privacy';
@@ -30,14 +31,26 @@ const C = {
 
 export default function SettingsScreen() {
   const router = useRouter();
-  const { logout } = useAuth();
-  const [analyticsOn, setAnalyticsOn] = useState(true);
+  const { logout, user } = useAuth();
+  const [analyticsOn, setAnalyticsOn] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [showDelete, setShowDelete] = useState(false);
   const [password, setPassword] = useState('');
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
 
   useEffect(() => { isAnalyticsEnabled().then(setAnalyticsOn); }, []);
+
+  const handleExport = useCallback(async () => {
+    setExporting(true);
+    try {
+      await exportMyData(user);
+    } catch {
+      Alert.alert('Export failed', 'Could not export your data. Please try again.');
+    } finally {
+      setExporting(false);
+    }
+  }, [user]);
 
   const toggleAnalytics = useCallback(async (value: boolean) => {
     setAnalyticsOn(value);
@@ -169,6 +182,14 @@ export default function SettingsScreen() {
                 thumbColor={analyticsOn ? C.primary : '#f4f3f4'}
               />
             </View>
+            <View style={s.divider} />
+            <TouchableOpacity testID="export-data-btn" style={s.row} onPress={handleExport} disabled={exporting}>
+              <MaterialIcons name="download" size={24} color={C.textSec} />
+              <Text style={s.rowLabel}>Export my data</Text>
+              {exporting
+                ? <ActivityIndicator size="small" color={C.textSec} />
+                : <MaterialIcons name="chevron-right" size={22} color={C.borderSub} />}
+            </TouchableOpacity>
             <View style={s.divider} />
             <TouchableOpacity
               testID="delete-account-btn"

@@ -7,6 +7,8 @@ export {
   resetUser,
   isAnalyticsEnabled,
   setAnalyticsEnabled,
+  getAnalyticsConsent,
+  hasAnalyticsDecision,
   trackNoteCreated,
   trackNoteEdited,
   trackNoteDeleted,

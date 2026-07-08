@@ -7,6 +7,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useRouter } from 'expo-router';
 import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { AnalyticsConsent } from '../../src/components';
 
 const C = {
   primary: '#D84315',
@@ -107,6 +108,8 @@ export default function TabLayout() {
       <View style={styles.prewarm} pointerEvents="none">
         <WebView source={{ html: '<html></html>' }} style={{ flex: 1, opacity: 0 }} />
       </View>
+      {/* One-time opt-in consent for usage analytics (GDPR). */}
+      <AnalyticsConsent />
     </GestureHandlerRootView>
   );
 }
