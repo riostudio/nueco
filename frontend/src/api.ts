@@ -129,6 +129,13 @@ export const accountApi = {
     fetchApi('/account/delete', { method: 'POST', body: JSON.stringify({ password }) }),
 };
 
+export const pushApi = {
+  register: (token: string, platform: string) =>
+    fetchApi('/push/register', { method: 'POST', body: JSON.stringify({ token, platform }) }),
+  unregister: (token: string, platform: string) =>
+    fetchApi('/push/unregister', { method: 'POST', body: JSON.stringify({ token, platform }) }),
+};
+
 // ---- Attachments ----
 
 export interface AttachmentMeta {
