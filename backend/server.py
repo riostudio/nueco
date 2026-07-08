@@ -10,6 +10,7 @@ from typing import List, Optional
 import uuid
 from datetime import datetime, timezone
 import tempfile
+import bcrypt
 from collections import defaultdict
 import time
 from openai import AsyncOpenAI
@@ -662,6 +663,57 @@ async def delete_event(event_id: str, current_user: dict = Depends(get_current_u
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Event not found")
     return {"message": "Event deleted"}
+
+
+# ---- Account deletion (GDPR right to erasure) ----
+
+class DeleteAccountRequest(BaseModel):
+    password: str
+
+
+def _delete_user_s3_attachments(user_id: str):
+    """Best-effort deletion of every stored attachment under the user's prefix."""
+    s3 = get_s3_client()
+    if not s3:
+        return
+    try:
+        prefix = f"{ATTACHMENT_PREFIX}/{user_id}/"
+        paginator = s3.get_paginator("list_objects_v2")
+        batch = []
+        for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                batch.append({"Key": obj["Key"]})
+                if len(batch) == 1000:
+                    s3.delete_objects(Bucket=S3_BUCKET, Delete={"Objects": batch})
+                    batch = []
+        if batch:
+            s3.delete_objects(Bucket=S3_BUCKET, Delete={"Objects": batch})
+    except Exception as e:
+        logger.error(f"S3 attachment cleanup failed for user {user_id}: {e}")
+
+
+@api_router.post("/account/delete")
+async def delete_account(body: DeleteAccountRequest, current_user: dict = Depends(get_current_user)):
+    """Permanently erase the authenticated user and ALL their data (GDPR Art. 17). Requires the
+    account password as a confirmation. Irreversible."""
+    user_id = current_user.get("id") or str(current_user.get("_id", ""))
+    # Re-verify the password (fetch fresh so we always have the hash).
+    user = await db.users.find_one({"id": user_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if not body.password or not bcrypt.checkpw(body.password.encode(), user.get("password", "").encode()):
+        raise HTTPException(status_code=401, detail="Incorrect password")
+
+    # Wipe object storage first (attachments), then every DB record tied to the user.
+    _delete_user_s3_attachments(user_id)
+    for coll in ("notes", "events", "push_tokens", "push_receipts", "feature_events", "devices", "sessions"):
+        try:
+            await db[coll].delete_many({"user_id": user_id})
+        except Exception as e:
+            logger.error(f"Account delete: failed clearing {coll} for {user_id}: {e}")
+    await db.users.delete_one({"id": user_id})
+    logger.info(f"Account deleted (GDPR erasure): user {user_id}")
+    return {"ok": True}
 
 
 # ---- Transcription Endpoint ----
