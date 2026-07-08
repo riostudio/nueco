@@ -5,6 +5,8 @@ export {
   getPostHog,
   identifyUser,
   resetUser,
+  isAnalyticsEnabled,
+  setAnalyticsEnabled,
   trackNoteCreated,
   trackNoteEdited,
   trackNoteDeleted,

@@ -95,6 +95,16 @@ async function ensureDir(): Promise<void> {
   _dirReady = true;
 }
 
+/** Wipe all locally cached notes/events/sync-queue (used on account deletion). Best-effort. */
+export async function clearLocalData(): Promise<void> {
+  try {
+    await FileSystem.deleteAsync(FILE_DIR, { idempotent: true });
+  } catch {
+    // ignore — nothing to clear or already gone
+  }
+  _dirReady = false;
+}
+
 // Reads a JSON file, falling back to (and migrating from) a legacy AsyncStorage
 // key the first time. If the legacy value is unreadable (e.g. the CursorWindow
 // error this fix addresses), we start fresh — fullSync repopulates from server.

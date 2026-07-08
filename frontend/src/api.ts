@@ -123,6 +123,12 @@ export const eventsApi = {
     fetchApi('/events/batch', { method: 'POST', body: JSON.stringify({ event_ids: eventIds }) }),
 };
 
+export const accountApi = {
+  // Permanently erase the account + all data (GDPR right to erasure). Requires the password.
+  deleteAccount: (password: string) =>
+    fetchApi('/account/delete', { method: 'POST', body: JSON.stringify({ password }) }),
+};
+
 // ---- Attachments ----
 
 export interface AttachmentMeta {

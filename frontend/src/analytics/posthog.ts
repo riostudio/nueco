@@ -2,6 +2,23 @@ import PostHog from 'posthog-react-native';
 import * as Device from 'expo-device';
 import * as Application from 'expo-application';
 import { Platform, Dimensions } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// GDPR opt-out: usage analytics default ON, user can disable in Settings. When opted out, PostHog's
+// capture() calls become no-ops (no events sent).
+const ANALYTICS_OPT_OUT_KEY = 'analytics_opt_out';
+
+export const isAnalyticsEnabled = async (): Promise<boolean> => {
+  try { return (await AsyncStorage.getItem(ANALYTICS_OPT_OUT_KEY)) !== '1'; } catch { return true; }
+};
+
+export const setAnalyticsEnabled = async (enabled: boolean): Promise<void> => {
+  try { await AsyncStorage.setItem(ANALYTICS_OPT_OUT_KEY, enabled ? '0' : '1'); } catch {}
+  if (posthogInstance) {
+    if (enabled) posthogInstance.optIn();
+    else posthogInstance.optOut();
+  }
+};
 
 // PostHog configuration
 const POSTHOG_API_KEY = process.env.EXPO_PUBLIC_POSTHOG_KEY || '';
@@ -35,6 +52,11 @@ export const initPostHog = async (userId?: string): Promise<PostHog | null> => {
     // Identify user if provided
     if (userId) {
       posthogInstance.identify(userId);
+    }
+
+    // Respect a saved opt-out (GDPR) — capture() no-ops while opted out.
+    if (!(await isAnalyticsEnabled())) {
+      posthogInstance.optOut();
     }
 
     console.log('PostHog initialized successfully');
