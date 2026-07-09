@@ -1,4 +1,4 @@
-import { Tabs } from 'expo-router';
+import { Tabs, type Href } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import { StyleSheet, View, Alert } from 'react-native';
 import React, { useEffect } from 'react';
@@ -7,7 +7,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useRouter } from 'expo-router';
 import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { AnalyticsConsent } from '../../src/components';
+import { hasAnalyticsDecision } from '../../src/analytics';
 import { registerForPushNotifications, unregisterPushNotifications } from '../../src/notifications';
 
 const C = {
@@ -46,6 +46,12 @@ export default function TabLayout() {
 
   // Register this device for reminder push notifications once we're in the app (authenticated).
   useEffect(() => { registerForPushNotifications(); }, []);
+
+  // First-run GDPR opt-in: if the user hasn't answered the analytics prompt yet, show it as a
+  // full screen before they use the app.
+  useEffect(() => {
+    hasAnalyticsDecision().then((decided) => { if (!decided) router.replace('/analytics-consent' as Href); }).catch(() => {});
+  }, []);
 
   const handleLogout = () => {
     Alert.alert(
@@ -113,8 +119,6 @@ export default function TabLayout() {
       <View style={styles.prewarm} pointerEvents="none">
         <WebView source={{ html: '<html></html>' }} style={{ flex: 1, opacity: 0 }} />
       </View>
-      {/* One-time opt-in consent for usage analytics (GDPR). */}
-      <AnalyticsConsent />
     </GestureHandlerRootView>
   );
 }

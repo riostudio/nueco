@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   ScrollView, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
   Keyboard, Share, Modal, Image,
 } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
@@ -24,6 +25,7 @@ import { plainTextFromContent } from '../src/textContent';
 import { RichText, useEditorBridge, useEditorContent, useBridgeState } from '@10play/tentap-editor';
 import { Tag, CalendarEvent, Attachment } from '../src/types';
 import { TAG_COLORS, C } from '../src/theme';
+import { setNewNoteId } from '../src/newNoteSignal';
 import { 
   authStorage, 
   useAuth,
@@ -69,6 +71,10 @@ type EditorUiState = { isFocused: boolean; isBoldActive: boolean; isItalicActive
 // `initialContent`. That's the reliable way to load existing content: `setContent` after mount
 // races the webview's readiness (it logs "Editor isn't ready yet" and drops the call, leaving the
 // body empty until tapped). Mounting this only once the content is known sidesteps the race.
+// Writing-area height bounds: TenTap's native auto-height is shimmed on Expo, so we grow the box
+// from the content instead (see bodyHeight) — min keeps a comfortable default, max caps runaway.
+const BODY_MIN_HEIGHT = 180;
+const BODY_MAX_HEIGHT = 720;
 const NoteBodyEditor = forwardRef<EditorApi, {
   initialContent: string;
   onChange: (html: string) => void;
@@ -79,6 +85,17 @@ const NoteBodyEditor = forwardRef<EditorApi, {
   const editor = useEditorBridge({ autofocus: false, avoidIosKeyboard: true, initialContent });
   const state = useBridgeState(editor);
   const html = useEditorContent(editor, { type: 'html', debounceInterval: 400 });
+
+  // Estimate the writing-area height from the content so a long paste (e.g. text copied from a
+  // webpage) grows the box to show all of it, instead of being clipped to a fixed height.
+  const bodyHeight = useMemo(() => {
+    const h = html || initialContent || '';
+    const blocks = (h.match(/<\/(p|div|h[1-6]|li|blockquote)>|<br\s*\/?>/gi) || []).length;
+    const text = h.replace(/<[^>]+>/g, ' ').replace(/&[a-z#0-9]+;/gi, ' ');
+    const wrapped = Math.ceil((text.trim().length || 1) / 36); // ~36 chars/line at the editor width
+    const lines = Math.max(blocks + 1, wrapped);
+    return Math.min(BODY_MAX_HEIGHT, Math.max(BODY_MIN_HEIGHT, lines * 26 + 28));
+  }, [html, initialContent]);
 
   useImperativeHandle(ref, () => ({
     getHTML: () => editor.getHTML(),
@@ -100,7 +117,7 @@ const NoteBodyEditor = forwardRef<EditorApi, {
 
   return (
     <View style={s.richTextWrap}>
-      <RichText editor={editor} style={s.richText} scrollEnabled />
+      <RichText editor={editor} style={[s.richText, { height: bodyHeight }]} scrollEnabled />
     </View>
   );
 });
@@ -417,10 +434,32 @@ export default function EditorScreen() {
     }, [linkedEventId])
   );
 
+  // Pull the newest HTML straight from the editor bridge. The reactive contentRef lags by the
+  // editor's debounce, so persisting without this could write stale content. Raced against a
+  // short timeout: if the webview bridge isn't ready yet, getHTML's message is silently dropped
+  // and its promise never settles — without the race, awaiting it would hang navigation.
+  const syncLatestContent = useCallback(async () => {
+    try {
+      const latest = await Promise.race([
+        editorApiRef.current?.getHTML(),
+        new Promise<undefined>((resolve) => setTimeout(resolve, 400)),
+      ]);
+      if (typeof latest === 'string') contentRef.current = latest;
+    } catch {}
+  }, []);
+
+  // Confirm a save happened with a light haptic tap.
+  const signalSaved = useCallback(() => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+  }, []);
+
   // Offline-first save: writes locally + enqueues for sync. Encryption happens once,
   // at the offlineSync push boundary. `push: false` (autosave) defers the network sync
   // so a mid-session id swap can't strand `noteIdRef`; the queue is flushed on exit.
   const persistLocal = useCallback(async (opts: { push?: boolean } = {}): Promise<void> => {
+    // Every persist path (autosave, back, save-and-back, future flushes) captures the very
+    // latest keystrokes here, so no caller has to remember to flush first.
+    await syncLatestContent();
     const draft = {
       title: titleRef.current,
       // The shared-post card rides along as a marker appended to the body (stripped on load).
@@ -436,6 +475,7 @@ export default function EditorScreen() {
       noteIdRef.current = created.id;
       isCreatedRef.current = true;
       setNoteExists(true);
+      setNewNoteId(created.id); // let the notes list play a one-time "newly created" glow on this card
       trackNoteCreated({
         has_scheduled_event: !!linkedEventIdRef.current,
         has_image_attached: imagesRef.current.length > 0,
@@ -457,15 +497,17 @@ export default function EditorScreen() {
         // Local write only (push deferred to exit/background) — always succeeds offline.
         await persistLocal({ push: false });
         setSaveStatus('All changes saved');
+        signalSaved();
       } catch (e: any) {
         setSaveStatus('Failed to save');
         console.error('Autosave error:', e);
       }
-    }, 2000);
-  }, [persistLocal]);
+    }, 800);
+  }, [persistLocal, signalSaved]);
 
   const handleBack = useCallback(async () => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    await syncLatestContent(); // capture the very last keystrokes before persisting
     try {
       const hasContent = !!(titleRef.current || contentRef.current || linkedEventIdRef.current || imagesRef.current.length > 0 || attachmentsRef.current.length > 0 || sourcePostRef.current);
       // Persist locally; only create a brand-new note if it actually has content.
@@ -478,7 +520,7 @@ export default function EditorScreen() {
       console.error('Save on back failed:', e);
     }
     router.back();
-  }, [router, persistLocal]);
+  }, [router, persistLocal, syncLatestContent]);
 
   const handleTitleChange = (text: string) => {
     setTitle(text);
@@ -1016,6 +1058,7 @@ export default function EditorScreen() {
   const handleSaveAndBack = async () => {
     // Cancel any pending autosave timer so it can't double-fire with the save below.
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    await syncLatestContent(); // capture the very last keystrokes before the empty-check + save
     // Nothing to save? (also save if there's a linked event, images, or attachments —
     // e.g. a photo/audio/video share with no typed title/body)
     if (!title.trim() && !plainTextFromContent(contentRef.current) && !linkedEventIdRef.current

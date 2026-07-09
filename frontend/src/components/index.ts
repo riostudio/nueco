@@ -3,4 +3,3 @@ export { ShareIntentHandler } from './ShareIntentHandler';
 export { RadialProgress } from './RadialProgress';
 export { EyeIcon } from './EyeIcon';
 export { SharedPostCard } from './SharedPostCard';
-export { AnalyticsConsent } from './AnalyticsConsent';

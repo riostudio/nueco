@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
-  FlatList, RefreshControl, ActivityIndicator, Modal,
+  FlatList, RefreshControl, ActivityIndicator, Modal, Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -16,9 +16,13 @@ import OfflineBanner from '../../src/components/OfflineBanner';
 import { getSyncQueue, getLocalNotes, LocalNote } from '../../src/offlineSync';
 import { parseSourcePost } from '../../src/share/socialSource';
 import { plainTextFromContent } from '../../src/textContent';
+import { takeNewNoteId } from '../../src/newNoteSignal';
 
 // Extend C with surfaceHi for this screen
 const Colors = { ...C, surfaceHi: '#FFF8E1' };
+
+// A note card that can animate its border (for the one-time "newly created" glow).
+const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
 
 function formatTime(dateStr: string): string {
   const d = new Date(dateStr);
@@ -49,6 +53,9 @@ export default function NotesScreen() {
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  // One-time "newly created" glow: the id of the card to pulse + its animation driver.
+  const [glowNoteId, setGlowNoteId] = useState<string | null>(null);
+  const glowAnim = useRef(new Animated.Value(0)).current;
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [debouncedSearch, setDebouncedSearch] = useState('');
   
@@ -152,7 +159,18 @@ export default function NotesScreen() {
   useFocusEffect(
     useCallback(() => {
       loadNotes();
-    }, [loadNotes])
+      // If we just came back from creating a note, glow its card once to confirm it was added.
+      const newId = takeNewNoteId();
+      if (newId) {
+        setGlowNoteId(newId);
+        glowAnim.setValue(0);
+        Animated.sequence([
+          Animated.timing(glowAnim, { toValue: 1, duration: 280, useNativeDriver: false }),
+          Animated.delay(450),
+          Animated.timing(glowAnim, { toValue: 0, duration: 520, useNativeDriver: false }),
+        ]).start(() => setGlowNoteId(null));
+      }
+    }, [loadNotes, glowAnim])
   );
 
   // Polling for sync across devices - check for updates every 30 seconds
@@ -221,11 +239,17 @@ export default function NotesScreen() {
     const titleText = note.title || src?.title || src?.label || 'Untitled Note';
     const previewText = body || (src ? (src.title ? `${src.label} · ${src.title}` : src.label) : '');
 
+    const isGlow = note.id === glowNoteId;
+    const CardTag: any = isGlow ? AnimatedTouchable : TouchableOpacity;
+    const glowStyle = isGlow
+      ? { borderColor: glowAnim.interpolate({ inputRange: [0, 1], outputRange: [note.is_pinned ? C.primary : C.borderSub, C.success] }) }
+      : null;
+
     return (
-      <TouchableOpacity
+      <CardTag
         key={note.id}
         testID={`note-card-${note.id}`}
-        style={[s.card, note.is_pinned && s.pinnedCard]}
+        style={[s.card, note.is_pinned && s.pinnedCard, glowStyle]}
         onPress={() => router.push({ pathname: '/editor', params: { noteId: note.id } })}
         activeOpacity={0.7}
       >
@@ -305,7 +329,7 @@ export default function NotesScreen() {
           </View>
           <Text style={s.timeText}>{formatTime(note.updated_at)}</Text>
         </View>
-      </TouchableOpacity>
+      </CardTag>
     );
   };
 

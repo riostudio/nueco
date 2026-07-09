@@ -41,6 +41,7 @@ function AppWithAnalytics() {
         <Stack.Screen name="forgot-password" options={{ headerShown: false, animation: 'slide_from_right' }} />
         <Stack.Screen name="reset-password" options={{ headerShown: false, animation: 'slide_from_right' }} />
         <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="analytics-consent" options={{ headerShown: false, gestureEnabled: false, animation: 'fade' }} />
         <Stack.Screen name="editor" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="event-editor" options={{ presentation: 'modal' }} />
         <Stack.Screen name="change-password" options={{ animation: 'slide_from_right' }} />

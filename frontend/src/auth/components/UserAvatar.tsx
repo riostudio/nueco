@@ -37,6 +37,11 @@ export function UserAvatar({ size = 40 }: UserAvatarProps) {
     router.push('/change-password');
   };
 
+  const handleSettings = () => {
+    setMenuVisible(false);
+    router.push('/settings');
+  };
+
   const handleLogout = async () => {
     setMenuVisible(false);
     await logout();
@@ -85,11 +90,16 @@ export function UserAvatar({ size = 40 }: UserAvatarProps) {
             
             <View style={styles.menuDivider} />
             
+            <TouchableOpacity style={styles.menuItem} onPress={handleSettings}>
+              <MaterialIcons name="privacy-tip" size={24} color={C.text} />
+              <Text style={styles.menuText}>Privacy & Data</Text>
+            </TouchableOpacity>
+
             <TouchableOpacity style={styles.menuItem} onPress={handleChangePassword}>
               <MaterialIcons name="lock" size={24} color={C.text} />
               <Text style={styles.menuText}>Change Password</Text>
             </TouchableOpacity>
-            
+
             <TouchableOpacity style={styles.menuItem} onPress={handleLogout}>
               <MaterialIcons name="logout" size={24} color={C.primary} />
               <Text style={[styles.menuText, { color: C.primary }]}>Log Out</Text>
