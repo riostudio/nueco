@@ -9,6 +9,7 @@ import { migrateNotesToEncrypted } from '../../crypto/noteMigration';
 import { migrateEventsToEncrypted } from '../../crypto/eventMigration';
 import { encryptAccountName } from '../../crypto/accountCrypto';
 import { loadDek } from '../../crypto/keystore';
+import { resetCalendarSyncState } from '../../calendarSync';
 
 interface AuthContextType {
   user: User | null;
@@ -195,6 +196,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch (e) {
         console.warn('E2EE key clear on logout failed:', e);
       }
+    }
+    try {
+      await resetCalendarSyncState();
+    } catch (e) {
+      console.warn('Calendar sync state clear on logout failed:', e);
     }
     pendingPasswordRef.current = null;
     setRecoveryCode(null);

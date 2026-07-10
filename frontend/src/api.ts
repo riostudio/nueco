@@ -1,6 +1,7 @@
 import * as LegacyFileSystem from 'expo-file-system/legacy';
 import { authStorage } from './auth/storage/authStorage';
 import { BACKEND_API_BASE_URL, BACKEND_BASE_URL } from './backendBaseUrl';
+import { decryptAccountFromServer } from './crypto/accountCrypto';
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const accessToken = await authStorage.getAccessToken();
@@ -51,7 +52,7 @@ async function doRefreshAccessToken(): Promise<boolean> {
       await authStorage.setRefreshToken(result.refresh_token);
     }
     if (result.user) {
-      await authStorage.setUser(result.user);
+      await authStorage.setUser(await decryptAccountFromServer(result.user));
     }
     console.log('Access token refreshed successfully');
     return true;

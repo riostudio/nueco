@@ -70,11 +70,16 @@ export default function CalendarScreen() {
   const selMonth = selectedDate.getMonth();
   const selYear = selectedDate.getFullYear();
 
+  // Matches any day the event spans, not just its start day - multi-day events (event-editor's
+  // End Date field) would otherwise vanish from every day but the first.
+  const eventCoversDay = (e: CalendarEvent, y: number, m: number, d: number) => {
+    const dayStart = new Date(y, m, d, 0, 0, 0, 0);
+    const dayEnd = new Date(y, m, d, 23, 59, 59, 999);
+    return new Date(e.start_time) <= dayEnd && new Date(e.end_time) >= dayStart;
+  };
+
   const hasEvents = (day: number) =>
-    events.some((e) => {
-      const d = new Date(e.start_time);
-      return d.getDate() === day && d.getMonth() === month && d.getFullYear() === year;
-    });
+    events.some((e) => eventCoversDay(e, year, month, day));
 
   const today = new Date();
   const isToday = (day: number) =>
@@ -88,8 +93,7 @@ export default function CalendarScreen() {
 
   // Count events for selected day
   const selectedDayEvents = events.filter((e) => {
-    const d = new Date(e.start_time);
-    return d.getDate() === selDay && d.getMonth() === selMonth && d.getFullYear() === selYear;
+    return eventCoversDay(e, selYear, selMonth, selDay);
   });
 
   const rows: (number | null)[][] = [];

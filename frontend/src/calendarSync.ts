@@ -55,6 +55,13 @@ export async function setSyncedCalendarIds(ids: string[]): Promise<void> {
   await AsyncStorage.setItem(KEYS.CALENDAR_IDS, JSON.stringify(ids));
 }
 
+// Called on logout. These keys are plain (not user-scoped) AsyncStorage, so on a shared device
+// the next account to log in would otherwise inherit the previous user's sync opt-in + calendar
+// selection and silently push their device-calendar events into the new account.
+export async function resetCalendarSyncState(): Promise<void> {
+  await AsyncStorage.multiRemove([KEYS.ENABLED, KEYS.CALENDAR_IDS, KEYS.EVENT_HASHES, KEYS.LAST_RUN_AT, KEYS.LOCK]);
+}
+
 // Every device calendar the OS knows about (Apple/Google/Outlook/etc. - anything the user has
 // added as an account in their phone's Calendar settings), for the sync-settings checklist.
 export async function getAllDeviceCalendars(): Promise<{ id: string; title: string; source?: string }[]> {

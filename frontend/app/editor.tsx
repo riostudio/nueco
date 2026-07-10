@@ -87,6 +87,19 @@ const NoteBodyEditor = forwardRef<EditorApi, {
   const state = useBridgeState(editor);
   const html = useEditorContent(editor, { type: 'html', debounceInterval: 400 });
 
+  // TenTap only resets the WebView's scroll position after boot when `dynamicHeight` is on (its own
+  // fix for https://github.com/10play/10tap-editor/issues/236 / 244). We don't use dynamicHeight (see
+  // note above), so without this the page can settle scrolled a few px past the top once fonts/layout
+  // finish reflowing after `initialContent` loads - clipping the first line of imported/shared text.
+  // Runs once, right as the freshly-mounted editor reports ready.
+  useEffect(() => {
+    if (!state.isReady) return;
+    const t = setTimeout(() => {
+      editor.webviewRef.current?.injectJavaScript('window.scrollTo(0, 0); true;');
+    }, 100);
+    return () => clearTimeout(t);
+  }, [state.isReady]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Estimate the writing-area height from the content so a long paste (e.g. text copied from a
   // webpage) grows the box to show all of it, instead of being clipped to a fixed height.
   const bodyHeight = useMemo(() => {

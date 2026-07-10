@@ -473,5 +473,5 @@ class AuthService:
         return {
             "notes_count": notes_count,
             "synced": True,
-            "user_name": user["name"] if user else "User"
+            "user_name": self._greeting_name(user) if user else "User"
         }

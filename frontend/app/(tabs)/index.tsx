@@ -9,6 +9,7 @@ import { useRouter, useFocusEffect } from 'expo-router';
 import Constants from 'expo-constants';
 import * as StoreReview from 'expo-store-review';
 import { notesApi, eventsApi, feedbackApi } from '../../src/api';
+import { decryptEventFromServer, decryptEventsFromServer } from '../../src/crypto/eventCrypto';
 import { CalendarEvent } from '../../src/types';
 import { C } from '../../src/theme';
 import { UserAvatar, useAuth } from '../../src/auth';
@@ -131,7 +132,7 @@ export default function NotesScreen() {
         
         // Use batch API to fetch all events in one request (fixes N+1 query)
         try {
-          const events = await eventsApi.getBatch(uniqueIds);
+          const events = await decryptEventsFromServer<CalendarEvent>(await eventsApi.getBatch(uniqueIds));
           const eventsData: Record<string, CalendarEvent> = {};
           events.forEach((event: CalendarEvent) => {
             eventsData[event.id] = event;
@@ -144,7 +145,7 @@ export default function NotesScreen() {
           await Promise.all(
             uniqueIds.map(async (eventId) => {
               try {
-                const event = await eventsApi.get(eventId);
+                const event = await decryptEventFromServer(await eventsApi.get(eventId));
                 eventsData[eventId] = event;
               } catch (err) {
                 console.error('Failed to load event:', eventId, err);
