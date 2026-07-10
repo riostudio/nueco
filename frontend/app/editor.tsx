@@ -607,7 +607,17 @@ export default function EditorScreen() {
     if (tags.length > 0) {
       shareText += '\n🏷️ Tags: ' + tags.map(t => t.name).join(', ') + '\n';
     }
-    
+
+    // Add the shared post's metadata (platform, caption/title, original link) so
+    // forwarding a note that started as a shared link doesn't drop that context.
+    if (sourcePost) {
+      shareText += `\n🔗 ${sourcePost.label}\n\n`;
+      if (sourcePost.title) {
+        shareText += `${sourcePost.title}\n`;
+      }
+      shareText += `${sourcePost.url}\n`;
+    }
+
     // Add linked event details with Event header
     if (linkedEvent) {
       shareText += '\n📅 Event\n\n';
