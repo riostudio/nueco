@@ -8,7 +8,27 @@ import { bootstrapKeyOnLogin, recoverKeyWithCode, clearKeyOnLogout, type Bootstr
 import { migrateNotesToEncrypted } from '../../crypto/noteMigration';
 import { migrateEventsToEncrypted } from '../../crypto/eventMigration';
 import { UNDECRYPTABLE_PLACEHOLDER } from '../../crypto/accountCrypto';
+import { loadDek } from '../../crypto/keystore';
 import { resetCalendarSyncState } from '../../calendarSync';
+
+// Account name E2EE (Stage 5) reversed: push the already-decrypted plaintext name (every
+// place `User` reaches app code has already run it through decryptAccountFromServer) back to
+// the server and clear enc_version, undoing the one-time encryption push this used to do.
+// Runs from both login() and refreshAuth() (the latter fires on every cold start via
+// initAuth(), see below) so an already-logged-in session self-heals without requiring an
+// explicit log-out/log-in. Guarded on loadDek() being non-null: with no DEK, decrypt is a
+// no-op pass-through, so `user.name` is still ciphertext - pushing that back as "plaintext"
+// would permanently bake the ciphertext in as the display name with no way to recover it.
+async function pushBackPlaintextName(user: User | null | undefined): Promise<void> {
+  if (!user?.enc_version || !user?.name || user.name === UNDECRYPTABLE_PLACEHOLDER) return;
+  try {
+    if (await loadDek()) {
+      await authApi.updateName(user.name, null);
+    }
+  } catch (e) {
+    console.warn('Account name plaintext push-back failed (will retry next login):', e);
+  }
+}
 
 interface AuthContextType {
   user: User | null;
@@ -43,6 +63,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const result = await authApi.refreshToken();
       if (result) {
         setUser(result.user);
+        pushBackPlaintextName(result.user);
         return true;
       }
       // null means either 401/403 (tokens cleared) or network error (tokens kept).
@@ -81,6 +102,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               const me = await authApi.getMe();
               setUser(me);
               await authStorage.setUser(me);
+              pushBackPlaintextName(me);
             } catch (err) {
               // Access token likely expired - fall back to a full refresh.
               await refreshAuth();
@@ -157,18 +179,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      // Account name E2EE (Stage 5) reversed: push the already-decrypted plaintext name
-      // (authApi.login() runs it through decryptAccountFromServer before this) back to the
-      // server and clear enc_version, undoing the one-time encryption push this used to do.
-      // Skip if decrypt itself failed (no DEK / wrong key) - never overwrite the real name
-      // with the "can't decrypt" placeholder.
-      if (result.user?.enc_version && result.user?.name && result.user.name !== UNDECRYPTABLE_PLACEHOLDER) {
-        try {
-          await authApi.updateName(result.user.name, null);
-        } catch (e) {
-          console.warn('Account name plaintext push-back failed (will retry next login):', e);
-        }
-      }
+      await pushBackPlaintextName(result.user);
     })();
 
     return bootstrap;
