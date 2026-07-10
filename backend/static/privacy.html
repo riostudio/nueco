@@ -338,7 +338,7 @@
   <div class="summary-box">
     <h2>In short</h2>
     <div class="summary-grid">
-      <div class="summary-item"><span class="dot"></span><span><b>Your notes, calendar events, and account name are encrypted on your device before we ever see them.</b> We store ciphertext we cannot read.</span></div>
+      <div class="summary-item"><span class="dot"></span><span><b>Your notes and calendar events are encrypted on your device before we ever see them.</b> We store ciphertext we cannot read. Your account display name is not encrypted.</span></div>
       <div class="summary-item"><span class="dot"></span><span><b>Event times and reminders stay readable on our servers.</b> Only the title, description, and location text are encrypted; scheduling data is not.</span></div>
       <div class="summary-item"><span class="dot"></span><span><b>Analytics are opt in.</b> Off until you say yes, and note content is never included even when on.</span></div>
       <div class="summary-item"><span class="dot"></span><span><b>Voice input and AI text tools use OpenAI.</b> Recordings and, if you ask for it, transcribed text are sent to OpenAI to do the work.</span></div>
@@ -384,7 +384,7 @@
         <tr>
           <td>Account name</td>
           <td>The display name you sign up with</td>
-          <td><span class="pill pill-encrypted">Encrypted on device</span> starting from your first login after this feature shipped. We store ciphertext only.</td>
+          <td><span class="pill pill-plain">Readable by us</span>, stored as plaintext. (A prior version of this app encrypted it on device; that was reversed and any names encrypted during that window were restored to plaintext.)</td>
         </tr>
         <tr>
           <td>Account login</td>
@@ -445,8 +445,8 @@
     </div>
 
     <h3>Where "encrypted on device" applies, and where it does not</h3>
-    <p>Note titles and bodies, event titles/descriptions/locations, and your account name are encrypted end to end: a key derived from your password (or your recovery code) protects them before they ever reach our servers, and we do not have the means to decrypt them. Event start/end times and reminder settings are not encrypted, since our servers need to read them to send reminders and keep calendar sync working. This does not currently extend to feedback text or a voice transcription you send through the organize or summarize tool, which pass through our servers, and in the case of transcription and text cleanup, OpenAI, as plain text.</p>
-    <p>Because we can no longer read an encrypted event's title, a reminder notification sent from our servers shows a generic "Event Reminder" instead of the real title; the reminder scheduled directly on your device (set when you save the event) still shows the real title. Similarly, once your account name is encrypted, account emails (verification, password reset) greet you with "Hi there," instead of your name, since those can be sent before you are logged in, when we have no way to decrypt it.</p>
+    <p>Note titles and bodies and event titles/descriptions/locations are encrypted end to end: a key derived from your password (or your recovery code) protects them before they ever reach our servers, and we do not have the means to decrypt them. Your account display name is not encrypted and is readable by us. Event start/end times and reminder settings are not encrypted, since our servers need to read them to send reminders and keep calendar sync working. This does not currently extend to feedback text or a voice transcription you send through the organize or summarize tool, which pass through our servers, and in the case of transcription and text cleanup, OpenAI, as plain text.</p>
+    <p>Because we can no longer read an encrypted event's title, a reminder notification sent from our servers shows a generic "Event Reminder" instead of the real title; the reminder scheduled directly on your device (set when you save the event) still shows the real title.</p>
 
     <h3>Legal basis for processing</h3>
     <table class="fact-table">
@@ -487,13 +487,13 @@
 
   <section id="transfers">
     <h2>6. International data transfers</h2>
-    <p>Our service providers (OpenAI, PostHog, MongoDB Atlas, and Railway) may process data outside your country, including in the United States. Where that happens for EU/UK user data, it is done under a recognized transfer safeguard, such as Standard Contractual Clauses or an adequacy decision. <em>(Placeholder: this states the general legal requirement; confirming which specific safeguard is actually in place with each provider's current data processing agreement is a business step, not something derivable from the codebase.)</em> Encrypted note/event content and the account name are unreadable ciphertext regardless of where they are processed.</p>
+    <p>Our service providers (OpenAI, PostHog, MongoDB Atlas, and Railway) may process data outside your country, including in the United States. Where that happens for EU/UK user data, it is done under a recognized transfer safeguard, such as Standard Contractual Clauses or an adequacy decision. <em>(Placeholder: this states the general legal requirement; confirming which specific safeguard is actually in place with each provider's current data processing agreement is a business step, not something derivable from the codebase.)</em> Encrypted note/event content is unreadable ciphertext regardless of where it is processed.</p>
   </section>
 
   <section id="security">
     <h2>7. How we protect it</h2>
     <ul>
-      <li>Notes, calendar events, and your account name are protected with end to end encryption (AES-256-GCM), with the key derived from your password or recovery code through PBKDF2. We do not hold a copy of your password, so we cannot decrypt this data on your behalf, which is also why a lost password and a lost recovery code together mean this data is unrecoverable.</li>
+      <li>Notes and calendar events are protected with end to end encryption (AES-256-GCM), with the key derived from your password or recovery code through PBKDF2. We do not hold a copy of your password, so we cannot decrypt this data on your behalf, which is also why a lost password and a lost recovery code together mean this data is unrecoverable. Your account display name is not covered by this and is stored as plaintext.</li>
       <li>Passwords are hashed with bcrypt and never stored or logged in plain text.</li>
       <li>All traffic between the app and our servers is encrypted in transit (HTTPS).</li>
       <li>Attachments are accessed through short-lived, presigned links rather than public URLs.</li>

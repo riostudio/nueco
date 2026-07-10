@@ -7,8 +7,7 @@ import { E2EE_KEYS_ENABLED } from '../../crypto/flags';
 import { bootstrapKeyOnLogin, recoverKeyWithCode, clearKeyOnLogout, type BootstrapResult } from '../../crypto/keySession';
 import { migrateNotesToEncrypted } from '../../crypto/noteMigration';
 import { migrateEventsToEncrypted } from '../../crypto/eventMigration';
-import { encryptAccountName } from '../../crypto/accountCrypto';
-import { loadDek } from '../../crypto/keystore';
+import { UNDECRYPTABLE_PLACEHOLDER } from '../../crypto/accountCrypto';
 import { resetCalendarSyncState } from '../../calendarSync';
 
 interface AuthContextType {
@@ -158,18 +157,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      // One-time push of the client-encrypted account name (Stage 5), once a DEK exists.
-      // Cheap (one field), so run on every login regardless of E2EE_MIGRATION_ENABLED -
-      // unlike bulk notes/events this isn't a scale/cost concern.
-      if (E2EE_KEYS_ENABLED && bootstrap?.status !== 'needs_recovery' && !result.user?.enc_version) {
+      // Account name E2EE (Stage 5) reversed: push the already-decrypted plaintext name
+      // (authApi.login() runs it through decryptAccountFromServer before this) back to the
+      // server and clear enc_version, undoing the one-time encryption push this used to do.
+      // Skip if decrypt itself failed (no DEK / wrong key) - never overwrite the real name
+      // with the "can't decrypt" placeholder.
+      if (result.user?.enc_version && result.user?.name && result.user.name !== UNDECRYPTABLE_PLACEHOLDER) {
         try {
-          const dek = await loadDek();
-          if (dek && result.user?.name) {
-            const encrypted = encryptAccountName(result.user.name, dek);
-            await authApi.updateName(encrypted.name, encrypted.enc_version);
-          }
+          await authApi.updateName(result.user.name, null);
         } catch (e) {
-          console.warn('E2EE account name push failed (will retry next login):', e);
+          console.warn('Account name plaintext push-back failed (will retry next login):', e);
         }
       }
     })();
