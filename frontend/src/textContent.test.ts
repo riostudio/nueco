@@ -13,7 +13,7 @@ function ok(name: string, cond: boolean, detail = '') {
 }
 
 function main() {
-  console.log('textToHtml — plain text → structured HTML:');
+  console.log('textToHtml - plain text → structured HTML:');
   {
     ok('single line → one <p>', textToHtml('hello there') === '<p>hello there</p>', textToHtml('hello there'));
     ok('single newline → <br>', textToHtml('a\nb') === '<p>a<br>b</p>', textToHtml('a\nb'));
@@ -26,7 +26,7 @@ function main() {
       plainTextFromContent(textToHtml('one\ntwo\n\nthree')));
   }
 
-  console.log('plainTextFromContent — rich HTML:');
+  console.log('plainTextFromContent - rich HTML:');
   {
     ok('paragraph + bold/italic', plainTextFromContent('<p>Hello <strong>world</strong> and <em>more</em></p>') === 'Hello world and more');
     ok('bullet list → lines', plainTextFromContent('<ul><li>a</li><li>b</li></ul>') === 'a\nb');
@@ -36,7 +36,7 @@ function main() {
     ok('nbsp → space, collapsed', plainTextFromContent('<p>a&nbsp;&nbsp;b</p>') === 'a b');
   }
 
-  console.log('plainTextFromContent — legacy plain text:');
+  console.log('plainTextFromContent - legacy plain text:');
   {
     ok('markdown markers stripped', plainTextFromContent('**bold** and *italic*') === 'bold and italic');
     ok('bullet chars stripped', plainTextFromContent('• item one\n• item two') === 'item one\nitem two');
@@ -44,7 +44,7 @@ function main() {
     ok('plain stays plain', plainTextFromContent('just a note') === 'just a note');
   }
 
-  console.log('plainTextFromContent — shared-post marker:');
+  console.log('plainTextFromContent - shared-post marker:');
   {
     const sp: SourcePost = { platform: 'youtube', label: 'YouTube', url: 'https://youtu.be/x', title: 'V', kind: 'video' };
     ok('marker stripped from HTML', plainTextFromContent('<p>my note</p>' + serializeSourcePost(sp, false)) === 'my note');

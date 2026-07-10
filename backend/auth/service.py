@@ -37,6 +37,14 @@ class AuthService:
         self.devices = db.devices
         self.sessions = db.sessions
 
+    def _greeting_name(self, user: dict) -> str:
+        """Display name for email personalization. Falls back to a generic greeting when
+        the name is E2EE ciphertext (Stage 5) - the server cannot decrypt it. See
+        docs/E2EE-DESIGN.md for why this is an accepted non-goal, not a bug."""
+        if user.get("enc_version"):
+            return "there"
+        return user.get("name") or "there"
+
     def _hash_password(self, password: str) -> str:
         return bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
 
@@ -77,6 +85,7 @@ class AuthService:
             id=self._get_user_id(user),
             email=user["email"],
             name=user["name"],
+            enc_version=user.get("enc_version"),
             email_verified=user.get("email_verified", False),
             created_at=user.get("created_at", datetime.utcnow())
         )
@@ -168,7 +177,7 @@ class AuthService:
         
         # Send new verification email
         try:
-            send_verification_email(email, user.get("name", "User"), verification_token)
+            send_verification_email(email, self._greeting_name(user), verification_token)
             logger.info(f"Resent verification email to: {email}")
         except Exception as e:
             logger.warning(f"Could not resend verification email to {email}: {e}")
@@ -291,7 +300,7 @@ class AuthService:
             }
         )
         
-        send_verification_email(email, user["name"], verification_token)
+        send_verification_email(email, self._greeting_name(user), verification_token)
         return True, "Verification email sent"
 
     async def forgot_password(self, email: str) -> Tuple[bool, str]:
@@ -314,7 +323,7 @@ class AuthService:
             }
         )
         
-        send_password_reset_email(email, user["name"], reset_token)
+        send_password_reset_email(email, self._greeting_name(user), reset_token)
         logger.info(f"Password reset requested: {email}")
         return True, "If an account exists, a password reset email has been sent"
 
@@ -362,12 +371,27 @@ class AuthService:
         
         # Send confirmation email
         try:
-            send_password_changed_email(user["email"], user.get("name", "User"))
+            send_password_changed_email(user["email"], self._greeting_name(user))
         except Exception as e:
             logger.warning(f"Failed to send password change confirmation email: {e}")
         
         logger.info(f"Password changed: {user['email']}")
         return True, "Password changed successfully"
+
+    async def update_name(self, user_id: str, name: str, enc_version: Optional[int]) -> Tuple[bool, str, Optional[dict]]:
+        """Update the account display name. Used both for a normal plaintext rename and,
+        once per user, by the client's E2EE key bootstrap (Stage 5) to push the
+        client-encrypted name after the DEK first becomes available - see keySession.ts."""
+        user = await self.users.find_one({"id": user_id})
+        if not user:
+            return False, "User not found", None
+
+        await self.users.update_one(
+            {"id": user_id},
+            {"$set": {"name": name, "enc_version": enc_version, "updated_at": datetime.utcnow()}}
+        )
+        updated = await self.users.find_one({"id": user_id})
+        return True, "Name updated", self._user_to_response(updated).model_dump()
 
     async def refresh_access_token(self, refresh_token: str) -> Tuple[bool, str, Optional[dict]]:
         token_hash = self._hash_token(refresh_token)

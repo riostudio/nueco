@@ -11,7 +11,7 @@ from .service import AuthService
 from .schemas import (
     SignUpRequest, LoginRequest, ForgotPasswordRequest, ResetPasswordRequest,
     ChangePasswordRequest, RefreshTokenRequest, ResendVerificationRequest,
-    DeleteUnverifiedRequest, AuthResponse, MessageResponse, UserResponse, SyncStatusResponse
+    DeleteUnverifiedRequest, UpdateNameRequest, AuthResponse, MessageResponse, UserResponse, SyncStatusResponse
 )
 
 load_dotenv()
@@ -338,6 +338,20 @@ async def logout(request: RefreshTokenRequest, db: AsyncIOMotorDatabase = Depend
 async def get_me(current_user: dict = Depends(get_current_user)):
     """Get current user info"""
     return UserResponse(**current_user)
+
+@router.put("/me", response_model=UserResponse)
+async def update_me(
+    request: UpdateNameRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Update the account display name. The client calls this once its E2EE key
+    bootstrap has a DEK available, to push the client-encrypted name (Stage 5)."""
+    service = AuthService(db)
+    success, message, user = await service.update_name(current_user["id"], request.name, request.enc_version)
+    if not success:
+        raise HTTPException(status_code=404, detail=message)
+    return UserResponse(**user)
 
 @router.get("/sync-status", response_model=SyncStatusResponse)
 async def get_sync_status(

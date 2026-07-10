@@ -6,6 +6,9 @@ import { fullSync } from '../../offlineSync';
 import { E2EE_KEYS_ENABLED } from '../../crypto/flags';
 import { bootstrapKeyOnLogin, recoverKeyWithCode, clearKeyOnLogout, type BootstrapResult } from '../../crypto/keySession';
 import { migrateNotesToEncrypted } from '../../crypto/noteMigration';
+import { migrateEventsToEncrypted } from '../../crypto/eventMigration';
+import { encryptAccountName } from '../../crypto/accountCrypto';
+import { loadDek } from '../../crypto/keystore';
 
 interface AuthContextType {
   user: User | null;
@@ -120,7 +123,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     // Run the post-login sync (and the gated one-time E2EE migration) in the BACKGROUND so login
-    // returns immediately and the app appears at once — the notes screen shows cached notes and
+    // returns immediately and the app appears at once - the notes screen shows cached notes and
     // refreshes when isSyncReady flips. Previously login awaited fullSync, blocking the whole UI on
     // the network. The E2EE key bootstrap above is still awaited (needed to decrypt notes).
     (async () => {
@@ -132,8 +135,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // Signal that sync is complete so the notes screen can reload from AsyncStorage.
         setIsSyncReady(true);
       }
-      // One-time eager migration of legacy plaintext notes -> ciphertext (Stage 4). Gated OFF by
-      // default (no-op unless explicitly enabled + an Atlas snapshot); safe to run after sync.
+      // One-time eager migration of legacy plaintext notes/events -> ciphertext (Stage 4/5).
+      // Gated OFF by default (no-op unless explicitly enabled + an Atlas snapshot); safe to
+      // run after sync.
       if (E2EE_KEYS_ENABLED && bootstrap?.status !== 'needs_recovery') {
         try {
           const m = await migrateNotesToEncrypted(result.user?.id);
@@ -142,6 +146,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
         } catch (e) {
           console.warn('E2EE note migration failed (will retry next login):', e);
+        }
+        try {
+          const m = await migrateEventsToEncrypted(result.user?.id);
+          if (m.status === 'done') {
+            console.log(`E2EE migration: ${m.migrated}/${m.total} events encrypted, ${m.failed} failed`);
+          }
+        } catch (e) {
+          console.warn('E2EE event migration failed (will retry next login):', e);
+        }
+      }
+
+      // One-time push of the client-encrypted account name (Stage 5), once a DEK exists.
+      // Cheap (one field), so run on every login regardless of E2EE_MIGRATION_ENABLED -
+      // unlike bulk notes/events this isn't a scale/cost concern.
+      if (E2EE_KEYS_ENABLED && bootstrap?.status !== 'needs_recovery' && !result.user?.enc_version) {
+        try {
+          const dek = await loadDek();
+          if (dek && result.user?.name) {
+            const encrypted = encryptAccountName(result.user.name, dek);
+            await authApi.updateName(encrypted.name, encrypted.enc_version);
+          }
+        } catch (e) {
+          console.warn('E2EE account name push failed (will retry next login):', e);
         }
       }
     })();

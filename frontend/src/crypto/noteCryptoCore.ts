@@ -1,6 +1,6 @@
 /**
  * Portable core for note field encryption (Stage 4). Depends only on the E2EE
- * primitives — no keystore, no Expo, no React Native — so it runs under plain Node
+ * primitives - no keystore, no Expo, no React Native - so it runs under plain Node
  * for unit tests, exactly like `e2ee.ts`. The device/flag wiring lives in
  * `noteCrypto.ts`, which imports these.
  *
@@ -40,13 +40,13 @@ export function encryptNoteFields<T extends EncryptableNote>(
   note: T,
   dek: Uint8Array,
 ): T & { enc_version?: number } {
-  if (note.enc_version === ENC_VERSION) return note as T & { enc_version?: number }; // already encrypted — never re-wrap
+  if (note.enc_version === ENC_VERSION) return note as T & { enc_version?: number }; // already encrypted - never re-wrap
 
   const hasTitle = typeof note.title === 'string';
   const hasContent = typeof note.content === 'string';
   const hasTags = Array.isArray(note.tags);
   // A payload carrying none of the encryptable fields (e.g. a linked_event_id- or
-  // is_pinned-only update) must NOT claim the note is encrypted — leaving enc_version
+  // is_pinned-only update) must NOT claim the note is encrypted - leaving enc_version
   // unset means the backend (which uses exclude_unset) preserves the stored value.
   // Callers always send title+content together, so we never half-encrypt a note.
   if (!hasTitle && !hasContent && !hasTags) return note as T & { enc_version?: number };
@@ -71,7 +71,7 @@ export function decryptNoteFields<T extends EncryptableNote>(
   note: T,
   dek: Uint8Array,
 ): T & { enc_version?: number | null } {
-  if (note.enc_version !== ENC_VERSION) return note as T & { enc_version?: number | null }; // legacy plaintext — nothing to do
+  if (note.enc_version !== ENC_VERSION) return note as T & { enc_version?: number | null }; // legacy plaintext - nothing to do
 
   const safe = (token: unknown): string =>
     typeof token === 'string' ? tryDecrypt(token, dek) : (token as string);
@@ -95,7 +95,7 @@ export function hasEncryptableFields(note: EncryptableNote): boolean {
 }
 
 /**
- * Select the notes that still need migrating to ciphertext — i.e. legacy plaintext
+ * Select the notes that still need migrating to ciphertext - i.e. legacy plaintext
  * (`enc_version == null`). Already-encrypted notes are skipped, which makes the
  * migration idempotent and safe to re-run.
  */

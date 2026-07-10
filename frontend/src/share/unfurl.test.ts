@@ -69,7 +69,7 @@ async function main() {
     ok('title', r.title === 'Funny clip');
     ok('null → {}', Object.keys(parseTikTokOEmbed(null)).length === 0);
     ok('missing fields → {}', Object.keys(parseTikTokOEmbed({})).length === 0);
-    // TikTok titles carry HTML entities — decode decimal + apostrophe + emoji.
+    // TikTok titles carry HTML entities - decode decimal + apostrophe + emoji.
     ok('decodes entities in title', parseTikTokOEmbed({ title: 'It&#39;s a caf&#233; &#128512;' }).title === "It's a café 😀",
       parseTikTokOEmbed({ title: 'It&#39;s a caf&#233; &#128512;' }).title);
   }

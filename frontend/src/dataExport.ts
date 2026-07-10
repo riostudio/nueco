@@ -2,7 +2,7 @@
  * GDPR data portability (Art. 20): assemble the user's data into a readable JSON file and hand it to
  * the OS share sheet so they can save/send it.
  *
- * Notes are exported DECRYPTED from the local cache — the server only ever holds ciphertext, and the
+ * Notes are exported DECRYPTED from the local cache - the server only ever holds ciphertext, and the
  * local copy is the user's plaintext working set (encryption happens at the sync-push boundary). We
  * include both the raw HTML body and a plain-text rendering so the export is human-readable.
  */

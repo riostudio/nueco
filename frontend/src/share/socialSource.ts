@@ -9,7 +9,7 @@
  * Persistence (frontend-only, no schema change): the durable card data is appended to the
  * note `content` as a single HTML-comment marker, URL-encoded so a caption containing
  * `-->`, `<`, or `>` can never break the delimiter (those chars are percent-escaped). The
- * thumbnail is NOT serialized — it rides in the note's `images[0]` (flagged by `th:1`).
+ * thumbnail is NOT serialized - it rides in the note's `images[0]` (flagged by `th:1`).
  */
 
 export type SourceKind = 'image' | 'video' | 'link';
@@ -25,7 +25,7 @@ export interface SourcePost {
   thumbUrl?: string; // remote poster (e.g. a YouTube CDN frame); persisted in the marker
 }
 
-/** Brand presentation for a URL — a recognized platform, or a generic link fallback. */
+/** Brand presentation for a URL - a recognized platform, or a generic link fallback. */
 export interface SourceBrand {
   platform: string;
   label: string;
@@ -152,7 +152,7 @@ export function parseSourcePost(content: string): ParsedContent {
     };
     return { sourcePost: sp, thumbInImages0: j.th === 1, content: content.slice(0, m.index).replace(/\s+$/, '') };
   } catch {
-    // Corrupt marker — leave content untouched rather than lose the user's text.
+    // Corrupt marker - leave content untouched rather than lose the user's text.
     return { sourcePost: null, thumbInImages0: false, content };
   }
 }

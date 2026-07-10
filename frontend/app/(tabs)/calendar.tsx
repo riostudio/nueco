@@ -6,6 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { eventsApi } from '../../src/api';
+import { decryptEventsFromServer } from '../../src/crypto/eventCrypto';
 import { CalendarEvent } from '../../src/types';
 import { MONTH_NAMES, DAY_NAMES } from '../../src/theme';
 import { UserAvatar } from '../../src/auth';
@@ -35,7 +36,7 @@ export default function CalendarScreen() {
   const loadEvents = useCallback(async () => {
     try {
       setLoading(true);
-      const data = await eventsApi.getAll(month + 1, year);
+      const data = await decryptEventsFromServer<CalendarEvent>(await eventsApi.getAll(month + 1, year));
       setEvents(data);
     } catch (e) {
       console.error('Failed to load events:', e);
@@ -121,7 +122,7 @@ export default function CalendarScreen() {
         ))}
       </View>
 
-      {/* Calendar Grid — always rendered instantly (the grid is derived from the date); event
+      {/* Calendar Grid - always rendered instantly (the grid is derived from the date); event
           day-markers fill in when events load, instead of replacing the whole grid with a spinner. */}
       {(
         <View style={s.grid}>
@@ -163,7 +164,7 @@ export default function CalendarScreen() {
         </View>
       )}
 
-      {/* Selected Day Info — only show when events exist */}
+      {/* Selected Day Info - only show when events exist */}
       {selectedDayEvents.length > 0 && (
         <>
           <TouchableOpacity

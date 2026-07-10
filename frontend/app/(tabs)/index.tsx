@@ -1,22 +1,29 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
-  FlatList, RefreshControl, ActivityIndicator, Modal, Animated,
+  FlatList, RefreshControl, ActivityIndicator, Modal, Animated, Alert, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { notesApi, eventsApi } from '../../src/api';
+import Constants from 'expo-constants';
+import * as StoreReview from 'expo-store-review';
+import { notesApi, eventsApi, feedbackApi } from '../../src/api';
 import { CalendarEvent } from '../../src/types';
 import { C } from '../../src/theme';
 import { UserAvatar, useAuth } from '../../src/auth';
-import { trackNoteSearched, trackNoteDeleted } from '../../src/analytics';
+import { trackNoteSearched, trackNoteDeleted, trackEvent } from '../../src/analytics';
 import { useOfflineNotes } from '../../src/useOfflineNotes';
 import OfflineBanner from '../../src/components/OfflineBanner';
+import FeedbackToast from '../../src/components/FeedbackToast';
+import FeedbackCommentModal from '../../src/components/FeedbackCommentModal';
 import { getSyncQueue, getLocalNotes, LocalNote } from '../../src/offlineSync';
 import { parseSourcePost } from '../../src/share/socialSource';
 import { plainTextFromContent } from '../../src/textContent';
 import { takeNewNoteId } from '../../src/newNoteSignal';
+import { shouldShowFeedbackToast, markFeedbackToastSeen, getNoteCreatedCount } from '../../src/feedbackToast';
+
+const FEEDBACK_TOAST_DELAY_MS = 4000;
 
 // Extend C with surfaceHi for this screen
 const Colors = { ...C, surfaceHi: '#FFF8E1' };
@@ -64,6 +71,12 @@ export default function NotesScreen() {
   const [noteToDelete, setNoteToDelete] = useState<{ id: string; title: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  // One-time "Enjoying MemoPad?" feedback toast (fires after the 5th note ever created).
+  const [showFeedbackToast, setShowFeedbackToast] = useState(false);
+  const [showFeedbackComment, setShowFeedbackComment] = useState(false);
+  const [submittingFeedback, setSubmittingFeedback] = useState(false);
+  const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
 
   useEffect(() => {
     if (searchTimer.current) clearTimeout(searchTimer.current);
@@ -106,7 +119,7 @@ export default function NotesScreen() {
       setPendingCount(queue.length);
       
       // Fetch events for notes that have linked_event_id.
-      // Read fresh notes from AsyncStorage — the `notes` closure is stale here
+      // Read fresh notes from AsyncStorage - the `notes` closure is stale here
       // because setNotes() was called asynchronously inside syncAndReload().
       const freshNotes = await getLocalNotes();
       const eventIds = freshNotes
@@ -170,8 +183,73 @@ export default function NotesScreen() {
           Animated.timing(glowAnim, { toValue: 0, duration: 520, useNativeDriver: false }),
         ]).start(() => setGlowNoteId(null));
       }
+
+      // This screen is the default/first tab, so this focus effect fires both on a cold launch
+      // and every time the user returns here (e.g. from the editor) - one hook covers both of the
+      // "next app open" / "after a short delay" trigger conditions from the feedback-toast plan.
+      // Delayed (not instant) so it never interrupts right after saving a note.
+      feedbackTimer.current = setTimeout(async () => {
+        if (await shouldShowFeedbackToast()) {
+          setShowFeedbackToast(true);
+          trackEvent('feedback_toast_shown');
+        }
+      }, FEEDBACK_TOAST_DELAY_MS);
+
+      return () => { if (feedbackTimer.current) clearTimeout(feedbackTimer.current); };
     }, [loadNotes, glowAnim])
   );
+
+  const dismissFeedbackToast = useCallback(() => {
+    setShowFeedbackToast(false);
+    markFeedbackToastSeen().catch(() => {});
+    trackEvent('feedback_toast_response', { value: 'dismissed' });
+  }, []);
+
+  const handleFeedbackThumbsUp = useCallback(() => {
+    setShowFeedbackToast(false);
+    markFeedbackToastSeen().catch(() => {});
+    trackEvent('feedback_toast_response', { value: 'positive' });
+    setTimeout(() => {
+      Alert.alert('Would you rate us?', 'A quick rating helps other people find MemoPad.', [
+        { text: 'Not now', style: 'cancel' },
+        {
+          text: 'Yes',
+          onPress: async () => {
+            trackEvent('feedback_toast_store_review_prompted');
+            try { await StoreReview.requestReview(); } catch {}
+          },
+        },
+      ]);
+    }, 400);
+  }, []);
+
+  const handleFeedbackThumbsDown = useCallback(() => {
+    setShowFeedbackToast(false);
+    markFeedbackToastSeen().catch(() => {});
+    trackEvent('feedback_toast_response', { value: 'negative' });
+    setShowFeedbackComment(true);
+  }, []);
+
+  const submitFeedbackComment = useCallback(async (tag: string | null, text: string) => {
+    setSubmittingFeedback(true);
+    try {
+      const noteCount = await getNoteCreatedCount();
+      await feedbackApi.submit({
+        sentiment: 'negative',
+        tag,
+        text,
+        note_count_at_submission: noteCount,
+        app_version: Constants.expoConfig?.version || 'unknown',
+        platform: Platform.OS,
+      });
+      trackEvent('feedback_toast_negative_reason_submitted', { tag, has_text: !!text });
+    } catch (e) {
+      console.error('Feedback submit failed:', e);
+    } finally {
+      setSubmittingFeedback(false);
+      setShowFeedbackComment(false);
+    }
+  }, []);
 
   // Polling for sync across devices - check for updates every 30 seconds
   useEffect(() => {
@@ -186,10 +264,14 @@ export default function NotesScreen() {
   }, [loadNotes, refreshing, loading]);
 
   const filteredNotes = debouncedSearch
-    ? notes.filter((n) =>
-        n.title?.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
-        plainTextFromContent(n.content || '').toLowerCase().includes(debouncedSearch.toLowerCase())
-      )
+    ? notes.filter((n) => {
+        const q = debouncedSearch.toLowerCase();
+        return (
+          n.title?.toLowerCase().includes(q) ||
+          plainTextFromContent(n.content || '').toLowerCase().includes(q) ||
+          n.tags?.some((tag) => tag.name?.toLowerCase().includes(q))
+        );
+      })
     : notes;
   const pinnedNotes = filteredNotes.filter((n) => n.is_pinned);
   const otherNotes = filteredNotes.filter((n) => !n.is_pinned);
@@ -232,7 +314,7 @@ export default function NotesScreen() {
 
   const renderCard = (note: LocalNote) => {
     const linkedEvent = note.linked_event_id ? eventsMap[note.linked_event_id] : null;
-    // A shared social post has no title/body of its own — surface its platform + caption so
+    // A shared social post has no title/body of its own - surface its platform + caption so
     // the list entry isn't blank.
     const src = parseSourcePost(note.content || '').sourcePost;
     const body = stripMd(note.content || '');
@@ -282,7 +364,7 @@ export default function NotesScreen() {
               style={s.actionBtn}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             >
-              <MaterialIcons name="delete-outline" size={22} color={C.error} />
+              <MaterialIcons name="delete" size={22} color={C.error} />
             </TouchableOpacity>
           </View>
         </View>
@@ -425,6 +507,19 @@ export default function NotesScreen() {
         <MaterialIcons name="add" size={32} color={C.primaryFg} />
         <Text style={s.fabText}>New Note</Text>
       </TouchableOpacity>
+
+      <FeedbackToast
+        visible={showFeedbackToast}
+        onThumbsUp={handleFeedbackThumbsUp}
+        onThumbsDown={handleFeedbackThumbsDown}
+        onDismiss={dismissFeedbackToast}
+      />
+      <FeedbackCommentModal
+        visible={showFeedbackComment}
+        submitting={submittingFeedback}
+        onSubmit={submitFeedbackComment}
+        onSkip={() => setShowFeedbackComment(false)}
+      />
 
       {/* Delete Confirmation Modal */}
       <Modal

@@ -65,7 +65,7 @@ export default function WelcomeScreen() {
           </TouchableOpacity>
 
           {/* Diagnostic: on-device E2EE self-check & PBKDF2 benchmark.
-              Dev/preview only — hidden in production so end users never see it. */}
+              Dev/preview only - hidden in production so end users never see it. */}
           {DIAGNOSTICS_ENABLED && (
             <TouchableOpacity
               onPress={() => router.push('/crypto-check' as Href)}

@@ -4,8 +4,8 @@
  * Threat model: the server only ever stores ciphertext + opaque wrapped keys.
  * Note content is encrypted on-device with AES-256-GCM under a per-user random
  * Data Encryption Key (DEK). The DEK is wrapped by two Key Encryption Keys
- * (KEKs) derived via scrypt — one from the user's password, one from a recovery
- * code — so a forgotten password can be recovered without the server ever seeing
+ * (KEKs) derived via scrypt - one from the user's password, one from a recovery
+ * code - so a forgotten password can be recovered without the server ever seeing
  * the DEK or plaintext.
  *
  * Pure/portable: depends only on @noble (audited) + TextEncoder/Decoder for the
@@ -27,11 +27,11 @@ const KEY_BYTES = 32; // AES-256
 const SALT_BYTES = 16;
 
 /**
- * PBKDF2 cost params. PBKDF2-HMAC-SHA-512 @ 600k iterations — above the OWASP-2023
+ * PBKDF2 cost params. PBKDF2-HMAC-SHA-512 @ 600k iterations - above the OWASP-2023
  * baseline (210k for SHA-512), chosen from an on-device benchmark: ~350 ms/login on
  * a mid-range Android (moto g56), ~1 s on a phone 3× slower. At native speed
  * (quick-crypto) this is comfortably within the 250–500 ms login budget.
- * (Not memory-hard like scrypt/Argon2 — see E2EE-DESIGN.md for the tradeoff.)
+ * (Not memory-hard like scrypt/Argon2 - see E2EE-DESIGN.md for the tradeoff.)
  */
 export interface KdfParams {
   iterations: number;
@@ -144,7 +144,7 @@ export function configureKdf(fn: KdfImpl): void {
 
 export function deriveKek(secret: string, salt: Uint8Array, params: KdfParams = DEFAULT_KDF): Uint8Array {
   if (!kdfImpl) {
-    throw new Error('E2EE KDF not configured — import the kdf-native wiring at app entry (see kdf-native.ts)');
+    throw new Error('E2EE KDF not configured - import the kdf-native wiring at app entry (see kdf-native.ts)');
   }
   return kdfImpl(utf8(secret), salt, params);
 }
@@ -212,7 +212,7 @@ export function unlockWithRecovery(bundle: EscrowBundle, recoveryCode: string): 
 }
 
 /** Re-wrap a known DEK under a new password (fresh salt). Used when the DEK is
- * already in hand — e.g. an authenticated password change. Preserves the DEK. */
+ * already in hand - e.g. an authenticated password change. Preserves the DEK. */
 export function rewrapWithDek(bundle: EscrowBundle, dek: Uint8Array, newPassword: string): EscrowBundle {
   const pSalt = randomBytes(SALT_BYTES);
   const pKek = deriveKek(newPassword, pSalt, bundle.kdf_params);

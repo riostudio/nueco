@@ -1,7 +1,7 @@
 /**
  * Note content ↔ plain text. Notes now store rich HTML (from the TenTap editor); older notes are
  * plain text with legacy markdown markers. This module renders either into a clean single string for
- * list previews, search, and share text — and is the single home for HTML-entity decoding (also used
+ * list previews, search, and share text - and is the single home for HTML-entity decoding (also used
  * by the link-unfurl parser).
  *
  * Pure + node-testable: no react-native imports.
@@ -33,7 +33,7 @@ export function decodeEntities(s: string): string {
 /**
  * Plain text (shared/dictated) → HTML for the rich-text editor, preserving structure: a blank line
  * starts a new paragraph and a single newline becomes a <br>. HTML-escapes the text so it renders
- * literally and can't inject markup. Roughly the inverse of plainTextFromContent — used so shared
+ * literally and can't inject markup. Roughly the inverse of plainTextFromContent - used so shared
  * text keeps its line breaks/paragraphs instead of collapsing when dropped into the HTML editor.
  */
 export function textToHtml(text: string): string {

@@ -7,7 +7,7 @@
  *  - present reminders while the app is foregrounded,
  *  - deep-link into the event when a reminder is tapped.
  *
- * All best-effort: push may be unavailable (web, no permission, FCM/APNs not configured) — nothing
+ * All best-effort: push may be unavailable (web, no permission, FCM/APNs not configured) - nothing
  * here throws into the app.
  */
 import { Platform } from 'react-native';

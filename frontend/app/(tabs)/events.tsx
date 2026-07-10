@@ -9,8 +9,9 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { eventsApi } from '../../src/api';
+import { decryptEventsFromServer } from '../../src/crypto/eventCrypto';
 import { CalendarEvent } from '../../src/types';
-import { MONTH_NAMES } from '../../src/theme';
+import { MONTH_NAMES, DAY_NAMES } from '../../src/theme';
 import { UserAvatar, useAuth } from '../../src/auth';
 
 const C = {
@@ -38,7 +39,7 @@ function formatEventTime(iso: string): string {
 
 function formatEventDate(iso: string): string {
   const d = new Date(iso);
-  return `${MONTH_NAMES[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+  return `${DAY_NAMES[d.getDay()]}, ${MONTH_NAMES[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
 }
 
 function isEventToday(iso: string): boolean {
@@ -105,7 +106,7 @@ export default function EventsScreen() {
 
   const loadEvents = useCallback(async () => {
     try {
-      const data = await eventsApi.getAll();
+      const data = await decryptEventsFromServer<CalendarEvent>(await eventsApi.getAll());
       setEvents(data);
       AsyncStorage.setItem(cacheKey, JSON.stringify(data)).catch(() => {});
     } catch (e) {
@@ -170,7 +171,7 @@ export default function EventsScreen() {
     if (fabExpanded) return;
     setFabExpanded(true);
     Animated.parallel([
-      Animated.spring(fabWidth, { toValue: 160, useNativeDriver: false, friction: 8 }),
+      Animated.spring(fabWidth, { toValue: 200, useNativeDriver: false, friction: 8 }),
       Animated.timing(textOpacity, { toValue: 1, duration: 200, useNativeDriver: false }),
     ]).start();
   };
@@ -281,7 +282,13 @@ export default function EventsScreen() {
             </View>
 
             {group.events.map((event) => (
-              <View key={event.id} testID={`event-card-${event.id}`} style={s.eventCard}>
+              <TouchableOpacity
+                key={event.id}
+                testID={`event-card-${event.id}`}
+                style={s.eventCard}
+                activeOpacity={0.7}
+                onPress={() => router.push({ pathname: '/event-editor', params: { eventId: event.id } })}
+              >
                 <View style={s.eventTimeCol}>
                   <Text style={s.timeStart}>{formatEventTime(event.start_time)}</Text>
                   <Text style={s.timeEnd}>{formatEventTime(event.end_time)}</Text>
@@ -304,19 +311,25 @@ export default function EventsScreen() {
                   <TouchableOpacity
                     testID={`edit-event-${event.id}`}
                     style={s.actionBtn}
-                    onPress={() => router.push({ pathname: '/event-editor', params: { eventId: event.id } })}
+                    onPress={(e) => {
+                      e.stopPropagation();
+                      router.push({ pathname: '/event-editor', params: { eventId: event.id } });
+                    }}
                   >
                     <MaterialIcons name="edit" size={20} color={C.secondary} />
                   </TouchableOpacity>
                   <TouchableOpacity
                     testID={`delete-event-${event.id}`}
                     style={s.actionBtn}
-                    onPress={() => handleDeletePress(event.id, event.title)}
+                    onPress={(e) => {
+                      e.stopPropagation();
+                      handleDeletePress(event.id, event.title);
+                    }}
                   >
                     <MaterialIcons name="delete" size={20} color={C.error} />
                   </TouchableOpacity>
                 </View>
-              </View>
+              </TouchableOpacity>
             ))}
           </View>
         )}
@@ -463,7 +476,7 @@ const s = StyleSheet.create({
     width: 64, height: 64,
     justifyContent: 'center', alignItems: 'center',
   },
-  fabText: { fontSize: 16, fontWeight: '600', color: C.primaryFg, marginRight: 16 },
+  fabText: { fontSize: 20, fontWeight: '600', color: C.primaryFg, marginRight: 16 },
   // Modal styles
   modalOverlay: {
     flex: 1,

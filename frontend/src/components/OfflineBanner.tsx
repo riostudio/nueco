@@ -20,7 +20,7 @@ export default function OfflineBanner({ online, isSyncing, pendingCount }: Props
   const [showSyncBanner, setShowSyncBanner] = useState(false);
   const prevOnline = useRef(online);
 
-  // Detect coming back online — show banner
+  // Detect coming back online - show banner
   useEffect(() => {
     if (!prevOnline.current && online) {
       setShowSyncBanner(true);

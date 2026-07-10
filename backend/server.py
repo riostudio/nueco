@@ -167,31 +167,37 @@ class NoteResponse(BaseModel):
 class EventCreate(BaseModel):
     title: str
     description: str = ""
+    location: str = ""
     start_time: str
     end_time: str
     linked_note_ids: List[str] = []
     reminder_minutes: Optional[int] = None  # Minutes before event to remind
     device_calendar_event_id: Optional[str] = None  # ID from device calendar
+    enc_version: Optional[int] = None  # E2EE: when set, title/description/location are client-side ciphertext (AES-256-GCM). None/absent means legacy plaintext.
 
 class EventUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
+    location: Optional[str] = None
     start_time: Optional[str] = None
     end_time: Optional[str] = None
     linked_note_ids: Optional[List[str]] = None
     reminder_minutes: Optional[int] = None
     device_calendar_event_id: Optional[str] = None
+    enc_version: Optional[int] = None
 
 class EventResponse(BaseModel):
     id: str
     title: str
     description: str
+    location: str = ""
     start_time: str
     end_time: str
     linked_note_ids: List[str]
     reminder_minutes: Optional[int] = None
     device_calendar_event_id: Optional[str] = None
     user_id: Optional[str] = None
+    enc_version: Optional[int] = None
     created_at: str
 
 # Paginated response models
@@ -470,7 +476,7 @@ async def attachment_download_url(req: DownloadUrlRequest, current_user: dict = 
         url = s3.generate_presigned_url(
             "get_object",
             Params={"Bucket": S3_BUCKET, "Key": req.key},
-            ExpiresIn=7 * 24 * 3600,  # 7 days (SigV4 max) — covers tap-to-open and shared links
+            ExpiresIn=7 * 24 * 3600,  # 7 days (SigV4 max) - covers tap-to-open and shared links
         )
     except (ClientError, BotoCoreError) as e:
         logger.error(f"Failed to presign download for {req.key}: {e}")
@@ -586,21 +592,42 @@ def compute_reminder_fields(start_time_iso: Optional[str], reminder_minutes: Opt
     return {"reminder_fire_at": fire_at.isoformat(), "reminder_status": status, "reminder_claimed_at": None}
 
 
+# Same rationale as _CIPHERTEXT_HEADROOM above: event fields may arrive as E2EE
+# ciphertext (Stage 5), so the wire caps carry the same 5x headroom over the intended
+# plaintext limits.
+MAX_EVENT_TITLE_CHARS = 200 * _CIPHERTEXT_HEADROOM
+MAX_EVENT_DESCRIPTION_CHARS = 5_000 * _CIPHERTEXT_HEADROOM
+MAX_EVENT_LOCATION_CHARS = 300 * _CIPHERTEXT_HEADROOM
+
+
+def _validate_event_payload(title=None, description=None, location=None):
+    """Reject oversized event fields with 413. Only checks provided (non-None) fields."""
+    if title is not None and len(title) > MAX_EVENT_TITLE_CHARS:
+        raise HTTPException(status_code=413, detail=f"Title too long (max {MAX_EVENT_TITLE_CHARS} characters)")
+    if description is not None and len(description) > MAX_EVENT_DESCRIPTION_CHARS:
+        raise HTTPException(status_code=413, detail=f"Description too long (max {MAX_EVENT_DESCRIPTION_CHARS} characters)")
+    if location is not None and len(location) > MAX_EVENT_LOCATION_CHARS:
+        raise HTTPException(status_code=413, detail=f"Location too long (max {MAX_EVENT_LOCATION_CHARS} characters)")
+
+
 # ---- Events Endpoints ----
 
 @api_router.post("/events", response_model=EventResponse)
 async def create_event(event: EventCreate, current_user: dict = Depends(get_current_user)):
+    _validate_event_payload(event.title, event.description, event.location)
     user_id = current_user.get("id") or str(current_user.get("_id", ""))
     doc = {
         "id": str(uuid.uuid4()),
         "title": event.title,
         "description": event.description,
+        "location": event.location,
         "start_time": event.start_time,
         "end_time": event.end_time,
         "linked_note_ids": event.linked_note_ids,
         "reminder_minutes": event.reminder_minutes,
         "device_calendar_event_id": event.device_calendar_event_id,
         "user_id": user_id,
+        "enc_version": event.enc_version,
         "created_at": datetime.now(timezone.utc).isoformat(),
         **compute_reminder_fields(event.start_time, event.reminder_minutes),
     }
@@ -626,16 +653,18 @@ async def get_events(
         query = {"user_id": user_id, "start_time": {"$gte": start, "$lt": end}}
     # Optimized query with field projection
     events = await db.events.find(query, {
-        "_id": 0, 
-        "id": 1, 
-        "title": 1, 
-        "description": 1, 
-        "start_time": 1, 
-        "end_time": 1, 
-        "linked_note_ids": 1, 
-        "reminder_minutes": 1, 
-        "device_calendar_event_id": 1, 
+        "_id": 0,
+        "id": 1,
+        "title": 1,
+        "description": 1,
+        "location": 1,
+        "start_time": 1,
+        "end_time": 1,
+        "linked_note_ids": 1,
+        "reminder_minutes": 1,
+        "device_calendar_event_id": 1,
         "user_id": 1,
+        "enc_version": 1,
         "created_at": 1
     }).sort("start_time", 1).to_list(100)  # Reduced limit
     return [EventResponse(**e) for e in events]
@@ -675,6 +704,7 @@ async def get_events_batch(
 
 @api_router.put("/events/{event_id}", response_model=EventResponse)
 async def update_event(event_id: str, update: EventUpdate, current_user: dict = Depends(get_current_user)):
+    _validate_event_payload(update.title, update.description, update.location)
     user_id = current_user.get("id") or str(current_user.get("_id", ""))
     existing = await db.events.find_one({"id": event_id, "user_id": user_id})
     if not existing:
@@ -821,7 +851,7 @@ async def push_tick(request: Request):
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat()
 
-    # 1) Recover stuck claims — a prior tick crashed between claim and send. Return them to 'pending'.
+    # 1) Recover stuck claims - a prior tick crashed between claim and send. Return them to 'pending'.
     stuck_before = (now - timedelta(minutes=5)).isoformat()
     await db.events.update_many(
         {"reminder_status": "claimed", "reminder_claimed_at": {"$lt": stuck_before}},
@@ -852,17 +882,21 @@ async def push_tick(request: Request):
         if not tokens:
             await db.events.update_one({"id": ev["id"]}, {"$set": {"reminder_status": "sent"}})
             continue
+        # E2EE (Stage 5): an encrypted title is ciphertext to the server, so a reminder
+        # push falls back to a generic title rather than showing garbled text. This is
+        # a documented non-goal, not a bug - see docs/E2EE-DESIGN.md.
+        push_title = 'Event Reminder' if ev.get('enc_version') else (ev.get('title') or 'Event Reminder')
         for t in tokens:
             messages.append((ev["id"], t["token"], {
                 "to": t["token"],
-                "title": f"⏰ {ev.get('title') or 'Event Reminder'}",
+                "title": f"⏰ {push_title}",
                 "body": f"Starts in {reminder_label(ev.get('reminder_minutes'))}",
                 "data": {"eventId": ev["id"], "kind": "event-reminder"},
                 "sound": "default",
                 "channelId": "event-reminders",
             }))
 
-    # 4) Batch-send (<=100/call). Expo returns one result PER ITEM — walk them individually.
+    # 4) Batch-send (<=100/call). Expo returns one result PER ITEM - walk them individually.
     processed_event_ids = set()  # events whose batch got any response -> move to 'sent'
     receipts = []
     async with httpx.AsyncClient(timeout=30) as http:
@@ -873,7 +907,7 @@ async def push_tick(request: Request):
                                        json=[m for (_e, _t, m) in batch])
                 results = resp.json().get("data", [])
             except Exception as e:
-                # Whole call failed (rate limit / 5xx) — leave events 'claimed'; recovery retries.
+                # Whole call failed (rate limit / 5xx) - leave events 'claimed'; recovery retries.
                 logger.error(f"Expo push send failed (batch left claimed): {e}")
                 continue
             for (eid, token, _msg), result in zip(batch, results):
@@ -898,7 +932,7 @@ async def push_tick(request: Request):
 @api_router.post("/internal/push/receipts")
 async def push_receipts_tick(request: Request):
     """Cron-driven (~every 15-20 min). Resolves Expo delivery receipts; prunes tokens Expo reports
-    as DeviceNotRegistered — the main way stale tokens (uninstall/reinstall) get cleaned up."""
+    as DeviceNotRegistered - the main way stale tokens (uninstall/reinstall) get cleaned up."""
     _require_tick_secret(request)
     now = datetime.now(timezone.utc)
     ready_before = (now - timedelta(minutes=15)).isoformat()   # receipts are ready ~15 min after send
@@ -923,7 +957,7 @@ async def push_receipts_tick(request: Request):
             for r in batch:
                 rec = data.get(r["ticket_id"])
                 if rec is None:
-                    if r["created_at"] <= give_up_before:  # never resolved — stop chasing it
+                    if r["created_at"] <= give_up_before:  # never resolved - stop chasing it
                         await db.push_receipts.update_one({"_id": r["_id"]}, {"$set": {"checked": True}})
                     continue
                 if rec.get("status") == "error":
@@ -1106,6 +1140,87 @@ Return only the summary, no explanations."""
         )
 
 
+# ---- Feedback Endpoint (5th-note feedback toast) ----
+
+MAX_FEEDBACK_TEXT_CHARS = 2000
+
+class FeedbackCreate(BaseModel):
+    sentiment: str  # "positive" | "negative"
+    tag: Optional[str] = None
+    text: str = ""
+    note_count_at_submission: int = 0
+    app_version: str = ""
+    platform: str = ""
+
+
+def _parse_ai_triage(raw: str) -> dict:
+    """Best-effort parse of the triage model's JSON reply, tolerating a markdown code fence."""
+    cleaned = raw.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`")
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:]
+    return _json.loads(cleaned)
+
+
+@api_router.post("/feedback")
+async def submit_feedback(body: FeedbackCreate, current_user: dict = Depends(get_current_user)):
+    """Store a feedback-toast response, AI-triaging any free-text comment (never blocks the
+    submission if triage fails -- the record is saved either way)."""
+    user_id = current_user.get("id") or str(current_user.get("_id", ""))
+    if body.sentiment not in ("positive", "negative"):
+        raise HTTPException(status_code=400, detail="Invalid sentiment")
+    if len(body.text) > MAX_FEEDBACK_TEXT_CHARS:
+        raise HTTPException(status_code=400, detail="Feedback text too long")
+    if not rate_limiter.is_allowed(f"feedback:{user_id}", max_requests=5, window_seconds=86400):
+        raise HTTPException(status_code=429, detail="Too many feedback submissions, please try again later")
+
+    doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "sentiment": body.sentiment,
+        "tag": body.tag,
+        "text": body.text,
+        "aiCategory": None,
+        "aiPriority": None,
+        "aiSummary": None,
+        "appVersion": body.app_version,
+        "platform": body.platform,
+        "noteCountAtSubmission": body.note_count_at_submission,
+        "createdAt": datetime.now(timezone.utc).isoformat(),
+        "status": "new",
+    }
+
+    if body.text.strip():
+        try:
+            client = get_openai_client()
+            response = await client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You triage user feedback for a note-taking app. Respond with ONLY "
+                            'compact JSON: {"category": one of bug|feature_request|ux_friction|'
+                            'praise|unclear, "priority": one of low|medium|high|urgent (urgent = '
+                            'crash, data loss, or billing issue), "summary": a single short sentence}.'
+                        ),
+                    },
+                    {"role": "user", "content": body.text},
+                ],
+                temperature=0.2,
+            )
+            parsed = _parse_ai_triage(response.choices[0].message.content or "")
+            doc["aiCategory"] = parsed.get("category")
+            doc["aiPriority"] = parsed.get("priority")
+            doc["aiSummary"] = parsed.get("summary")
+        except Exception as e:
+            logger.error(f"Feedback AI triage failed: {e}")
+
+    await db.feedback.insert_one(doc)
+    return {"id": doc["id"], "status": "received"}
+
+
 # ---- Health Check ----
 
 @api_router.get("/health")
@@ -1144,7 +1259,7 @@ async def apk_download_page():
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>MemoPad staging</title>
 <div style="font-family:-apple-system,sans-serif;max-width:480px;margin:48px auto;padding:0 20px;text-align:center">
-  <h1 style="color:#D84315">MemoPad — staging build</h1>
+  <h1 style="color:#D84315">MemoPad - staging build</h1>
   <p>{size_mb:.0f} MB</p>
   <p><a href="{APK_DOWNLOAD_ROUTE}" style="display:inline-block;padding:16px 32px;background:#D84315;color:#fff;text-decoration:none;border-radius:12px;font-size:18px;font-weight:600">Download &amp; install APK</a></p>
   <p style="color:#78909C;font-size:14px">Enable “Install from unknown sources” when prompted.</p>
@@ -1160,6 +1275,21 @@ async def apk_download_file():
         media_type="application/vnd.android.package-archive",
         filename=os.path.basename(APK_DOWNLOAD_PATH),
     )
+
+
+# ---- Privacy policy ----
+# Served from this backend (same origin as the API) rather than the memopad.app
+# domain, which isn't wired to any web host today - only used for outbound email.
+# The Settings screen's Privacy Policy link points here.
+PRIVACY_POLICY_PATH = str(ROOT_DIR / "static" / "privacy.html")
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+async def privacy_policy_page():
+    if not os.path.isfile(PRIVACY_POLICY_PATH):
+        raise HTTPException(status_code=404, detail="Privacy policy not available")
+    with open(PRIVACY_POLICY_PATH, "r", encoding="utf-8") as f:
+        return f.read()
 
 
 # ---- CORS Configuration ----

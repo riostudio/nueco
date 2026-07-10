@@ -1,5 +1,5 @@
 /**
- * A small determinate radial (circular) progress indicator — used for attachment
+ * A small determinate radial (circular) progress indicator - used for attachment
  * upload progress in the editor. `progress` is 0..1.
  */
 import React from 'react';
@@ -10,7 +10,7 @@ export function RadialProgress({
   progress,
   size = 26,
   strokeWidth = 3,
-  color = '#1E88E5', // brighter blue (Blue 600) — the loading/upload progress arc
+  color = '#1E88E5', // brighter blue (Blue 600) - the loading/upload progress arc
   trackColor = C.borderSub,
 }: {
   progress: number;

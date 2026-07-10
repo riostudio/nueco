@@ -3,7 +3,7 @@
  *
  * Pure + portable: the one side effect (reading a small image to base64) is INJECTED via
  * `ShareDeps`, so this maps cleanly and unit-tests in Node without React Native. Files that
- * aren't inlined are emitted as `pendingFiles` descriptors — the editor uploads those with
+ * aren't inlined are emitted as `pendingFiles` descriptors - the editor uploads those with
  * progress (so the user sees a filename + radial progress instead of a blank wait).
  *
  * Mapping (see the spec table):
@@ -103,10 +103,10 @@ export async function normalizeShareIntent(intent: RawShareIntent, deps: ShareDe
     draft.sourcePost = { platform: brand.platform, label: brand.label, url, title: caption, kind: 'link' };
     draft.tags = [LINK_TAG];
   } else if (text) {
-    // Preserve the shared text's paragraphs/line breaks by converting to HTML — otherwise the
+    // Preserve the shared text's paragraphs/line breaks by converting to HTML - otherwise the
     // newlines collapse when the plain text is seeded into the rich-text (HTML) editor.
     draft.content = textToHtml(text);
-    draft.needsTitle = true; // body-only note — prompt for a title
+    draft.needsTitle = true; // body-only note - prompt for a title
   }
 
   const files = intent.files ?? [];
@@ -124,12 +124,12 @@ export async function normalizeShareIntent(intent: RawShareIntent, deps: ShareDe
         draft.images.push(`data:${mime};base64,${b64}`);
         inlineBytes += size;
       } catch {
-        // Couldn't read for inline — fall back to uploading it as a file.
+        // Couldn't read for inline - fall back to uploading it as a file.
         draft.pendingFiles.push({ uri: f.path, name, mimeType: mime || 'application/octet-stream', size });
       }
     } else {
       // Large image, doc, audio, video, or unknown type → uploaded by the editor.
-      if (!mime) deps.onWarn?.('Unrecognized file type — attaching as a file.');
+      if (!mime) deps.onWarn?.('Unrecognized file type - attaching as a file.');
       draft.pendingFiles.push({ uri: f.path, name, mimeType: mime || 'application/octet-stream', size });
     }
   }
@@ -163,7 +163,7 @@ export async function normalizeShareIntent(intent: RawShareIntent, deps: ShareDe
     }
   }
 
-  // Title fallback from the shared file(s) when we don't already have one (skip social cards —
+  // Title fallback from the shared file(s) when we don't already have one (skip social cards -
   // the card owns the header, so a bare photo/video share under a card keeps an empty title).
   if (!draft.title && !draft.sourcePost && files.length > 0) {
     const allImages = files.every((f) => (f.mimeType || '').toLowerCase().startsWith('image/'));
@@ -171,7 +171,7 @@ export async function normalizeShareIntent(intent: RawShareIntent, deps: ShareDe
     draft.needsTitle = false;
   }
 
-  // Nothing usable arrived — let the UI prompt for a title (a social card counts as content).
+  // Nothing usable arrived - let the UI prompt for a title (a social card counts as content).
   if (!draft.title && !draft.content && !draft.sourcePost && draft.images.length === 0 && draft.pendingFiles.length === 0) {
     draft.needsTitle = true;
   }

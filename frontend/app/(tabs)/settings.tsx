@@ -11,9 +11,12 @@ import { accountApi } from '../../src/api';
 import { isAnalyticsEnabled, setAnalyticsEnabled } from '../../src/analytics';
 import { clearLocalData } from '../../src/offlineSync';
 import { exportMyData } from '../../src/dataExport';
+import { BACKEND_BASE_URL } from '../../src/backendBaseUrl';
 
-// TODO: replace with your real hosted privacy policy URL.
-const PRIVACY_POLICY_URL = 'https://memopad.app/privacy';
+// Served from the backend itself (same origin as the API) - see backend/server.py's
+// GET /privacy route and backend/static/privacy.html. Swap to a memopad.app URL if
+// that domain ever gets a custom-domain mapping to this Railway service.
+const PRIVACY_POLICY_URL = `${BACKEND_BASE_URL}/privacy`;
 
 const C = {
   primary: '#D84315',

@@ -136,6 +136,17 @@ export const pushApi = {
     fetchApi('/push/unregister', { method: 'POST', body: JSON.stringify({ token, platform }) }),
 };
 
+export const feedbackApi = {
+  submit: (data: {
+    sentiment: 'positive' | 'negative';
+    tag?: string | null;
+    text?: string;
+    note_count_at_submission: number;
+    app_version: string;
+    platform: string;
+  }) => fetchApi('/feedback', { method: 'POST', body: JSON.stringify(data) }),
+};
+
 // ---- Attachments ----
 
 export interface AttachmentMeta {
@@ -164,7 +175,7 @@ export const attachmentsApi = {
 /**
  * Upload a local file to storage via a presigned POST, returning the metadata to
  * embed in a note. Throws on failure (caller decides how to surface it). Bytes go
- * straight to object storage — never base64-inlined into the note (that caused the
+ * straight to object storage - never base64-inlined into the note (that caused the
  * AsyncStorage CursorWindow bug).
  */
 export type UploadFile = { uri: string; name: string; mimeType: string; size: number };

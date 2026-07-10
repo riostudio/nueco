@@ -1,6 +1,6 @@
 /**
  * Key-session orchestration (Stage 3): bootstrap the per-user DEK at login and
- * keep it in the device keystore. No note encryption happens here — that's Stage 4.
+ * keep it in the device keystore. No note encryption happens here - that's Stage 4.
  *
  * Lifecycle:
  *  - First login / legacy user (no escrow): create DEK + recovery code, escrow it,
@@ -24,7 +24,7 @@ import { storeDek, clearDek, loadDek } from './keystore';
 
 export type BootstrapResult =
   | { status: 'unlocked' }                        // existing escrow, password worked
-  | { status: 'created'; recoveryCode: string }   // new escrow — show the code once
+  | { status: 'created'; recoveryCode: string }   // new escrow - show the code once
   | { status: 'needs_recovery' };                 // password no longer unwraps (post-reset)
 
 /**

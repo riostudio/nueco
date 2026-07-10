@@ -30,13 +30,13 @@ export function ShareIntentHandler() {
   useEffect(() => {
     if (!hasShareIntent || busy.current) return;
     // A share can only become a note once the user is signed in; if not, leave the
-    // intent pending — it'll be picked up after auth (this effect re-runs on isAuthenticated).
+    // intent pending - it'll be picked up after auth (this effect re-runs on isAuthenticated).
     if (!isAuthenticated) return;
 
     busy.current = true;
     (async () => {
       try {
-        // Files aren't uploaded here — they're staged as pendingFiles and the editor
+        // Files aren't uploaded here - they're staged as pendingFiles and the editor
         // uploads them with a visible radial progress.
         const draft = await normalizeShareIntent(shareIntent, {
           readBase64: (uri) => FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 }),

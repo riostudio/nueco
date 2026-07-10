@@ -3,6 +3,9 @@
 import 'react-native-get-random-values';
 // Registers the native PBKDF2 KDF for the E2EE core (pure-JS is too slow on Hermes).
 import '../src/crypto/kdf-native';
+// Defines the calendar-sync background task at module scope, so the OS can invoke it during a
+// headless launch that never reaches the (tabs) layout.
+import '../src/calendarSyncTask';
 import React, { useEffect } from 'react';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -45,6 +48,7 @@ function AppWithAnalytics() {
         <Stack.Screen name="editor" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="event-editor" options={{ presentation: 'modal' }} />
         <Stack.Screen name="change-password" options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="calendar-sync-settings" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="recovery-code" options={{ headerShown: false, gestureEnabled: false }} />
         <Stack.Screen name="recover-key" options={{ headerShown: false, gestureEnabled: false }} />
         <Stack.Screen name="crypto-check" options={{ animation: 'slide_from_right' }} />

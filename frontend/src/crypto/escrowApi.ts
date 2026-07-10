@@ -3,7 +3,7 @@
  *
  * The server stores only the opaque EscrowBundle (wrapped DEK blobs + salts +
  * KDF params). It never sees the DEK or note plaintext. GET returns 404 when the
- * user has no escrow yet (new or legacy user) — surfaced here as `null`.
+ * user has no escrow yet (new or legacy user) - surfaced here as `null`.
  */
 import { authStorage } from '../auth/storage/authStorage';
 import { BACKEND_API_BASE_URL } from '../backendBaseUrl';

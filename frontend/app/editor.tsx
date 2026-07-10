@@ -15,6 +15,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as WebBrowser from 'expo-web-browser';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { notesApi, eventsApi, transcribeApi, textProcessApi, attachmentsApi, uploadAttachmentWithProgress, type UploadFile } from '../src/api';
+import { decryptEventFromServer, decryptEventsFromServer } from '../src/crypto/eventCrypto';
 import { RadialProgress, SharedPostCard } from '../src/components';
 import { decryptNoteFromServer } from '../src/crypto/noteCrypto';
 import { createNoteOffline, updateNoteOffline, getLocalNotes, processSyncQueue } from '../src/offlineSync';
@@ -72,7 +73,7 @@ type EditorUiState = { isFocused: boolean; isBoldActive: boolean; isItalicActive
 // races the webview's readiness (it logs "Editor isn't ready yet" and drops the call, leaving the
 // body empty until tapped). Mounting this only once the content is known sidesteps the race.
 // Writing-area height bounds: TenTap's native auto-height is shimmed on Expo, so we grow the box
-// from the content instead (see bodyHeight) — min keeps a comfortable default, max caps runaway.
+// from the content instead (see bodyHeight) - min keeps a comfortable default, max caps runaway.
 const BODY_MIN_HEIGHT = 180;
 const BODY_MAX_HEIGHT = 720;
 const NoteBodyEditor = forwardRef<EditorApi, {
@@ -168,7 +169,7 @@ export default function EditorScreen() {
   // (below). We drive it imperatively via editorApiRef and mirror its UI state for the toolbar.
   const editorApiRef = useRef<EditorApi | null>(null);
   const [editorUi, setEditorUi] = useState<EditorUiState>({ isFocused: false, isBoldActive: false, isItalicActive: false, isBulletListActive: false });
-  // HTML to load into the editor once the note is available (null until loaded — editor waits).
+  // HTML to load into the editor once the note is available (null until loaded - editor waits).
   const [seedHtml, setSeedHtml] = useState<string | null>(isNew && shared !== '1' ? '' : null);
   const seededRef = useRef(false);
   const seedPlainRef = useRef(''); // plaintext of the seed, to detect the "seed echo" vs a real edit
@@ -203,12 +204,14 @@ export default function EditorScreen() {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // True when this note originated from a share intent (analytics + discard-on-cancel).
   const isSharedRef = useRef(false);
-  // True once the user actually edits — a pre-filled shared draft that's never touched
+  // True once the user actually edits - a pre-filled shared draft that's never touched
   // is discarded on back rather than silently saved.
   const userEditedRef = useRef(false);
   
   // State to track if note exists (for UI rendering like delete button)
   const [noteExists, setNoteExists] = useState(!isNew);
+  const [showDeleteNoteModal, setShowDeleteNoteModal] = useState(false);
+  const [deletingNote, setDeletingNote] = useState(false);
 
   useEffect(() => { titleRef.current = title; }, [title]);
   useEffect(() => { tagsRef.current = tags; }, [tags]);
@@ -272,7 +275,7 @@ export default function EditorScreen() {
   }, [noteId]);
 
   // Pre-fill from a shared draft (staged by ShareIntentHandler), then autosave it so the
-  // shared note persists automatically — no manual save/edit required.
+  // shared note persists automatically - no manual save/edit required.
   useEffect(() => {
     if (!(isNew && shared === '1')) return;
     const draft = takePendingShareDraft();
@@ -314,14 +317,14 @@ export default function EditorScreen() {
 
       let note: any;
       if (id.startsWith('local_')) {
-        // Not-yet-synced note — the local copy is all there is.
+        // Not-yet-synced note - the local copy is all there is.
         note = localCopy;
         if (!note) throw new Error('local note not found');
       } else {
         try {
           note = await decryptNoteFromServer(await notesApi.get(id));
         } catch (e) {
-          // Offline / fetch failed — fall back to the local copy if we have one.
+          // Offline / fetch failed - fall back to the local copy if we have one.
           if (!localCopy) throw e;
           note = localCopy;
         }
@@ -330,7 +333,7 @@ export default function EditorScreen() {
       // A shared-post card is persisted as a marker at the end of content; split it back out.
       const parsed = parseSourcePost(note.content || '');
       // Body already seeded from local (instant). Only seed from the server copy if we had no local
-      // copy — re-seeding after the WebView mounts can't take effect (initialContent is fixed).
+      // copy - re-seeding after the WebView mounts can't take effect (initialContent is fixed).
       if (!bodySeeded) {
         contentRef.current = parsed.content || '';
         setSeedHtml(parsed.content || '');
@@ -351,7 +354,7 @@ export default function EditorScreen() {
       // Fetch linked event details if exists
       if (note.linked_event_id) {
         try {
-          const event = await eventsApi.get(note.linked_event_id);
+          const event = await decryptEventFromServer(await eventsApi.get(note.linked_event_id));
           setLinkedEvent(event);
         } catch (e) {
           console.error('Failed to load linked event:', e);
@@ -368,6 +371,7 @@ export default function EditorScreen() {
   useEffect(() => {
     if (linkedEventId && !linkedEvent) {
       eventsApi.get(linkedEventId)
+        .then(decryptEventFromServer)
         .then(event => setLinkedEvent(event))
         .catch(e => console.error('Failed to load event:', e));
     } else if (!linkedEventId) {
@@ -393,7 +397,7 @@ export default function EditorScreen() {
             // Set the linked event ID
             setLinkedEventId(pendingEventId);
             // Fetch the event details
-            const event = await eventsApi.get(pendingEventId);
+            const event = await decryptEventFromServer(await eventsApi.get(pendingEventId));
             setLinkedEvent(event);
             return;
           }
@@ -413,7 +417,7 @@ export default function EditorScreen() {
               }
               setLinkedEventId(note.linked_event_id);
               // Fetch the event details
-              const event = await eventsApi.get(note.linked_event_id);
+              const event = await decryptEventFromServer(await eventsApi.get(note.linked_event_id));
               setLinkedEvent(event);
             }
           } catch (e) {
@@ -422,7 +426,7 @@ export default function EditorScreen() {
         } else if (linkedEventId) {
           // Just refresh event if we already have a linkedEventId
           try {
-            const event = await eventsApi.get(linkedEventId);
+            const event = await decryptEventFromServer(await eventsApi.get(linkedEventId));
             setLinkedEvent(event);
           } catch (e) {
             console.error('Failed to refresh event:', e);
@@ -437,7 +441,7 @@ export default function EditorScreen() {
   // Pull the newest HTML straight from the editor bridge. The reactive contentRef lags by the
   // editor's debounce, so persisting without this could write stale content. Raced against a
   // short timeout: if the webview bridge isn't ready yet, getHTML's message is silently dropped
-  // and its promise never settles — without the race, awaiting it would hang navigation.
+  // and its promise never settles - without the race, awaiting it would hang navigation.
   const syncLatestContent = useCallback(async () => {
     try {
       const latest = await Promise.race([
@@ -494,7 +498,7 @@ export default function EditorScreen() {
     saveTimerRef.current = setTimeout(async () => {
       setSaveStatus('Saving...');
       try {
-        // Local write only (push deferred to exit/background) — always succeeds offline.
+        // Local write only (push deferred to exit/background) - always succeeds offline.
         await persistLocal({ push: false });
         setSaveStatus('All changes saved');
         signalSaved();
@@ -597,6 +601,9 @@ export default function EditorScreen() {
       shareText += `Title: ${linkedEvent.title}\n`;
       shareText += `Start: ${formatEventDateTime(linkedEvent.start_time)}\n`;
       shareText += `End: ${formatEventDateTime(linkedEvent.end_time)}\n`;
+      if (linkedEvent.location) {
+        shareText += `Location: ${linkedEvent.location}\n`;
+      }
       if (linkedEvent.reminder_minutes) {
         shareText += `Reminder: ${formatReminderMinutes(linkedEvent.reminder_minutes)}\n`;
       }
@@ -834,7 +841,7 @@ export default function EditorScreen() {
     triggerAutoSave();
   };
 
-  // File attachment (paperclip) — picks a file, uploads to storage, embeds metadata.
+  // File attachment (paperclip) - picks a file, uploads to storage, embeds metadata.
   // Online-direct, matching the editor's existing save model. Never base64-inlines.
   const MAX_ATTACHMENT_MB = 100;
   const MAX_PICK_AT_ONCE = 10;
@@ -854,7 +861,7 @@ export default function EditorScreen() {
         try {
           const info = await FileSystem.getInfoAsync(raw.uri);
           if (info.exists && info.size) size = info.size;
-        } catch { /* fall through — presign will surface a clear error */ }
+        } catch { /* fall through - presign will surface a clear error */ }
       }
       const mimeType = (!raw.mimeType || raw.mimeType === 'application/octet-stream')
         ? (EXT_MIME[ext] || raw.mimeType || 'application/octet-stream')
@@ -1005,7 +1012,7 @@ export default function EditorScreen() {
     setShowEventPicker(true);
     setLoadingPickerEvents(true);
     try {
-      const events = await eventsApi.getAll();
+      const events = await decryptEventsFromServer<CalendarEvent>(await eventsApi.getAll());
       setPickerEvents(events);
     } catch (e) {
       console.error('Load events for picker failed:', e);
@@ -1059,7 +1066,7 @@ export default function EditorScreen() {
     // Cancel any pending autosave timer so it can't double-fire with the save below.
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     await syncLatestContent(); // capture the very last keystrokes before the empty-check + save
-    // Nothing to save? (also save if there's a linked event, images, or attachments —
+    // Nothing to save? (also save if there's a linked event, images, or attachments -
     // e.g. a photo/audio/video share with no typed title/body)
     if (!title.trim() && !plainTextFromContent(contentRef.current) && !linkedEventIdRef.current
         && imagesRef.current.length === 0 && attachmentsRef.current.length === 0
@@ -1105,38 +1112,36 @@ export default function EditorScreen() {
   };
 
   const handleDelete = () => {
-    Alert.alert('Delete Note', 'Are you sure you want to delete this note?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            // Use noteIdRef or the noteId from params
-            const idToDelete = noteIdRef.current || noteId;
-            console.log('Attempting to delete note:', idToDelete, 'isCreatedRef:', isCreatedRef.current);
-            
-            if (idToDelete) {
-              await notesApi.delete(idToDelete);
-              // Track note deletion
-              trackNoteDeleted();
-              console.log('Note deleted successfully');
-            } else {
-              console.log('No note ID to delete');
-            }
-          } catch (e) {
-            console.error('Delete failed:', e);
-            Alert.alert('Error', 'Failed to delete note. Please try again.');
-            return; // Don't navigate away if delete failed
-          }
-          router.back();
-        },
-      },
-    ]);
+    setShowDeleteNoteModal(true);
+  };
+
+  const cancelDeleteNote = () => {
+    setShowDeleteNoteModal(false);
+  };
+
+  const confirmDeleteNote = async () => {
+    setDeletingNote(true);
+    try {
+      // Use noteIdRef or the noteId from params
+      const idToDelete = noteIdRef.current || noteId;
+      if (idToDelete) {
+        await notesApi.delete(idToDelete);
+        // Track note deletion
+        trackNoteDeleted();
+      }
+    } catch (e) {
+      console.error('Delete failed:', e);
+      setDeletingNote(false);
+      Alert.alert('Error', 'Failed to delete note. Please try again.');
+      return; // Don't navigate away if delete failed
+    }
+    setDeletingNote(false);
+    setShowDeleteNoteModal(false);
+    router.back();
   };
 
   // No full-screen loader: render the editor chrome immediately. The body seeds instantly from the
-  // local copy (local-first in loadNote) and metadata fills in as it resolves — so the screen opens
+  // local copy (local-first in loadNote) and metadata fills in as it resolves - so the screen opens
   // at once instead of blocking on a spinner until the network load finishes.
 
   return (
@@ -1249,10 +1254,10 @@ export default function EditorScreen() {
             )}
           </View>
 
-          {/* Content — the shared-post card sits at the top of the input box, then the writing area */}
+          {/* Content - the shared-post card sits at the top of the input box, then the writing area */}
           <View style={s.contentContainer}>
             <View style={s.inputBox}>
-              {/* Shared social post card (Instagram/Facebook/WhatsApp/YouTube/…) — links back to the post */}
+              {/* Shared social post card (Instagram/Facebook/WhatsApp/YouTube/…) - links back to the post */}
               {sourcePost && (
                 <SharedPostCard
                   style={s.cardInInput}
@@ -1262,7 +1267,7 @@ export default function EditorScreen() {
                 />
               )}
               {/* Rich-text body (TenTap WebView). Mounted only once the note content is known, so the
-                  bridge is created with it as initialContent — reliable load, no setContent race. */}
+                  bridge is created with it as initialContent - reliable load, no setContent race. */}
               {seedHtml != null ? (
                 <NoteBodyEditor
                   ref={editorApiRef}
@@ -1273,7 +1278,7 @@ export default function EditorScreen() {
               ) : (
                 <View style={s.richTextWrap}><View style={{ height: 180 }} /></View>
               )}
-              {/* Attach-file footer — a WebView can't be overlaid, so the paperclip sits below it */}
+              {/* Attach-file footer - a WebView can't be overlaid, so the paperclip sits below it */}
               <View style={s.editorFooter}>
                 <TouchableOpacity
                   testID="attach-file-btn"
@@ -1374,7 +1379,7 @@ export default function EditorScreen() {
                   hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                   style={{ paddingHorizontal: 4 }}
                 >
-                  <MaterialIcons name="delete-outline" size={22} color={C.error} />
+                  <MaterialIcons name="delete" size={22} color={C.error} />
                 </TouchableOpacity>
                 <MaterialIcons name="chevron-right" size={24} color={C.borderSub} />
               </View>
@@ -1392,6 +1397,14 @@ export default function EditorScreen() {
                     to {formatEventDateTime(linkedEvent.end_time)}
                   </Text>
                 </View>
+                {linkedEvent.location ? (
+                  <View style={s.eventTimeRow}>
+                    <MaterialIcons name="place" size={18} color={C.textSec} />
+                    <Text style={s.eventTimeText} numberOfLines={1}>
+                      {linkedEvent.location}
+                    </Text>
+                  </View>
+                ) : null}
                 {linkedEvent.reminder_minutes ? (
                   <View style={s.eventTimeRow}>
                     <MaterialIcons name="notifications" size={18} color={C.primary} />
@@ -1443,7 +1456,7 @@ export default function EditorScreen() {
 
         {/* Voice Input Bar + Format Toolbar */}
         <View style={s.bottomBar}>
-          {/* Format Toolbar — drives the TenTap editor; shows while it's focused (disabled on web) */}
+          {/* Format Toolbar - drives the TenTap editor; shows while it's focused (disabled on web) */}
           {editorUi.isFocused && Platform.OS !== 'web' && (
             <View style={s.formatBar}>
               <TouchableOpacity
@@ -1494,6 +1507,12 @@ export default function EditorScreen() {
                 <MaterialIcons name="share" size={24} color={C.secondary} />
                 <Text style={[s.actionBtnLabel, { color: C.secondary }]}>Share</Text>
               </TouchableOpacity>
+              {noteExists && (
+                <TouchableOpacity testID="delete-note-btn" style={s.actionBtn} onPress={handleDelete}>
+                  <MaterialIcons name="delete" size={24} color={C.error} />
+                  <Text style={[s.actionBtnLabel, { color: C.error }]}>Delete</Text>
+                </TouchableOpacity>
+              )}
             </View>
           )}
           
@@ -1670,6 +1689,47 @@ export default function EditorScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Delete Confirmation Modal - same look as the notes-list delete confirmation */}
+      <Modal
+        visible={showDeleteNoteModal}
+        transparent
+        animationType="fade"
+        onRequestClose={cancelDeleteNote}
+      >
+        <View style={s.modalOverlay}>
+          <View style={s.deleteModalContent}>
+            <MaterialIcons name="delete" size={48} color={C.error} style={{ marginBottom: 16 }} />
+            <Text style={s.deleteModalTitle}>Delete Note?</Text>
+            <Text style={s.deleteModalMessage}>
+              Are you sure you want to delete "{title || 'this note'}"? This action cannot be undone.
+            </Text>
+            <View style={s.deleteModalButtons}>
+              <TouchableOpacity
+                testID="cancel-delete-note-btn"
+                style={s.deleteModalCancelBtn}
+                onPress={cancelDeleteNote}
+                activeOpacity={0.7}
+              >
+                <Text style={s.deleteModalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="confirm-delete-note-btn"
+                style={s.deleteModalDeleteBtn}
+                onPress={confirmDeleteNote}
+                activeOpacity={0.7}
+                disabled={deletingNote}
+              >
+                {deletingNote ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <Text style={s.deleteModalDeleteText}>Delete</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1754,8 +1814,8 @@ const s = StyleSheet.create({
     paddingBottom: 4,
   },
   // TenTap rich editor (WebView). FIXED height (not dynamicHeight) so the box is the same size from
-  // the first frame — no resize glitch while the webview boots. Long notes scroll internally.
-  // Opaque (surface-colored, matching the inputBox) — a transparent Android WebView stops repainting
+  // the first frame - no resize glitch while the webview boots. Long notes scroll internally.
+  // Opaque (surface-colored, matching the inputBox) - a transparent Android WebView stops repainting
   // after a parent re-render/blur (e.g. autosave), blanking the text until a tap forces a redraw.
   richText: {
     height: 180,
@@ -1937,19 +1997,20 @@ const s = StyleSheet.create({
     backgroundColor: C.bg,
   },
   actionBar: {
-    flexDirection: 'row', 
-    justifyContent: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     paddingVertical: 12,
-    paddingHorizontal: 24,
-    gap: 24,
+    paddingHorizontal: 12,
     backgroundColor: C.bg,
     borderBottomWidth: 1,
     borderBottomColor: C.borderSub + '40',
   },
   actionBtn: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
+    justifyContent: 'center',
+    paddingHorizontal: 4,
     paddingVertical: 8,
     gap: 6,
   },
@@ -1992,6 +2053,56 @@ const s = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
+  },
+  deleteModalContent: {
+    backgroundColor: C.surface,
+    borderRadius: 20,
+    padding: 24,
+    width: '100%',
+    maxWidth: 340,
+    alignItems: 'center',
+  },
+  deleteModalTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: C.text,
+    marginBottom: 12,
+  },
+  deleteModalMessage: {
+    fontSize: 16,
+    color: C.textSec,
+    textAlign: 'center',
+    lineHeight: 24,
+    marginBottom: 24,
+  },
+  deleteModalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    width: '100%',
+  },
+  deleteModalCancelBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: '#E0E0E0',
+    alignItems: 'center',
+  },
+  deleteModalCancelText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: C.text,
+  },
+  deleteModalDeleteBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: C.error,
+    alignItems: 'center',
+  },
+  deleteModalDeleteText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFFFFF',
   },
   aiSuggestionCard: {
     backgroundColor: C.surface,

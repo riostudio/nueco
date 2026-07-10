@@ -17,7 +17,7 @@ export default function RecoveryCodeScreen() {
   const { recoveryCode, acknowledgeRecoveryCode } = useAuth();
   const [confirmed, setConfirmed] = useState(false);
 
-  // Reached without a pending code (e.g. back-nav / reload) — nothing to show.
+  // Reached without a pending code (e.g. back-nav / reload) - nothing to show.
   if (!recoveryCode) {
     return (
       <SafeAreaView style={styles.container}>
@@ -45,7 +45,7 @@ export default function RecoveryCodeScreen() {
         <Text style={styles.title}>Save your recovery code</Text>
         <Text style={styles.subtitle}>
           This code can restore access to your encrypted notes if you ever reset your password.
-          Write it down and keep it somewhere safe — we can&apos;t show it again, and without it a
+          Write it down and keep it somewhere safe - we can&apos;t show it again, and without it a
           password reset will make your notes unrecoverable.
         </Text>
 

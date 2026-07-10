@@ -9,6 +9,8 @@ import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { hasAnalyticsDecision } from '../../src/analytics';
 import { registerForPushNotifications, unregisterPushNotifications } from '../../src/notifications';
+import { runCalendarSync } from '../../src/calendarSync';
+import { registerCalendarSyncTaskAsync } from '../../src/calendarSyncTask';
 
 const C = {
   primary: '#D84315',
@@ -51,6 +53,14 @@ export default function TabLayout() {
   // full screen before they use the app.
   useEffect(() => {
     hasAnalyticsDecision().then((decided) => { if (!decided) router.replace('/analytics-consent' as Href); }).catch(() => {});
+  }, []);
+
+  // Calendar sync: the reliable trigger is "whenever the app is opened" (throttled inside
+  // runCalendarSync itself); the background task registered here is a best-effort bonus on top -
+  // see src/calendarSyncTask.ts for why it can't be relied on alone.
+  useEffect(() => {
+    runCalendarSync().catch(() => {});
+    registerCalendarSyncTaskAsync().catch(() => {});
   }, []);
 
   const handleLogout = () => {

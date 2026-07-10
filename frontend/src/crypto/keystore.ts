@@ -2,7 +2,7 @@
  * Device-local storage for the Data Encryption Key (DEK).
  *
  * The DEK lives in the OS keystore (Android Keystore / iOS Keychain) via
- * expo-secure-store — never in AsyncStorage, never sent to the server/analytics.
+ * expo-secure-store - never in AsyncStorage, never sent to the server/analytics.
  * Stored base64-encoded. Web has no SecureStore, so E2EE is native-only for now
  * (web calls are no-ops and `loadDek` returns null).
  */

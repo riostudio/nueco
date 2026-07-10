@@ -1,6 +1,6 @@
 /**
  * useOfflineNotes.ts
- * Offline-aware hook for notes — drop-in replacement for direct notesApi calls
+ * Offline-aware hook for notes - drop-in replacement for direct notesApi calls
  *
  * Usage:
  *   const { notes, createNote, updateNote, deleteNote, isOnline, isSyncing } = useOfflineNotes();
@@ -44,14 +44,14 @@ export function useOfflineNotes() {
   // Load notes from local storage
   const loadNotes = useCallback(async () => {
     const local = await getLocalNotes();
-    console.log('loadNotes — local count:', local.length);
+    console.log('loadNotes - local count:', local.length);
     // Filter out pending deletes for display
     setNotes(local.filter(n => !n._pendingDelete));
   }, []);
 
   // Sync and reload. Offline-first: show cached notes IMMEDIATELY, then sync in the background and
   // refresh. Previously the full network sync ran before the first loadNotes, so the list (and its
-  // blocking spinner) waited on the network — the tab felt slow to open.
+  // blocking spinner) waited on the network - the tab felt slow to open.
   const syncAndReload = useCallback(async () => {
     await loadNotes(); // instant: cached notes on screen right away
     const token = await authStorage.getAccessToken();
@@ -119,7 +119,7 @@ export function useOfflineNotes() {
     const existing = notes.find(n => n.id === id);
 
     if (existing?._isLocal) {
-      // Never synced — just remove locally and drop from queue
+      // Never synced - just remove locally and drop from queue
       await deleteLocalNote(id);
     } else {
       // Mark as pending delete locally

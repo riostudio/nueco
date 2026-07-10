@@ -3,6 +3,9 @@ export interface User {
   id: string;
   email: string;
   name: string;
+  // E2EE (Stage 5): set when `name` is client-side ciphertext. Cleared to null by
+  // decryptAccountFromServer once decrypted for in-app use, same convention as notes.
+  enc_version?: number | null;
   email_verified: boolean;
   created_at: string;
 }

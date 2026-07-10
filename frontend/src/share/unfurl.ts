@@ -1,5 +1,5 @@
 /**
- * Best-effort client-side link unfurl for shared social posts — fetch a thumbnail + title
+ * Best-effort client-side link unfurl for shared social posts - fetch a thumbnail + title
  * WITHOUT a backend. Reliability is platform-specific and honest:
  *
  *   - TikTok      → its PUBLIC oEmbed endpoint (no key): reliable thumbnail + title.
@@ -38,7 +38,7 @@ export function parseTikTokOEmbed(json: unknown): UnfurlResult {
   if (!json || typeof json !== 'object') return out;
   const j = json as Record<string, unknown>;
   if (typeof j.thumbnail_url === 'string' && j.thumbnail_url) out.thumbnailUrl = j.thumbnail_url;
-  // TikTok titles arrive with HTML entities (e.g. &#39;, &#128512;) — decode them.
+  // TikTok titles arrive with HTML entities (e.g. &#39;, &#128512;) - decode them.
   if (typeof j.title === 'string' && j.title.trim()) out.title = decodeEntities(j.title.trim());
   return out;
 }

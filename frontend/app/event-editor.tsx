@@ -8,6 +8,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { eventsApi, notesApi } from '../src/api';
+import { decryptEventFromServer, encryptEventForServer } from '../src/crypto/eventCrypto';
 import { MONTH_NAMES } from '../src/theme';
 import { ReminderMinutes } from '../src/types';
 
@@ -41,6 +42,11 @@ if (Platform.OS !== 'web') {
   try { DateTimePicker = require('@react-native-community/datetimepicker').default; } catch {}
 }
 
+let ExpoLocation: typeof import('expo-location') | null = null;
+if (Platform.OS !== 'web') {
+  try { ExpoLocation = require('expo-location'); } catch {}
+}
+
 // ---- Constants ----
 
 const C = {
@@ -58,6 +64,18 @@ const C = {
 };
 
 const isWeb = Platform.OS === 'web';
+
+// A device calendar event, trimmed down to what the import picker needs to display + prefill.
+type DeviceEventLite = {
+  id: string;
+  title: string;
+  notes: string;
+  location: string;
+  startDate: string | Date;
+  endDate: string | Date;
+  allDay: boolean;
+  calendarTitle: string;
+};
 
 const REMINDER_OPTIONS: { label: string; value: ReminderMinutes | null }[] = [
   { label: 'No Reminder', value: null },
@@ -137,7 +155,9 @@ export default function EventEditorScreen() {
   // State
   const [title, setTitle] = useState(params.noteTitle || '');
   const [description, setDescription] = useState('');
+  const [location, setLocation] = useState('');
   const [date, setDate] = useState(initialDate);
+  const [endDate, setEndDate] = useState(initialDate);
   const [startTime, setStartTime] = useState(() => { const d = new Date(initialDate); d.setHours(9, 0, 0, 0); return d; });
   const [endTime, setEndTime] = useState(() => { const d = new Date(initialDate); d.setHours(10, 0, 0, 0); return d; });
   const [loading, setLoading] = useState(isEditing);
@@ -148,6 +168,7 @@ export default function EventEditorScreen() {
   const [deviceCalendarEventId, setDeviceCalendarEventId] = useState<string | null>(null);
   const [showReminderPicker, setShowReminderPicker] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showEndDatePicker, setShowEndDatePicker] = useState(false);
   const [showStartPicker, setShowStartPicker] = useState(false);
   const [showEndPicker, setShowEndPicker] = useState(false);
   const [deleteModalVisible, setDeleteModalVisible] = useState(false);
@@ -157,13 +178,21 @@ export default function EventEditorScreen() {
   const [calendars, setCalendars] = useState<{ id: string; title: string; source?: string }[]>([]);
   const [preferredCalendarId, setPreferredCalendarId] = useState<string | null>(null);
   const [showCalendarPicker, setShowCalendarPicker] = useState(false);
+  // Import-from-device picker: browse existing device calendar events to prefill a new MemoPad event.
+  const [showImportPicker, setShowImportPicker] = useState(false);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importEvents, setImportEvents] = useState<DeviceEventLite[]>([]);
+  const [importSearch, setImportSearch] = useState('');
+  const [fetchingLocation, setFetchingLocation] = useState(false);
 
   // Refs
   const eventIdRef = useRef(isEditing ? (params.eventId || '') : '');
   const isCreatedRef = useRef(isEditing);
   const titleRef = useRef(title);
   const descriptionRef = useRef(description);
+  const locationRef = useRef(location);
   const dateRef = useRef(date);
+  const endDateRef = useRef(endDate);
   const startTimeRef = useRef(startTime);
   const endTimeRef = useRef(endTime);
   const reminderMinutesRef = useRef(reminderMinutes);
@@ -176,7 +205,9 @@ export default function EventEditorScreen() {
   // Sync refs with state
   useEffect(() => { titleRef.current = title; }, [title]);
   useEffect(() => { descriptionRef.current = description; }, [description]);
+  useEffect(() => { locationRef.current = location; }, [location]);
   useEffect(() => { dateRef.current = date; }, [date]);
+  useEffect(() => { endDateRef.current = endDate; }, [endDate]);
   useEffect(() => { startTimeRef.current = startTime; }, [startTime]);
   useEffect(() => { endTimeRef.current = endTime; }, [endTime]);
   useEffect(() => { reminderMinutesRef.current = reminderMinutes; }, [reminderMinutes]);
@@ -192,10 +223,50 @@ export default function EventEditorScreen() {
         const saved = await AsyncStorage.getItem('preferred_calendar_id');
         if (saved) setPreferredCalendarId(saved);
       } catch {}
-      loadCalendars(); // silent — populates the picker if calendar permission is already granted
+      loadCalendars(); // silent - populates the picker if calendar permission is already granted
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Changing the start date shifts the end date by the same number of days, so a multi-day
+  // event's span is preserved instead of collapsing back to a single day.
+  const handleStartDateChange = (d: Date) => {
+    const dayDiffMs = endDateRef.current.getTime() - dateRef.current.getTime();
+    setDate(d);
+    setEndDate(new Date(d.getTime() + dayDiffMs));
+  };
+
+  // Fills the Location field from the device's actual GPS position via reverse-geocoding. Not
+  // typeahead search suggestions (no places/autocomplete API is wired up in this app) - a one-shot
+  // "use where I am right now" fill.
+  const useCurrentLocation = async () => {
+    if (!ExpoLocation || isWeb) return;
+    setFetchingLocation(true);
+    try {
+      const { status } = await ExpoLocation.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Location', 'Location access is needed to use your current location. You can enable access in Settings.');
+        return;
+      }
+      const pos = await ExpoLocation.getCurrentPositionAsync({ accuracy: ExpoLocation.Accuracy.Balanced });
+      const [place] = await ExpoLocation.reverseGeocodeAsync({
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+      });
+      if (!place) {
+        Alert.alert('Location', 'Could not determine your address from your current location.');
+        return;
+      }
+      const line1 = place.name || [place.streetNumber, place.street].filter(Boolean).join(' ');
+      const formatted = [line1, place.city, place.region].filter(Boolean).join(', ');
+      setLocation(formatted);
+    } catch (e) {
+      console.error('Failed to get current location:', e);
+      Alert.alert('Location', 'Could not get your current location. Please try again.');
+    } finally {
+      setFetchingLocation(false);
+    }
+  };
 
   // ---- API calls ----
 
@@ -208,12 +279,14 @@ export default function EventEditorScreen() {
 
   const loadEvent = async (id: string) => {
     try {
-      const event = await eventsApi.get(id);
+      const event = await decryptEventFromServer(await eventsApi.get(id));
       setTitle(event.title);
       setDescription(event.description);
+      setLocation(event.location || '');
       const start = new Date(event.start_time);
       const end = new Date(event.end_time);
       setDate(start);
+      setEndDate(end);
       setStartTime(start);
       setEndTime(end);
       setReminderMinutes(event.reminder_minutes || null);
@@ -266,9 +339,70 @@ export default function EventEditorScreen() {
     } catch {}
   };
 
+  // Browse device calendar events (all calendars, not just writable ones) so the user can pick one
+  // to prefill a new MemoPad event from - the reverse of writeToDeviceCalendar's export direction.
+  const openImportPicker = async () => {
+    if (!ExpoCalendar || isWeb) return;
+    setShowImportPicker(true);
+    setImportLoading(true);
+    try {
+      let status = (await ExpoCalendar.getCalendarPermissionsAsync()).status;
+      if (status !== 'granted') {
+        status = (await ExpoCalendar.requestCalendarPermissionsAsync()).status;
+      }
+      if (status !== 'granted') {
+        setShowImportPicker(false);
+        Alert.alert('Calendar', 'Calendar access is needed to import events. You can enable access in Settings.');
+        return;
+      }
+      const allCals = await ExpoCalendar.getCalendarsAsync(ExpoCalendar.EntityTypes.EVENT);
+      const calIds = allCals.map((c: any) => c.id);
+      const calNameById = new Map(allCals.map((c: any) => [c.id, c.title as string]));
+      const rangeStart = new Date(); rangeStart.setDate(rangeStart.getDate() - 1);
+      const rangeEnd = new Date(); rangeEnd.setDate(rangeEnd.getDate() + 90);
+      const events = await ExpoCalendar.getEventsAsync(calIds, rangeStart, rangeEnd);
+      const mapped: DeviceEventLite[] = events
+        .map((e: any) => ({
+          id: e.id,
+          title: e.title || 'Untitled',
+          notes: e.notes || '',
+          location: e.location || '',
+          startDate: e.startDate,
+          endDate: e.endDate,
+          allDay: !!e.allDay,
+          calendarTitle: calNameById.get(e.calendarId) || '',
+        }))
+        .sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
+      setImportEvents(mapped);
+    } catch (e) {
+      console.error('Failed to load device events:', e);
+      Alert.alert('Calendar', 'Could not load calendar events.');
+    } finally {
+      setImportLoading(false);
+    }
+  };
+
+  const selectImportEvent = (ev: DeviceEventLite) => {
+    setTitle(ev.title);
+    setDescription(ev.notes);
+    setLocation(ev.location);
+    const st = new Date(ev.startDate);
+    let et = new Date(ev.endDate);
+    if (et <= st) et = addOneHour(st);
+    setDate(st);
+    setEndDate(et);
+    setStartTime(st);
+    setEndTime(et);
+    setDeviceCalendarEventId(ev.id);
+    deviceCalendarEventIdRef.current = ev.id;
+    setAddToDeviceCal(true);
+    setShowImportPicker(false);
+  };
+
   const writeToDeviceCalendar = async (
     eventTitle: string,
     eventDesc: string,
+    eventLoc: string,
     startDate: Date,
     endDate: Date,
     existingEventId: string | null = null,
@@ -301,7 +435,7 @@ export default function EventEditorScreen() {
         return null;
       }
 
-      const eventDetails = { title: eventTitle, notes: eventDesc, startDate, endDate, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone };
+      const eventDetails = { title: eventTitle, notes: eventDesc, location: eventLoc, startDate, endDate, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone };
 
       if (existingEventId) {
         try {
@@ -343,6 +477,7 @@ export default function EventEditorScreen() {
   const buildEventData = (st: Date, et: Date, deviceCalId: string | null) => ({
     title: titleRef.current.trim(),
     description: descriptionRef.current.trim(),
+    location: locationRef.current.trim(),
     start_time: st.toISOString(),
     end_time: et.toISOString(),
     linked_note_ids: params.noteId && params.noteId !== 'new' ? [params.noteId] : [],
@@ -359,24 +494,25 @@ export default function EventEditorScreen() {
 
       const st = new Date(dateRef.current);
       st.setHours(startTimeRef.current.getHours(), startTimeRef.current.getMinutes(), 0, 0);
-      const et = new Date(dateRef.current);
+      const et = new Date(endDateRef.current);
       et.setHours(endTimeRef.current.getHours(), endTimeRef.current.getMinutes(), 0, 0);
 
-      if (et <= st) { setSaveStatus('End time must be after start'); return; }
+      if (et <= st) { setSaveStatus('End must be after start'); return; }
 
       // Check if data actually changed to avoid unnecessary saves
-      const dataHash = `${titleRef.current}|${descriptionRef.current}|${st.toISOString()}|${et.toISOString()}|${reminderMinutesRef.current}`;
+      const dataHash = `${titleRef.current}|${descriptionRef.current}|${locationRef.current}|${st.toISOString()}|${et.toISOString()}|${reminderMinutesRef.current}`;
       if (dataHash === lastSavedDataRef.current) return;
 
       setSaveStatus('Saving...');
       try {
         // Write straight into the device calendar (iOS = Apple Calendar, Android = the Google-synced
-        // calendar) natively — no browser redirect. The OS handles syncing to Google/iCloud.
+        // calendar) natively - no browser redirect. The OS handles syncing to Google/iCloud.
         let newDeviceCalEventId = deviceCalendarEventIdRef.current;
         if (addToDeviceCal && !isWeb) {
           newDeviceCalEventId = await writeToDeviceCalendar(
             titleRef.current.trim(),
             descriptionRef.current.trim(),
+            locationRef.current.trim(),
             st, et,
             deviceCalendarEventIdRef.current
           );
@@ -390,7 +526,7 @@ export default function EventEditorScreen() {
           await scheduleReminder(titleRef.current.trim(), st, reminderMinutesRef.current);
         }
 
-        const eventData = buildEventData(st, et, newDeviceCalEventId);
+        const eventData = await encryptEventForServer(buildEventData(st, et, newDeviceCalEventId));
 
         if (!isCreatedRef.current) {
           const created = await retryOperation(() => eventsApi.create(eventData));
@@ -428,7 +564,7 @@ export default function EventEditorScreen() {
     if (titleRef.current.trim()) {
       const st = new Date(dateRef.current);
       st.setHours(startTimeRef.current.getHours(), startTimeRef.current.getMinutes(), 0, 0);
-      const et = new Date(dateRef.current);
+      const et = new Date(endDateRef.current);
       et.setHours(endTimeRef.current.getHours(), endTimeRef.current.getMinutes(), 0, 0);
 
       if (et > st) {
@@ -438,11 +574,11 @@ export default function EventEditorScreen() {
           let devId = deviceCalendarEventIdRef.current;
           if (addToDeviceCal && !isWeb) {
             const written = await writeToDeviceCalendar(
-              titleRef.current.trim(), descriptionRef.current.trim(), st, et, devId,
+              titleRef.current.trim(), descriptionRef.current.trim(), locationRef.current.trim(), st, et, devId,
             );
             if (written) { devId = written; deviceCalendarEventIdRef.current = written; }
           }
-          const eventData = buildEventData(st, et, devId);
+          const eventData = await encryptEventForServer(buildEventData(st, et, devId));
           if (!isCreatedRef.current) {
             const created = await eventsApi.create(eventData);
             if (params.noteId && params.noteId !== 'new') {
@@ -492,7 +628,11 @@ export default function EventEditorScreen() {
 
   useEffect(() => {
     if (title || description) triggerAutoSave();
-  }, [title, description, date, startTime, endTime, reminderMinutes, triggerAutoSave]);
+  }, [title, description, location, date, endDate, startTime, endTime, reminderMinutes, triggerAutoSave]);
+
+  const filteredImportEvents = importSearch.trim()
+    ? importEvents.filter((e) => e.title.toLowerCase().includes(importSearch.trim().toLowerCase()))
+    : importEvents;
 
   // ---- Render ----
 
@@ -540,6 +680,15 @@ export default function EventEditorScreen() {
 
         <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent} keyboardShouldPersistTaps="handled">
 
+          {/* Import from device calendar (new events only) */}
+          {!isEditing && !isWeb && (
+            <TouchableOpacity testID="import-event-btn" style={s.importBtn} onPress={openImportPicker}>
+              <MaterialIcons name="event-available" size={24} color={C.secondary} />
+              <Text style={s.importBtnText}>Import from {isIOS ? 'Apple' : 'Google'} Calendar</Text>
+              <MaterialIcons name="chevron-right" size={24} color={C.borderSub} />
+            </TouchableOpacity>
+          )}
+
           {/* Title */}
           <Text style={s.label}>Event Title</Text>
           <TextInput
@@ -551,9 +700,9 @@ export default function EventEditorScreen() {
             onChangeText={setTitle}
           />
 
-          {/* Date */}
-          <Text style={s.label}>Date</Text>
-          {isWeb && <NativeDateInput testID="native-date-input" value={date} onChange={setDate} />}
+          {/* Start Date */}
+          <Text style={s.label}>Start Date</Text>
+          {isWeb && <NativeDateInput testID="native-date-input" value={date} onChange={handleStartDateChange} />}
           {isIOS && DateTimePicker && (
             <>
               <TouchableOpacity testID="ios-date-btn" style={s.pickerBtn} onPress={() => setShowDatePicker(true)}>
@@ -566,12 +715,12 @@ export default function EventEditorScreen() {
                   <View style={s.pickerModalOverlay}>
                     <View style={s.pickerModalContent}>
                       <View style={s.pickerModalHeader}>
-                        <Text style={s.pickerModalTitle}>Select Date</Text>
+                        <Text style={s.pickerModalTitle}>Select Start Date</Text>
                         <TouchableOpacity onPress={() => setShowDatePicker(false)}>
                           <Text style={s.pickerModalDone}>Done</Text>
                         </TouchableOpacity>
                       </View>
-                      <DateTimePicker testID="ios-date-picker" value={date} mode="date" display="spinner" onChange={(_e: any, d?: Date) => d && setDate(d)} style={{ height: 200 }} textColor={C.text} />
+                      <DateTimePicker testID="ios-date-picker" value={date} mode="date" display="spinner" onChange={(_e: any, d?: Date) => d && handleStartDateChange(d)} style={{ height: 200 }} textColor={C.text} />
                     </View>
                   </View>
                 </Modal>
@@ -586,7 +735,53 @@ export default function EventEditorScreen() {
                 <MaterialIcons name="arrow-drop-down" size={28} color={C.borderSub} />
               </TouchableOpacity>
               {showDatePicker && DateTimePicker && (
-                <DateTimePicker testID="android-date-picker" value={date} mode="date" display="default" onChange={(_e: any, d?: Date) => { setShowDatePicker(false); if (d) setDate(d); }} />
+                <DateTimePicker testID="android-date-picker" value={date} mode="date" display="default" onChange={(_e: any, d?: Date) => { setShowDatePicker(false); if (d) handleStartDateChange(d); }} />
+              )}
+            </>
+          )}
+
+          {/* End Date */}
+          <Text style={s.label}>End Date</Text>
+          {isWeb && (
+            <NativeDateInput
+              testID="native-end-date-input"
+              value={endDate}
+              onChange={(d) => setEndDate(d)}
+            />
+          )}
+          {isIOS && DateTimePicker && (
+            <>
+              <TouchableOpacity testID="ios-end-date-btn" style={s.pickerBtn} onPress={() => setShowEndDatePicker(true)}>
+                <MaterialIcons name="event" size={24} color={C.secondary} />
+                <Text style={s.pickerBtnText}>{formatDisplayDate(endDate)}</Text>
+                <MaterialIcons name="arrow-drop-down" size={28} color={C.borderSub} />
+              </TouchableOpacity>
+              {showEndDatePicker && (
+                <Modal transparent animationType="slide">
+                  <View style={s.pickerModalOverlay}>
+                    <View style={s.pickerModalContent}>
+                      <View style={s.pickerModalHeader}>
+                        <Text style={s.pickerModalTitle}>Select End Date</Text>
+                        <TouchableOpacity onPress={() => setShowEndDatePicker(false)}>
+                          <Text style={s.pickerModalDone}>Done</Text>
+                        </TouchableOpacity>
+                      </View>
+                      <DateTimePicker testID="ios-end-date-picker" value={endDate} mode="date" display="spinner" onChange={(_e: any, d?: Date) => d && setEndDate(d)} style={{ height: 200 }} textColor={C.text} />
+                    </View>
+                  </View>
+                </Modal>
+              )}
+            </>
+          )}
+          {isAndroid && (
+            <>
+              <TouchableOpacity testID="android-end-date-btn" style={s.pickerBtn} onPress={() => setShowEndDatePicker(true)}>
+                <MaterialIcons name="event" size={24} color={C.secondary} />
+                <Text style={s.pickerBtnText}>{formatDisplayDate(endDate)}</Text>
+                <MaterialIcons name="arrow-drop-down" size={28} color={C.borderSub} />
+              </TouchableOpacity>
+              {showEndDatePicker && DateTimePicker && (
+                <DateTimePicker testID="android-end-date-picker" value={endDate} mode="date" display="default" onChange={(_e: any, d?: Date) => { setShowEndDatePicker(false); if (d) setEndDate(d); }} />
               )}
             </>
           )}
@@ -687,8 +882,36 @@ export default function EventEditorScreen() {
             </>
           )}
 
+          {/* Location */}
+          <Text style={s.label}>Location</Text>
+          <View style={s.pickerBtn}>
+            <MaterialIcons name="place" size={24} color={C.secondary} />
+            <TextInput
+              testID="event-location-input"
+              style={s.locationInput}
+              placeholder="Add a location..."
+              placeholderTextColor={C.borderSub}
+              value={location}
+              onChangeText={setLocation}
+            />
+            {!isWeb && (
+              <TouchableOpacity
+                testID="use-current-location-btn"
+                onPress={useCurrentLocation}
+                disabled={fetchingLocation}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                {fetchingLocation ? (
+                  <ActivityIndicator size="small" color={C.secondary} />
+                ) : (
+                  <MaterialIcons name="my-location" size={22} color={C.secondary} />
+                )}
+              </TouchableOpacity>
+            )}
+          </View>
+
           {/* Description */}
-          <Text style={s.label}>Description (optional)</Text>
+          <Text style={s.label}>Description</Text>
           <TextInput
             testID="event-desc-input"
             style={s.descInput}
@@ -721,7 +944,7 @@ export default function EventEditorScreen() {
             </View>
           )}
 
-          {/* Calendar picker — which device calendar to write to (shown when sync is on) */}
+          {/* Calendar picker - which device calendar to write to (shown when sync is on) */}
           {!isWeb && addToDeviceCal && (
             <TouchableOpacity
               testID="calendar-picker-btn"
@@ -786,6 +1009,60 @@ export default function EventEditorScreen() {
                 ))}
               </View>
             </TouchableOpacity>
+          </Modal>
+
+          {/* Import from Device Calendar Modal */}
+          <Modal
+            testID="import-picker-modal"
+            visible={showImportPicker}
+            transparent
+            animationType="slide"
+            onRequestClose={() => setShowImportPicker(false)}
+          >
+            <View style={s.pickerModalOverlay}>
+              <View style={[s.pickerModalContent, s.importModalContent]}>
+                <View style={s.pickerModalHeader}>
+                  <Text style={s.pickerModalTitle}>Import from Calendar</Text>
+                  <TouchableOpacity onPress={() => setShowImportPicker(false)}>
+                    <Text style={s.pickerModalDone}>Close</Text>
+                  </TouchableOpacity>
+                </View>
+                <TextInput
+                  testID="import-search-input"
+                  style={s.importSearchInput}
+                  placeholder="Search events..."
+                  placeholderTextColor={C.borderSub}
+                  value={importSearch}
+                  onChangeText={setImportSearch}
+                />
+                {importLoading ? (
+                  <View style={[s.center, { height: 200 }]}>
+                    <ActivityIndicator size="large" color={C.primary} />
+                  </View>
+                ) : filteredImportEvents.length === 0 ? (
+                  <View style={[s.center, { height: 200 }]}>
+                    <Text style={s.importEmptyText}>No upcoming events found</Text>
+                  </View>
+                ) : (
+                  <ScrollView style={s.importList}>
+                    {filteredImportEvents.map((ev) => (
+                      <TouchableOpacity
+                        key={ev.id}
+                        testID={`import-event-row-${ev.id}`}
+                        style={s.importRow}
+                        onPress={() => selectImportEvent(ev)}
+                      >
+                        <Text style={s.importRowTitle} numberOfLines={1}>{ev.title}</Text>
+                        <Text style={s.importRowSubtitle} numberOfLines={1}>
+                          {ev.allDay ? 'All day · ' : ''}{formatDisplayDate(new Date(ev.startDate))} · {formatDisplayTime(new Date(ev.startDate))}
+                          {ev.calendarTitle ? ` · ${ev.calendarTitle}` : ''}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                )}
+              </View>
+            </View>
           </Modal>
 
           {/* Linked Note */}
@@ -856,6 +1133,7 @@ const s = StyleSheet.create({
   pickerContainer: { backgroundColor: C.surface, borderRadius: 12, borderWidth: 2, borderColor: C.borderSub, overflow: 'hidden' },
   pickerBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: C.surface, borderRadius: 12, borderWidth: 2, borderColor: C.borderSub, paddingHorizontal: 16, height: 60 },
   pickerBtnText: { flex: 1, fontSize: 20, fontWeight: '400', color: C.text, marginLeft: 12 },
+  locationInput: { flex: 1, fontSize: 20, fontWeight: '400', color: C.text, marginLeft: 12, height: '100%' },
   descInput: { minHeight: 100, borderWidth: 2, borderColor: C.border, borderRadius: 12, paddingHorizontal: 16, paddingTop: 12, fontSize: 20, color: C.text, backgroundColor: C.surface, textAlignVertical: 'top' },
   linkedNote: { flexDirection: 'row', alignItems: 'center', backgroundColor: C.secondary + '15', borderRadius: 8, padding: 12, marginTop: 16 },
   linkedNoteText: { fontSize: 16, color: C.secondary, marginLeft: 8, flex: 1 },
@@ -868,6 +1146,15 @@ const s = StyleSheet.create({
   calendarToggleTextContainer: { marginLeft: 12, flex: 1 },
   calendarToggleTitle: { fontSize: 18, fontWeight: '600', color: C.text },
   calendarToggleSubtitle: { fontSize: 14, color: C.textSec, marginTop: 2 },
+  importBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: C.surface, borderRadius: 16, borderWidth: 2, borderColor: C.secondary + '40', paddingHorizontal: 16, height: 60, marginBottom: 20 },
+  importBtnText: { flex: 1, fontSize: 18, fontWeight: '600', color: C.secondary, marginLeft: 12 },
+  importModalContent: { maxHeight: '75%' },
+  importSearchInput: { height: 52, borderWidth: 2, borderColor: C.borderSub, borderRadius: 12, paddingHorizontal: 16, fontSize: 17, color: C.text, backgroundColor: C.bg, marginHorizontal: 20, marginTop: 12 },
+  importList: { marginTop: 8, paddingHorizontal: 20 },
+  importRow: { paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: C.borderSub + '30' },
+  importRowTitle: { fontSize: 18, fontWeight: '600', color: C.text },
+  importRowSubtitle: { fontSize: 14, color: C.textSec, marginTop: 4 },
+  importEmptyText: { fontSize: 16, color: C.textSec },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.5)', justifyContent: 'center', alignItems: 'center', padding: 24 },
   modalContent: { backgroundColor: C.surface, borderRadius: 20, padding: 24, width: '100%', maxWidth: 340, alignItems: 'center' },
   modalTitle: { fontSize: 22, fontWeight: '700', color: C.text, marginBottom: 12 },

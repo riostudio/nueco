@@ -1,26 +1,40 @@
-# MemoPad — End-to-End Encryption Design & Threat Model
+# MemoPad - End-to-End Encryption Design & Threat Model
 
 _Status: implemented (crypto core, backend escrow, note field encrypt/decrypt,
-gated migration). Production rollout gated behind build flags — see §9._
+calendar event field encrypt/decrypt, account name encrypt/decrypt, gated
+migration). Production rollout gated behind build flags - see §9._
 _Scope of this doc: the cryptographic design that an external auditor should review._
 
 ## 1. Goal
 
-Note content (`title`, `content`, `tags`, and structured fields) is encrypted on
-the user's device so that **the server, the operator, MongoDB Atlas, and anyone with
-a database dump cannot read it**. The server stores only ciphertext and opaque
-wrapped-key material.
+Note content (`title`, `content`, `tags`, and structured fields), calendar event
+content (`title`, `description`, `location` - Stage 5), and the account display
+`name` (Stage 5) are encrypted on the user's device so that **the server, the
+operator, MongoDB Atlas, and anyone with a database dump cannot read them**. The
+server stores only ciphertext and opaque wrapped-key material.
 
 ### Non-goals (explicitly out of scope)
-- **Metadata privacy.** The server still sees: which user owns a note, counts,
-  timestamps (`created_at`/`updated_at`), `is_pinned`, attachment presence/sizes,
-  and `feature_events` usage telemetry. Only note *content* is encrypted.
+- **Metadata privacy.** The server still sees: which user owns a note/event, counts,
+  timestamps (`created_at`/`updated_at`), `is_pinned`, event `start_time`/`end_time`/
+  `reminder_minutes`, attachment presence/sizes, and `feature_events` usage telemetry.
+  Only note/event *content* and the account *name* are encrypted - not email (needed
+  as the login lookup key) or event scheduling fields (needed for reminders/sync).
 - **AI features.** Organize/Summarize and voice transcription send the relevant
   note's plaintext to OpenAI **for that action only** (decrypted on-device, result
   re-encrypted). These are explicit, user-initiated plaintext egress and are NOT
   covered by the E2EE guarantee. (Product decision: kept for now.)
+- **Server-initiated reminder pushes show a generic title (Stage 5).** The
+  `/internal/push/tick` cron builds the reminder notification server-side with no
+  DEK available. When an event's title is ciphertext, the push falls back to the
+  generic "Event Reminder" text instead of the real title (`server.py`, `push_tick`).
+  The client-local scheduled notification (set from on-device plaintext when the
+  event is saved) is unaffected and still shows the real title.
+- **Transactional emails show a generic greeting once the name is encrypted
+  (Stage 5).** Verification, password-reset, and password-changed emails run
+  pre-session or without a DEK (`auth/service.py`, `auth/email_service.py`) and fall
+  back to "Hi there," instead of "Hi {name}," once `enc_version` is set on the user.
 - **Forward secrecy / post-compromise security.** A single long-lived DEK; no
-  ratcheting. Compromise of the DEK exposes all of that user's notes.
+  ratcheting. Compromise of the DEK exposes all of that user's notes/events/name.
 - **Protecting against a malicious app build.** E2EE protects against a hostile
   *server*, not a hostile *client*.
 
@@ -47,7 +61,7 @@ wrapped-key material.
   Native because pure-JS scrypt/PBKDF2 is unusably slow on Hermes (~69 s/login,
   measured via `/crypto-check`). The portable core (`e2ee.ts`) takes the KDF by
   injection (`configureKdf`); the app wires in quick-crypto, Node tests wire in
-  `node:crypto`. Not memory-hard — see §7.
+  `node:crypto`. Not memory-hard - see §7.
 - **CSPRNG:** `@noble/hashes` `randomBytes` → `crypto.getRandomValues`, polyfilled
   on React Native by `react-native-get-random-values` (imported first at app entry).
 - **Encoding:** dependency-free base64; ciphertext token format `v1.<b64 nonce>.<b64 ct‖tag>`.
@@ -61,9 +75,9 @@ recovery code ─pbkdf2(salt_r)▶ KEK_r ┘
                                      DEK ──AES-256-GCM──▶ note ciphertext
 ```
 
-- **DEK** — per-user random 256-bit Data Encryption Key. Encrypts all note fields.
+- **DEK** - per-user random 256-bit Data Encryption Key. Encrypts all note fields.
   Held on-device in **expo-secure-store** (Android Keystore / iOS Keychain).
-- **KEK_p / KEK_r** — derived from password / recovery code via PBKDF2. Never stored.
+- **KEK_p / KEK_r** - derived from password / recovery code via PBKDF2. Never stored.
 - **Escrow bundle** (stored server-side, opaque): `wrapped_by_password`,
   `wrapped_by_recovery`, `kdf_salt`, `recovery_salt`, `kdf`, `kdf_params`, `enc_version`.
 
@@ -75,7 +89,7 @@ rollout in §9).
 
 - **First login / legacy user (no escrow):** signup itself can't escrow (it requires
   email verification, so there's no session yet), so the **escrow is created at first
-  login** — which also transparently covers users who predate E2EE. Generate DEK +
+  login** - which also transparently covers users who predate E2EE. Generate DEK +
   recovery code; derive KEK_p, KEK_r; wrap DEK under both; `PUT /api/crypto/wrapped-key`.
   Show the recovery code once (blocking screen). Store DEK in SecureStore.
 - **Login (escrow exists):** `GET /api/crypto/wrapped-key`; derive KEK_p from password;
@@ -92,8 +106,13 @@ rollout in §9).
 
 - `notes`: `title`/`content`/`tags` as `v1.…` ciphertext strings; `enc_version` set.
   (`enc_version=null` ⇒ legacy plaintext pending migration.)
+- `events`: `title`/`description`/`location` as `v1.…` ciphertext strings when
+  `enc_version` is set (Stage 5); `start_time`/`end_time`/`reminder_minutes`/
+  `linked_note_ids`/`device_calendar_event_id` stay plaintext.
+- `users`: `name` as a `v1.…` ciphertext string when `enc_version` is set (Stage 5);
+  `email`/`password` (bcrypt hash) stay plaintext - email is the login lookup key.
 - `user_keys`: the escrow bundle (opaque). Size-capped; never the DEK or plaintext.
-- `feature_events`: `{event, user_id, ts, meta}` — metadata only, size-capped.
+- `feature_events`: `{event, user_id, ts, meta}` - metadata only, size-capped.
 
 ## 7. Consequences / known limitations
 
@@ -104,16 +123,16 @@ rollout in §9).
 - **KDF is not memory-hard.** PBKDF2 resists GPU/ASIC cracking less than scrypt/
   Argon2id; we run 600k SHA-512 iterations (above the OWASP-2023 210k baseline).
   Argon2id would be stronger but lacks a maintained native module for this RN 0.83 /
-  New-Architecture stack — revisit when one ships. (Pure-JS scrypt was dropped:
+  New-Architecture stack - revisit when one ships. (Pure-JS scrypt was dropped:
   ~69 s/login on Hermes; native PBKDF2 @ 600k is ~350 ms.)
 - **No independent audit yet** (see `E2EE-AUDIT-BRIEF.md`).
 
 ## 8. Note field encryption (Stage 4)
 
 Where plaintext crosses to/from the server. Local AsyncStorage stays plaintext (the
-device is trusted; see threat model) — only the wire/server sees ciphertext.
+device is trusted; see threat model) - only the wire/server sees ciphertext.
 
-- **Core:** `frontend/src/crypto/noteCryptoCore.ts` (portable, node-tested) —
+- **Core:** `frontend/src/crypto/noteCryptoCore.ts` (portable, node-tested) -
   `encryptNoteFields` / `decryptNoteFields`. Encrypts `title`, `content`, and each
   `tag.name`; `tag.color` stays plaintext (not sensitive, needed to render before
   decrypt). Stamps `enc_version = 1`. **`enc_version` is stamped only when an
@@ -130,7 +149,7 @@ device is trusted; see threat model) — only the wire/server sees ciphertext.
 - **Size caps:** note fields arrive as base64 AES-GCM ciphertext, which inflates a
   plaintext field to just over 4× its char count in the worst case (all 3-byte UTF-8
   / CJK; measured 1000-char title → 4044 chars). Backend caps carry 5× headroom
-  (`_CIPHERTEXT_HEADROOM`): title ~5 KB, content ~1.25 MB — still far under Mongo's
+  (`_CIPHERTEXT_HEADROOM`): title ~5 KB, content ~1.25 MB - still far under Mongo's
   16 MB doc limit.
 - **Migration:** `noteMigration.ts` `migrateNotesToEncrypted` runs once at login (when
   the DEK is present), re-PUTting each `enc_version==null` note as ciphertext.
@@ -140,26 +159,75 @@ device is trusted; see threat model) — only the wire/server sees ciphertext.
   device-free backend integration check (`scripts/e2ee-backend-check.ts`,
   `yarn check:e2ee-backend`) that exercises the real crypto against a deployed API.
 
+## 8b. Calendar event & account name field encryption (Stage 5)
+
+Extends Stage 4's pattern to two more places crossing the wire. Same wire format,
+same flags, same rollout gates (§9) - built as a natural extension, not a new scheme.
+
+- **Events - core:** `frontend/src/crypto/eventCryptoCore.ts` (portable, node-tested,
+  `yarn test:crypto`) - `encryptEventFields`/`decryptEventFields`, encrypting `title`,
+  `description`, `location`. Identical shape to `noteCryptoCore.ts`: idempotent,
+  `enc_version` stamped only when an encryptable field is present (so a
+  `reminder_minutes`/`linked_note_ids`-only partial update can't mislabel an event),
+  undecryptable field → placeholder rather than throwing.
+- **Events - device wiring:** `eventCrypto.ts` (mirrors `noteCrypto.ts`).
+- **Events - boundaries wired:** `offlineSync.ts`'s `processEventOperation` (queued
+  create/update) and `fullSync`'s event merge; `event-editor.tsx` (which, like
+  `editor.tsx` for notes, calls `eventsApi` directly rather than through the offline
+  queue - both its autosave and back-button save paths encrypt before sending, and
+  `loadEvent` decrypts on load); `editor.tsx`'s linked-event read paths and "Link
+  Existing Event" picker; `(tabs)/events.tsx` and `(tabs)/calendar.tsx` list fetches;
+  `calendarSync.ts`'s device-calendar auto-sync writes. The calendar-sync hash-diff
+  logic is unaffected - it only ever compares raw device-calendar text against a
+  locally cached hash, never against MemoPad's (now encrypted) stored copy.
+- **Events - size caps:** same 5× ciphertext headroom rationale as notes
+  (`_CIPHERTEXT_HEADROOM`); `MAX_EVENT_TITLE_CHARS`/`_DESCRIPTION_CHARS`/`_LOCATION_CHARS`.
+- **Events - migration:** `eventMigration.ts` `migrateEventsToEncrypted`, same
+  idempotent/best-effort/per-user-marker shape as `noteMigration.ts`, its own
+  AsyncStorage marker key so notes and events migrate independently. Gated by the
+  same `E2EE_MIGRATION_ENABLED` flag - one migration switch, not two.
+- **Account name:** a single field on a single document, so it doesn't need a
+  separate pure-core/device-wiring pair - both directions live in
+  `frontend/src/crypto/accountCrypto.ts` (`encryptAccountName`/
+  `decryptAccountFromServer`). Name can't be encrypted at signup (no DEK exists yet -
+  see §5); instead, `AuthContext.tsx`'s `login()` checks the just-fetched user's
+  `enc_version` right after key bootstrap and, if unset, encrypts `name` and pushes it
+  via the new `PUT /api/auth/me` endpoint. Cheap (one field), so it runs on every
+  login rather than being gated behind `E2EE_MIGRATION_ENABLED` like the bulk
+  note/event migrations. `decryptAccountFromServer` deliberately does **not** clear
+  `enc_version` to null after decrypting the way notes/events do - the account name
+  has no generic "re-encrypt from scratch on every save" cycle, so keeping
+  `enc_version` truthful after decrypt is what lets `login()` correctly decide
+  whether a push is still needed. `authApi.ts` decrypts at every point it receives a
+  `User` from the server (`login`, `refreshToken`, `getMe`) before it ever reaches
+  local storage, so the cached copy is always plaintext, same convention as notes.
+- **Verification:** `eventCryptoCore.test.ts` (`yarn test:crypto`), same coverage
+  shape as the note tests (round-trip, idempotency, partial payloads, corrupt
+  ciphertext, migration selector).
+
 ## 9. Rollout (production enablement)
 
 Two independent build flags (`app.config.js` → `extra`, read via `expo-constants`),
-both OFF in production by default. Ordered rollout, with two irreversible gates:
+both OFF in production by default, shared by Stage 4 and Stage 5 (one switch each,
+not one per entity). Ordered rollout, with two irreversible gates:
 
-1. **Deploy backend** (raised caps + on-device search) from source, root dir
-   `backend` — never `railway up` from the repo root.
+1. **Deploy backend** (raised caps + on-device search, event/user `enc_version`
+   fields, the `PUT /auth/me` endpoint, and the push/email plaintext fallbacks) from
+   source, root dir `backend` - never `railway up` from the repo root.
 2. **Verify** on the deployed backend: `yarn check:e2ee-backend` (or a preview build).
-3. **Atlas snapshot** — mandatory before any migration; the migration rewrites every
-   plaintext note and there is no rollback without it.
+3. **Atlas snapshot** - mandatory before any migration; the migration rewrites every
+   plaintext note/event and there is no rollback without it.
 4. **Run migration:** build with `E2EE_MIGRATION=1` (→ `extra.e2eeMigration`); notes
-   migrate at each user's next login. Idempotent, so safe to leave on.
+   and events migrate at each user's next login. Idempotent, so safe to leave on.
 5. **Enable E2EE in prod (irreversible):** set `e2eeKeys` on for production builds.
-   Any note saved after this is unreadable server-side. Lost password **and** recovery
-   code ⇒ unrecoverable notes (§5).
+   Any note/event saved after this is unreadable server-side, and the account name
+   gets pushed as ciphertext on next login. Lost password **and** recovery code ⇒
+   unrecoverable notes/events/name (§5).
 
 ## 10. Dependencies (audit surface)
 
-- `@noble/ciphers@2.2.0`, `@noble/hashes@2.2.0` (audited, by Paul Miller) — AES-GCM + CSPRNG
-- `react-native-quick-crypto@1.1.5` (+ `react-native-nitro-modules`) — native PBKDF2
+- `@noble/ciphers@2.2.0`, `@noble/hashes@2.2.0` (audited, by Paul Miller) - AES-GCM + CSPRNG
+- `react-native-quick-crypto@1.1.5` (+ `react-native-nitro-modules`) - native PBKDF2
 - `react-native-get-random-values@~1.11.0`, `expo-secure-store`
 - Crypto core: `frontend/src/crypto/e2ee.ts` (KDF-injected) + `kdf-native.ts` + tests `e2ee.test.ts`
 - Backend escrow: `backend/server.py` (`/api/crypto/wrapped-key`, `enc_version`)

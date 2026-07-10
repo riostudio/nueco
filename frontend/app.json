@@ -99,6 +99,14 @@
           "disableIOS": false,
           "disableAndroid": false
         }
+      ],
+      "expo-task-manager",
+      "expo-background-task",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Use your current location to fill in an event's location field"
+        }
       ]
     ],
     "experiments": {

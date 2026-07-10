@@ -24,7 +24,7 @@ export const strings = {
   verifyEmailTitle: 'Verify Your Email',
   verifyEmailMessage: "We've sent a verification link to:",
   resendEmail: 'Resend Email',
-  verifiedContinue: "I've verified — continue",
+  verifiedContinue: "I've verified - continue",
 
   // Forgot password
   forgotPasswordTitle: 'Reset Password',

@@ -1,30 +1,33 @@
 /**
- * One-time eager migration of legacy plaintext notes to E2EE ciphertext (Stage 4).
+ * One-time eager migration of legacy plaintext calendar events to E2EE ciphertext
+ * (Stage 5). Mirrors `noteMigration.ts` field-for-field, with its own independent
+ * "done" marker so notes and events migrate on separate schedules.
  *
- * DANGER / IRREVERSIBLE: this rewrites every plaintext note document server-side.
- * It is gated by `E2EE_MIGRATION_ENABLED` (default OFF) and MUST be preceded by an
- * Atlas snapshot - see E2EE-DESIGN.md §7. Nothing here runs until that flag is
- * flipped and the app rebuilt.
+ * DANGER / IRREVERSIBLE: this rewrites every plaintext event document server-side.
+ * It is gated by the same `E2EE_MIGRATION_ENABLED` flag as notes (default OFF) and
+ * MUST be preceded by an Atlas snapshot - see E2EE-DESIGN.md. Nothing here runs until
+ * that flag is flipped and the app rebuilt.
  *
  * Properties:
- *  - Idempotent: only touches notes with `enc_version == null`; re-running is a
+ *  - Idempotent: only touches events with `enc_version == null`; re-running is a
  *    cheap no-op once everything is encrypted.
  *  - Non-blocking / best-effort: any failure is swallowed and retried on the next
  *    login (the per-user "done" marker is only set when nothing failed).
- *  - Minimal payload: re-PUTs only title/content/tags (+enc_version). The backend
- *    uses exclude_unset, so untouched fields (images, pin, links) are preserved.
+ *  - Minimal payload: re-PUTs only title/description/location (+enc_version). The
+ *    backend uses exclude_unset, so untouched fields (times, reminders, links) are
+ *    preserved.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { notesApi } from '../api';
-import { encryptNoteFields, notesNeedingMigration, type EncryptableNote } from './noteCryptoCore';
+import { eventsApi } from '../api';
+import { encryptEventFields, eventsNeedingMigration, type EncryptableEvent } from './eventCryptoCore';
 import { loadDek } from './keystore';
 import { E2EE_MIGRATION_ENABLED } from './flags';
 
-export type MigrationResult =
+export type EventMigrationResult =
   | { status: 'skipped'; reason: 'disabled' | 'no-key' | 'already-done' }
   | { status: 'done'; total: number; migrated: number; failed: number };
 
-const DONE_KEY_PREFIX = 'e2ee:migration:v1:done:';
+const DONE_KEY_PREFIX = 'e2ee:event-migration:v1:done:';
 const doneKey = (userId: string) => `${DONE_KEY_PREFIX}${userId}`;
 
 async function isMigrationDone(userId: string): Promise<boolean> {
@@ -43,16 +46,16 @@ async function markMigrationDone(userId: string): Promise<void> {
   }
 }
 
-interface ServerNote extends EncryptableNote {
+interface ServerEvent extends EncryptableEvent {
   id: string;
 }
 
 /**
- * Encrypt every legacy plaintext note for `userId` and re-PUT it. Returns a summary;
+ * Encrypt every legacy plaintext event for `userId` and re-PUT it. Returns a summary;
  * see module doc for the safety properties. `userId` scopes the run-once marker so a
  * second account on the same device migrates independently.
  */
-export async function migrateNotesToEncrypted(userId: string | undefined): Promise<MigrationResult> {
+export async function migrateEventsToEncrypted(userId: string | undefined): Promise<EventMigrationResult> {
   if (!E2EE_MIGRATION_ENABLED) return { status: 'skipped', reason: 'disabled' };
   if (!userId) return { status: 'skipped', reason: 'no-key' };
 
@@ -60,22 +63,22 @@ export async function migrateNotesToEncrypted(userId: string | undefined): Promi
   if (!dek) return { status: 'skipped', reason: 'no-key' };
   if (await isMigrationDone(userId)) return { status: 'skipped', reason: 'already-done' };
 
-  const all: ServerNote[] = await notesApi.getAll();
-  const pending = notesNeedingMigration(all);
+  const all: ServerEvent[] = await eventsApi.getAll();
+  const pending = eventsNeedingMigration(all);
 
   let migrated = 0;
   let failed = 0;
-  for (const note of pending) {
+  for (const event of pending) {
     try {
-      const payload = encryptNoteFields(
-        { title: note.title ?? '', content: note.content ?? '', tags: note.tags ?? [] },
+      const payload = encryptEventFields(
+        { title: event.title ?? '', description: event.description ?? '', location: event.location ?? '' },
         dek,
       );
-      await notesApi.update(note.id, payload);
+      await eventsApi.update(event.id, payload);
       migrated += 1;
     } catch (e) {
       failed += 1;
-      console.warn('E2EE migration: failed to encrypt note', note.id, e);
+      console.warn('E2EE migration: failed to encrypt event', event.id, e);
     }
   }
 

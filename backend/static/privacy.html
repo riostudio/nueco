@@ -1,0 +1,549 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MemoPad Privacy Policy</title>
+<style>
+  :root {
+    --bg: #FDFBF7;
+    --surface: #FFFFFF;
+    --surface-sunken: #F5F0E8;
+    --text: #14110D;
+    --text-sec: #4A4038;
+    --text-tertiary: #8A7F72;
+    --border: #E4DACB;
+    --border-strong: #D8CBB4;
+    --accent: #C1431F;
+    --accent-fg: #FFFFFF;
+    --accent-tint: #F3E2DA;
+    --warn-bg: #FBF0DE;
+    --warn-border: #E3C583;
+    --warn-text: #6B4E12;
+    --code-bg: #F1E9DC;
+    --shadow: 0 1px 2px rgba(20, 17, 13, 0.04), 0 8px 24px rgba(20, 17, 13, 0.05);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17140F;
+      --surface: #1E1A14;
+      --surface-sunken: #24201A;
+      --text: #F3ECDF;
+      --text-sec: #C8BCA9;
+      --text-tertiary: #8E8272;
+      --border: #362F25;
+      --border-strong: #453C2F;
+      --accent: #E8703F;
+      --accent-fg: #17140F;
+      --accent-tint: #372218;
+      --warn-bg: #322A16;
+      --warn-border: #6B5827;
+      --warn-text: #E9CE8B;
+      --code-bg: #26211A;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 56px 24px 96px;
+  }
+
+  .mast {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 40px;
+  }
+  .wordmark {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 700;
+    font-size: 15px;
+    letter-spacing: 0.01em;
+    color: var(--text);
+    text-decoration: none;
+  }
+  .wordmark-mark {
+    width: 26px;
+    height: 26px;
+    border-radius: 7px;
+    background: var(--accent);
+    color: var(--accent-fg);
+    display: grid;
+    place-items: center;
+    font-size: 13px;
+    font-weight: 800;
+    flex-shrink: 0;
+  }
+  .mast-meta {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .draft-flag {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-border);
+    color: var(--warn-text);
+    border-radius: 10px;
+    padding: 14px 16px;
+    font-size: 13.5px;
+    line-height: 1.55;
+    margin-bottom: 40px;
+  }
+  .draft-flag svg { flex-shrink: 0; margin-top: 2px; }
+  .draft-flag strong { font-weight: 700; }
+
+  h1 {
+    font-size: 34px;
+    line-height: 1.15;
+    letter-spacing: -0.015em;
+    margin: 0 0 10px;
+    text-wrap: balance;
+    font-weight: 800;
+  }
+  .subhead {
+    font-size: 16.5px;
+    color: var(--text-sec);
+    line-height: 1.6;
+    margin: 0 0 32px;
+    max-width: 60ch;
+  }
+
+  .summary-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 22px 24px 24px;
+    margin-bottom: 44px;
+    box-shadow: var(--shadow);
+  }
+  .summary-box h2 {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+    font-weight: 700;
+    margin: 0 0 14px;
+  }
+  .summary-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px 20px;
+  }
+  @media (max-width: 560px) {
+    .summary-grid { grid-template-columns: 1fr; }
+  }
+  .summary-item {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    font-size: 14.5px;
+    line-height: 1.5;
+    color: var(--text);
+  }
+  .summary-item .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    margin-top: 7px;
+    flex-shrink: 0;
+  }
+  .summary-item b { font-weight: 600; }
+
+  nav.toc {
+    margin-bottom: 48px;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    padding: 18px 0;
+  }
+  nav.toc ol {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 24px;
+    counter-reset: toc;
+  }
+  @media (max-width: 560px) {
+    nav.toc ol { grid-template-columns: 1fr; }
+  }
+  nav.toc li { counter-increment: toc; }
+  nav.toc a {
+    display: flex;
+    gap: 10px;
+    font-size: 13.5px;
+    color: var(--text-sec);
+    text-decoration: none;
+    padding: 3px 0;
+  }
+  nav.toc a:hover { color: var(--accent); }
+  nav.toc a::before {
+    content: counter(toc, decimal-leading-zero);
+    font-variant-numeric: tabular-nums;
+    color: var(--text-tertiary);
+    font-size: 12px;
+    padding-top: 1px;
+  }
+
+  section {
+    margin-bottom: 40px;
+    scroll-margin-top: 24px;
+  }
+  section h2 {
+    font-size: 20px;
+    letter-spacing: -0.005em;
+    margin: 0 0 14px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+    font-weight: 750;
+  }
+  section h3 {
+    font-size: 15px;
+    margin: 22px 0 8px;
+    font-weight: 700;
+    color: var(--text);
+  }
+  section p {
+    font-size: 15px;
+    line-height: 1.7;
+    color: var(--text-sec);
+    margin: 0 0 14px;
+    max-width: 66ch;
+  }
+  section ul {
+    margin: 0 0 14px;
+    padding-left: 20px;
+  }
+  section li {
+    font-size: 15px;
+    line-height: 1.7;
+    color: var(--text-sec);
+    margin-bottom: 6px;
+    max-width: 62ch;
+  }
+  section li b, section p b { color: var(--text); font-weight: 600; }
+  section a { color: var(--accent); }
+
+  .fact-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 4px 0 20px;
+    font-size: 13.5px;
+  }
+  .fact-table-wrap { overflow-x: auto; margin-bottom: 20px; }
+  .fact-table th {
+    text-align: left;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-tertiary);
+    font-weight: 700;
+    padding: 0 12px 8px 0;
+    border-bottom: 1px solid var(--border-strong);
+    white-space: nowrap;
+  }
+  .fact-table td {
+    padding: 11px 12px 11px 0;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-sec);
+    line-height: 1.5;
+    vertical-align: top;
+  }
+  .fact-table tr:last-child td { border-bottom: none; }
+  .fact-table td:first-child { color: var(--text); font-weight: 600; white-space: nowrap; }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11.5px;
+    font-weight: 700;
+    padding: 3px 9px;
+    border-radius: 100px;
+    white-space: nowrap;
+  }
+  .pill-encrypted { background: #1E4A2E22; color: #2E7D32; }
+  .pill-plain { background: var(--accent-tint); color: var(--accent); }
+  .pill-optional { background: var(--surface-sunken); color: var(--text-tertiary); border: 1px solid var(--border-strong); }
+
+  code, .mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.92em;
+    background: var(--code-bg);
+    padding: 1px 6px;
+    border-radius: 5px;
+    color: var(--text);
+  }
+
+  footer {
+    margin-top: 56px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    font-size: 13px;
+    color: var(--text-tertiary);
+  }
+  footer a { color: var(--text-sec); }
+
+  a:focus-visible, button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="mast">
+    <span class="wordmark">
+      <span class="wordmark-mark">M</span>
+      MemoPad
+    </span>
+    <span class="mast-meta">Draft, updated July 10, 2026</span>
+  </div>
+
+  <div class="draft-flag">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 9V13M12 17H12.01M10.29 3.86L1.82 18A2 2 0 0 0 3.55 21H20.45A2 2 0 0 0 22.18 18L13.71 3.86A2 2 0 0 0 10.29 3.86Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span><strong>This is a working draft, not a published policy.</strong> It was generated from a read of MemoPad's actual codebase (what data the app touches, where it goes, which third parties see it) so the factual claims below are grounded in the current build. It has not been reviewed by a lawyer and should get one before it is treated as final. Sections marked <em>(Placeholder...)</em> need a business or legal fact this codebase read can't supply: a registered legal entity name and address, a real monitored contact inbox, confirmed data-processing agreements with each sub-processor, and exact log/analytics retention windows. Revised against GDPR Article 13's disclosure checklist and industry practice from comparable end-to-end encrypted apps.</span>
+  </div>
+
+  <h1>Privacy Policy</h1>
+  <p class="subhead">This policy explains what MemoPad collects, why, and who it is shared with. It is written to match how the app is actually built, not a generic template.</p>
+
+  <div class="summary-box">
+    <h2>In short</h2>
+    <div class="summary-grid">
+      <div class="summary-item"><span class="dot"></span><span><b>Your notes, calendar events, and account name are encrypted on your device before we ever see them.</b> We store ciphertext we cannot read.</span></div>
+      <div class="summary-item"><span class="dot"></span><span><b>Event times and reminders stay readable on our servers.</b> Only the title, description, and location text are encrypted; scheduling data is not.</span></div>
+      <div class="summary-item"><span class="dot"></span><span><b>Analytics are opt in.</b> Off until you say yes, and note content is never included even when on.</span></div>
+      <div class="summary-item"><span class="dot"></span><span><b>Voice input and AI text tools use OpenAI.</b> Recordings and, if you ask for it, transcribed text are sent to OpenAI to do the work.</span></div>
+      <div class="summary-item"><span class="dot"></span><span><b>Calendar sync only touches calendars you pick.</b> Nothing is read from your device calendar until you turn it on and choose which ones.</span></div>
+      <div class="summary-item"><span class="dot"></span><span><b>You can export or delete everything.</b> Both are available right now in Settings &gt; Privacy &amp; Data.</span></div>
+    </div>
+  </div>
+
+  <nav class="toc" aria-label="Table of contents">
+    <ol>
+      <li><a href="#scope">Who this covers</a></li>
+      <li><a href="#controller">Who is responsible for your data</a></li>
+      <li><a href="#collect">Information we collect</a></li>
+      <li><a href="#use">How we use it</a></li>
+      <li><a href="#share">Who we share it with</a></li>
+      <li><a href="#transfers">International data transfers</a></li>
+      <li><a href="#security">How we protect it</a></li>
+      <li><a href="#retention">How long we keep it</a></li>
+      <li><a href="#rights">Your choices and rights</a></li>
+      <li><a href="#children">Children</a></li>
+      <li><a href="#changes">Changes to this policy</a></li>
+      <li><a href="#contact">Contact</a></li>
+    </ol>
+  </nav>
+
+  <section id="scope">
+    <h2>1. Who this covers</h2>
+    <p>This policy applies to the MemoPad mobile app and the backend services it talks to. It covers everyone with a MemoPad account. If you have not created an account, we do not hold any personal data about you.</p>
+  </section>
+
+  <section id="controller">
+    <h2>2. Who is responsible for your data</h2>
+    <p>MemoPad is the data controller for the information described in this policy: we decide why and how it is processed. <em>(Placeholder: this section needs the actual registered legal entity name, business address, and, if MemoPad serves EU/UK users at meaningful volume, whether a formal EU/UK representative or Data Protection Officer is required under GDPR Articles 27/37. These are business/legal facts this codebase read can't supply.)</em></p>
+  </section>
+
+  <section id="collect">
+    <h2>3. Information we collect</h2>
+    <p>MemoPad treats different kinds of content differently. The table below is the honest version: what we collect, and whether it is stored in a form we can actually read.</p>
+
+    <div class="fact-table-wrap">
+      <table class="fact-table">
+        <tr><th>Data</th><th>What it includes</th><th>How it is stored</th></tr>
+        <tr>
+          <td>Account name</td>
+          <td>The display name you sign up with</td>
+          <td><span class="pill pill-encrypted">Encrypted on device</span> starting from your first login after this feature shipped. We store ciphertext only.</td>
+        </tr>
+        <tr>
+          <td>Account login</td>
+          <td>Email address, password (as a bcrypt hash, never the plaintext password)</td>
+          <td><span class="pill pill-plain">Readable by us</span>, email cannot be encrypted and still work as your login</td>
+        </tr>
+        <tr>
+          <td>Notes</td>
+          <td>Titles, body content, tags, pin status</td>
+          <td><span class="pill pill-encrypted">Encrypted on device</span> before it leaves your phone. We store ciphertext only.</td>
+        </tr>
+        <tr>
+          <td>Calendar events</td>
+          <td>Title, description, location</td>
+          <td><span class="pill pill-encrypted">Encrypted on device</span> for events you create or edit going forward. Older, untouched events may still be readable by us until you edit them.</td>
+        </tr>
+        <tr>
+          <td>Event scheduling</td>
+          <td>Start and end time, reminder settings</td>
+          <td><span class="pill pill-plain">Readable by us</span>, needed to send reminders and keep calendar sync working</td>
+        </tr>
+        <tr>
+          <td>Attachments</td>
+          <td>Photos, files, and voice recordings you attach to a note</td>
+          <td>Stored in our object storage bucket, encrypted at rest by the storage provider; accessed through short-lived links</td>
+        </tr>
+        <tr>
+          <td>Voice input</td>
+          <td>Audio you record for voice-to-text</td>
+          <td>Sent to OpenAI once to transcribe, not retained by MemoPad as audio after transcription completes</td>
+        </tr>
+        <tr>
+          <td>Calendar sync</td>
+          <td>Events from device calendars (for example Apple, Google, or Outlook accounts already on your phone)</td>
+          <td><span class="pill pill-optional">Opt in</span>, only for calendars you explicitly select</td>
+        </tr>
+        <tr>
+          <td>Location</td>
+          <td>Your current position, only when you tap "use current location" on an event</td>
+          <td><span class="pill pill-optional">One time</span>, resolved by your phone's operating system; only the resulting address text is saved</td>
+        </tr>
+        <tr>
+          <td>Usage analytics</td>
+          <td>Which features you use, how often, general app health</td>
+          <td><span class="pill pill-optional">Opt in</span>, off by default; never includes note content</td>
+        </tr>
+        <tr>
+          <td>Feedback</td>
+          <td>Ratings and optional comments you choose to submit</td>
+          <td><span class="pill pill-plain">Readable by us</span>, may be summarized by OpenAI to route it internally</td>
+        </tr>
+        <tr>
+          <td>Device push token</td>
+          <td>An identifier used to deliver reminder notifications</td>
+          <td><span class="pill pill-plain">Readable by us</span></td>
+        </tr>
+      </table>
+    </div>
+
+    <h3>Where "encrypted on device" applies, and where it does not</h3>
+    <p>Note titles and bodies, event titles/descriptions/locations, and your account name are encrypted end to end: a key derived from your password (or your recovery code) protects them before they ever reach our servers, and we do not have the means to decrypt them. Event start/end times and reminder settings are not encrypted, since our servers need to read them to send reminders and keep calendar sync working. This does not currently extend to feedback text or a voice transcription you send through the organize or summarize tool, which pass through our servers, and in the case of transcription and text cleanup, OpenAI, as plain text.</p>
+    <p>Because we can no longer read an encrypted event's title, a reminder notification sent from our servers shows a generic "Event Reminder" instead of the real title; the reminder scheduled directly on your device (set when you save the event) still shows the real title. Similarly, once your account name is encrypted, account emails (verification, password reset) greet you with "Hi there," instead of your name, since those can be sent before you are logged in, when we have no way to decrypt it.</p>
+
+    <h3>Legal basis for processing</h3>
+    <table class="fact-table">
+      <tr><th>Data</th><th>Legal basis</th></tr>
+      <tr><td>Account, notes, events, attachments</td><td>Necessary to perform our contract with you, that is, to provide the app you signed up for</td></tr>
+      <tr><td>Usage analytics, calendar sync, location lookup</td><td>Your consent, given through an explicit opt-in toggle. You can withdraw it at any time in Settings, as easily as you gave it</td></tr>
+      <tr><td>Feedback you submit</td><td>Your consent, given by choosing to submit it</td></tr>
+      <tr><td>Security logs, fraud/abuse prevention</td><td>Our legitimate interest in keeping the service secure and available, balanced against your privacy (we keep these to the minimum needed, see &sect;8)</td></tr>
+    </table>
+  </section>
+
+  <section id="use">
+    <h2>4. How we use it</h2>
+    <ul>
+      <li><b>To run the app.</b> Storing and syncing your notes and events across your devices, sending reminder notifications, and keeping your account secure.</li>
+      <li><b>To power features you choose to use.</b> Voice transcription, AI text cleanup, calendar import and sync, and location lookup only run when you trigger them.</li>
+      <li><b>To improve MemoPad.</b> Only if you opt into analytics, and only using anonymized usage events, never note content.</li>
+      <li><b>To respond to feedback.</b> Comments you submit may be automatically categorized by AI so real issues get seen faster. This only sorts and prioritizes your feedback for our internal review; it does not decide anything about your account or access, and no human-reviewed decision about you is made solely by this process.</li>
+      <li>We do not sell your data, and we do not use your notes to train any AI model.</li>
+    </ul>
+  </section>
+
+  <section id="share">
+    <h2>5. Who we share it with</h2>
+    <p>We use a small number of service providers to run MemoPad. Each only receives what it needs to do its job.</p>
+    <div class="fact-table-wrap">
+      <table class="fact-table">
+        <tr><th>Provider</th><th>What they receive</th><th>Why</th></tr>
+        <tr><td>OpenAI</td><td>Voice recordings, transcribed text (if you use organize or summarize), feedback comments</td><td>Transcription and text processing</td></tr>
+        <tr><td>PostHog</td><td>Anonymized usage events</td><td>Product analytics, opt in only</td></tr>
+        <tr><td>MongoDB Atlas</td><td>Account data, encrypted note/event ciphertext, event scheduling data</td><td>Database hosting</td></tr>
+        <tr><td>Railway</td><td>All of the above, in transit through our backend</td><td>Application and file storage hosting</td></tr>
+        <tr><td>Expo / Apple / Google push services</td><td>Device push token</td><td>Delivering reminder notifications</td></tr>
+      </table>
+    </div>
+    <p>We do not share your data with advertisers, and we do not sell it to data brokers. We may disclose information if required by law, to protect the security of the service, or as part of a merger or acquisition, in which case this policy would continue to apply until you are told otherwise.</p>
+  </section>
+
+  <section id="transfers">
+    <h2>6. International data transfers</h2>
+    <p>Our service providers (OpenAI, PostHog, MongoDB Atlas, and Railway) may process data outside your country, including in the United States. Where that happens for EU/UK user data, it is done under a recognized transfer safeguard, such as Standard Contractual Clauses or an adequacy decision. <em>(Placeholder: this states the general legal requirement; confirming which specific safeguard is actually in place with each provider's current data processing agreement is a business step, not something derivable from the codebase.)</em> Encrypted note/event content and the account name are unreadable ciphertext regardless of where they are processed.</p>
+  </section>
+
+  <section id="security">
+    <h2>7. How we protect it</h2>
+    <ul>
+      <li>Notes, calendar events, and your account name are protected with end to end encryption (AES-256-GCM), with the key derived from your password or recovery code through PBKDF2. We do not hold a copy of your password, so we cannot decrypt this data on your behalf, which is also why a lost password and a lost recovery code together mean this data is unrecoverable.</li>
+      <li>Passwords are hashed with bcrypt and never stored or logged in plain text.</li>
+      <li>All traffic between the app and our servers is encrypted in transit (HTTPS).</li>
+      <li>Attachments are accessed through short-lived, presigned links rather than public URLs.</li>
+    </ul>
+  </section>
+
+  <section id="retention">
+    <h2>8. How long we keep it</h2>
+    <table class="fact-table">
+      <tr><th>Data</th><th>Retention</th></tr>
+      <tr><td>Notes, events, attachments, profile</td><td>Until you delete them, or until you delete your account, whichever comes first. Deleting your account erases all of it immediately.</td></tr>
+      <tr><td>Analytics events</td><td>Anonymized and not linked back to your identity once collected; kept for product-improvement purposes. <em>(Placeholder: state the actual retention window your analytics provider/config uses, e.g. "13 months," once set.)</em></td></tr>
+      <tr><td>Security/fraud-prevention logs</td><td>Kept only as long as needed to detect and respond to abuse, then deleted. <em>(Placeholder: state the actual log retention window once set.)</em></td></tr>
+      <tr><td>Feedback submissions</td><td>Kept to track and resolve the issue reported; not tied to your account after deletion</td></tr>
+    </table>
+    <p>Where an exact number of days isn't set yet (marked above), we commit to keeping data only as long as it serves the purpose it was collected for, and no longer.</p>
+  </section>
+
+  <section id="rights">
+    <h2>9. Your choices and rights</h2>
+    <ul>
+      <li><b>Export your data.</b> Settings &gt; Privacy &amp; Data &gt; Export my data gives you a complete, readable copy of your notes and events.</li>
+      <li><b>Delete your account.</b> Settings &gt; Privacy &amp; Data &gt; Delete account permanently erases your account and everything in it. This cannot be undone.</li>
+      <li><b>Turn analytics on or off.</b> Available any time from the same screen. Turning it off is exactly as easy as turning it on.</li>
+      <li><b>Turn calendar sync on or off,</b> and choose exactly which device calendars are included, from Calendar Sync in the menu.</li>
+      <li>Depending on where you live, you may also have the right to correct inaccurate data, object to certain processing, or lodge a complaint with your local data protection authority.</li>
+      <li><b>California residents:</b> we do not sell or share your personal information as defined by the CCPA, so there is nothing to opt out of on that front. You still have the access and deletion rights described above.</li>
+    </ul>
+  </section>
+
+  <section id="children">
+    <h2>10. Children</h2>
+    <p>MemoPad is not directed at children under 13, and we do not knowingly collect data from them. If you believe a child has created an account, contact us and we will remove it.</p>
+  </section>
+
+  <section id="changes">
+    <h2>11. Changes to this policy</h2>
+    <p>If MemoPad starts collecting new kinds of data or working with a new provider, this page will be updated and the effective date at the top will change. Material changes will be highlighted in the app.</p>
+  </section>
+
+  <section id="contact">
+    <h2>12. Contact</h2>
+    <p>Questions about this policy or your data can be sent to <code>privacy@memopad.app</code>. <em>(Placeholder address, replace with a real monitored inbox before this policy goes live.)</em></p>
+  </section>
+
+  <footer>
+    <span>MemoPad Privacy Policy, draft</span>
+    <span>Updated from a codebase review, July 10, 2026</span>
+  </footer>
+
+</div>
+</body>
+</html>

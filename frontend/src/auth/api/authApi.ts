@@ -3,6 +3,7 @@ import * as Device from 'expo-device';
 import { User, AuthResponse, MessageResponse, SyncStatus, SignUpData, LoginData, ChangePasswordData } from '../types/auth.types';
 import { authStorage } from '../storage/authStorage';
 import { BACKEND_API_BASE_URL } from '../../backendBaseUrl';
+import { decryptAccountFromServer } from '../../crypto/accountCrypto';
 
 class AuthApiService {
   private async parseJsonResponse<T>(response: Response, context: string): Promise<T> {
@@ -84,6 +85,10 @@ class AuthApiService {
         throw new Error(result.detail || 'Login failed');
       }
 
+      // Decrypt before this ever touches local storage - the local cache always holds
+      // plaintext, same convention as notes/events (see accountCrypto.ts).
+      result.user = await decryptAccountFromServer(result.user);
+
       // Store tokens
       await authStorage.setAccessToken(result.access_token);
       await authStorage.setRefreshToken(result.refresh_token);
@@ -127,7 +132,7 @@ class AuthApiService {
 
       if (!response.ok) {
         // Only clear tokens when the server explicitly rejects the refresh token.
-        // Do NOT clear on 5xx or network issues — that would wipe valid tokens.
+        // Do NOT clear on 5xx or network issues - that would wipe valid tokens.
         if (response.status === 401 || response.status === 403) {
           await authStorage.clearAll();
         }
@@ -135,11 +140,12 @@ class AuthApiService {
       }
 
       const result = await response.json();
+      result.user = await decryptAccountFromServer(result.user);
       await authStorage.setAccessToken(result.access_token);
       await authStorage.setUser(result.user);
       return result;
     } catch {
-      // Network error — leave tokens intact so the app can retry when online
+      // Network error - leave tokens intact so the app can retry when online
       return null;
     }
   }
@@ -153,7 +159,29 @@ class AuthApiService {
       throw new Error('Failed to get user info');
     }
 
-    return response.json();
+    const user = await response.json();
+    return decryptAccountFromServer(user);
+  }
+
+  /** Push the account name to the server. Used for a normal rename, and once by the
+   * E2EE key bootstrap (Stage 5) to push the client-encrypted name after the DEK
+   * first becomes available - see keySession.ts / AuthContext.tsx. */
+  async updateName(name: string, encVersion: number | null = null): Promise<User> {
+    const response = await fetch(`${BACKEND_API_BASE_URL}/auth/me`, {
+      method: 'PUT',
+      headers: await this.getHeaders(true),
+      body: JSON.stringify({ name, enc_version: encVersion }),
+    });
+
+    const result = await this.parseJsonResponse<User & { detail?: string }>(response, 'updateName');
+    if (!response.ok) {
+      throw new Error((result as any).detail || 'Failed to update name');
+    }
+    // If we just pushed a ciphertext name, the raw response echoes it back - re-decrypt
+    // for the in-memory/cached copy rather than leaving ciphertext in AuthContext state.
+    const decrypted = await decryptAccountFromServer(result);
+    await authStorage.setUser(decrypted);
+    return decrypted;
   }
 
   async forgotPassword(email: string): Promise<MessageResponse> {

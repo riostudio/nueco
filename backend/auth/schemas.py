@@ -37,11 +37,16 @@ class ResendVerificationRequest(BaseModel):
 class DeleteUnverifiedRequest(BaseModel):
     email: EmailStr
 
+class UpdateNameRequest(BaseModel):
+    name: str
+    enc_version: Optional[int] = None
+
 # Response schemas
 class UserResponse(BaseModel):
     id: str
     email: str
     name: str
+    enc_version: Optional[int] = None
     email_verified: bool
     created_at: datetime
 

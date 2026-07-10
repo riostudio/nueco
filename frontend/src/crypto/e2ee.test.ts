@@ -25,7 +25,7 @@ import {
 } from './e2ee.ts';
 
 // The portable core has no built-in KDF; tests inject node:crypto's native PBKDF2
-// (the app injects react-native-quick-crypto — same primitive, see kdf-native.ts).
+// (the app injects react-native-quick-crypto - same primitive, see kdf-native.ts).
 configureKdf((secret, salt, params) =>
   new Uint8Array(pbkdf2Sync(Buffer.from(secret), Buffer.from(salt), params.iterations, params.dkLen, params.hash)));
 

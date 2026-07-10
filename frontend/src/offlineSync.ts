@@ -15,6 +15,8 @@ import NetInfo, { NetInfoState } from '@react-native-community/netinfo';
 import uuid from 'react-native-uuid';
 import { notesApi, eventsApi } from './api';
 import { encryptNoteForServer, decryptNoteFromServer, decryptNotesFromServer } from './crypto/noteCrypto';
+import { encryptEventForServer, decryptEventsFromServer } from './crypto/eventCrypto';
+import { incrementNoteCreatedCount } from './feedbackToast';
 
 // ---- Types ----
 
@@ -27,7 +29,7 @@ export interface SyncQueueItem {
   entity: SyncEntity;
   operation: SyncOperation;
   payload?: any;            // the data to send
-  timestamp: string;        // ISO — when queued
+  timestamp: string;        // ISO - when queued
   retries: number;
 }
 
@@ -51,6 +53,7 @@ export interface LocalEvent {
   id: string;
   title: string;
   description: string;
+  location?: string;
   start_time: string;
   end_time: string;
   linked_note_ids: string[];
@@ -76,7 +79,7 @@ const KEYS = {
 // row read at ~2MB. A user with many notes (especially with embedded images)
 // blows past that: the write succeeds (~6MB cap) but every read throws
 // SQLiteBlobTooBigException, silently yielding an empty list. We persist the
-// large collections to plain JSON files instead — files have no row-size limit.
+// large collections to plain JSON files instead - files have no row-size limit.
 
 const FILE_DIR = `${FileSystem.documentDirectory}memopad/`;
 const FILES = {
@@ -100,14 +103,14 @@ export async function clearLocalData(): Promise<void> {
   try {
     await FileSystem.deleteAsync(FILE_DIR, { idempotent: true });
   } catch {
-    // ignore — nothing to clear or already gone
+    // ignore - nothing to clear or already gone
   }
   _dirReady = false;
 }
 
 // Reads a JSON file, falling back to (and migrating from) a legacy AsyncStorage
 // key the first time. If the legacy value is unreadable (e.g. the CursorWindow
-// error this fix addresses), we start fresh — fullSync repopulates from server.
+// error this fix addresses), we start fresh - fullSync repopulates from server.
 async function readJsonFile<T>(uri: string, fallback: T, legacyKey: string): Promise<T> {
   try {
     await ensureDir();
@@ -121,7 +124,7 @@ async function readJsonFile<T>(uri: string, fallback: T, legacyKey: string): Pro
           return JSON.parse(legacy) as T;
         }
       } catch {
-        // Legacy value too big to read — drop it and start from the file store.
+        // Legacy value too big to read - drop it and start from the file store.
         await AsyncStorage.removeItem(legacyKey).catch(() => {});
       }
       return fallback;
@@ -191,7 +194,7 @@ export async function enqueueOperation(item: Omit<SyncQueueItem, 'retries'>): Pr
     if (item.operation === 'delete' && existing.operation === 'create') {
       queue.splice(existingIndex, 1);
     } else {
-      // Merge — keep the earlier operation type but update payload
+      // Merge - keep the earlier operation type but update payload
       queue[existingIndex] = {
         ...existing,
         operation: item.operation === 'delete' ? 'delete' : existing.operation,
@@ -229,7 +232,7 @@ export async function deleteLocalNote(id: string): Promise<void> {
 
 // ---- Offline-first note create/update (shared by useOfflineNotes + the editor) ----
 // Local write first, then enqueue and (if online) push. Encryption happens once, at
-// the push boundary in processNoteOperation — callers pass plaintext. Returns the
+// the push boundary in processNoteOperation - callers pass plaintext. Returns the
 // LocalNote so callers can track its (temp) id until the queue swaps in the server id.
 
 // `push: false` writes locally + enqueues but does NOT sync now. The editor uses this
@@ -246,12 +249,13 @@ export async function createNoteOffline(
 
   await upsertLocalNote(note);
   await enqueueOperation({ id: tempId, entity: 'note', operation: 'create', payload: data, timestamp: now });
+  incrementNoteCreatedCount().catch(() => {});
 
   if (opts.push !== false && (await isOnline())) {
     try {
       await processSyncQueue();
     } catch {
-      // Sync failed — note is already saved locally and stays queued.
+      // Sync failed - note is already saved locally and stays queued.
     }
   }
   return note;
@@ -273,7 +277,7 @@ export async function updateNoteOffline(
   await enqueueOperation({
     id,
     entity: 'note',
-    // A note still local (never synced) stays a pending 'create' — enqueueOperation
+    // A note still local (never synced) stays a pending 'create' - enqueueOperation
     // merges this into its existing create op rather than emitting a doomed 'update'.
     operation: existing._isLocal ? 'create' : 'update',
     payload: { ...data, updated_at: now },
@@ -284,7 +288,7 @@ export async function updateNoteOffline(
     try {
       await processSyncQueue();
     } catch {
-      // Sync failed — update is saved locally and stays queued.
+      // Sync failed - update is saved locally and stays queued.
     }
   }
 }
@@ -375,7 +379,7 @@ async function processNoteOperation(item: SyncQueueItem): Promise<void> {
         if (isNewer(item.payload.updated_at, serverNote.updated_at)) {
           await notesApi.update(item.id, encrypted);
         } else {
-          // Server is newer — decrypt then store as the local plaintext copy.
+          // Server is newer - decrypt then store as the local plaintext copy.
           await upsertLocalNote({ ...(await decryptNoteFromServer(serverNote)), _isLocal: false });
         }
       } catch {
@@ -393,7 +397,7 @@ async function processNoteOperation(item: SyncQueueItem): Promise<void> {
 async function processEventOperation(item: SyncQueueItem): Promise<void> {
   switch (item.operation) {
     case 'create': {
-      const created = await eventsApi.create(item.payload);
+      const created = await eventsApi.create(await encryptEventForServer(item.payload));
       const events = await getLocalEvents();
       const idx = events.findIndex(e => e.id === item.id);
       if (idx >= 0) {
@@ -403,7 +407,7 @@ async function processEventOperation(item: SyncQueueItem): Promise<void> {
       break;
     }
     case 'update': {
-      await eventsApi.update(item.id, item.payload);
+      await eventsApi.update(item.id, await encryptEventForServer(item.payload));
       break;
     }
     case 'delete': {
@@ -422,7 +426,7 @@ export async function fullSync(): Promise<void> {
     // 1. Push pending local changes first
     await processSyncQueue();
 
-    // 2. Pull latest from server — notes and events are independent; don't let
+    // 2. Pull latest from server - notes and events are independent; don't let
     //    a broken events response block notes from being saved.
     const [notesResult, eventsResult] = await Promise.allSettled([
       notesApi.getAll(),
@@ -450,9 +454,10 @@ export async function fullSync(): Promise<void> {
       console.warn('fullSync: notes fetch failed:', notesResult.reason);
     }
 
-    // 4. Merge server events (independently — a failure here won't lose notes)
+    // 4. Merge server events (independently - a failure here won't lose notes)
     if (eventsResult.status === 'fulfilled') {
-      const mergedEvents: LocalEvent[] = eventsResult.value.map((e: any) => ({ ...e, _isLocal: false }));
+      const decryptedEvents = await decryptEventsFromServer(eventsResult.value);
+      const mergedEvents: LocalEvent[] = decryptedEvents.map((e: any) => ({ ...e, _isLocal: false }));
       await saveLocalEvents(mergedEvents);
     } else {
       console.warn('fullSync: events fetch failed:', eventsResult.reason);
@@ -474,7 +479,7 @@ export function startBackgroundSync(): void {
 
   _unsubscribeNetInfo = NetInfo.addEventListener(async (state: NetInfoState) => {
     if (state.isConnected && state.isInternetReachable) {
-      console.log('🌐 Back online — starting background sync...');
+      console.log('🌐 Back online - starting background sync...');
       await processSyncQueue();
     }
   });

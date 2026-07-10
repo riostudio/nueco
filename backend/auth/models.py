@@ -13,6 +13,7 @@ def create_user_doc(
         "id": user_id,
         "email": email.lower(),
         "name": name,
+        "enc_version": None,  # E2EE (Stage 5): set once the client encrypts name with its DEK
         "password": password_hash,
         "email_verified": False,
         "verification_token": None,

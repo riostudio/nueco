@@ -32,6 +32,9 @@ module.exports = ({ config }) => ({
     e2eeKeys: true,
     e2eeMigration: process.env.E2EE_MIGRATION === '1',
     diagnostics: !isProduction,
+    // Kill switch for the 5th-note feedback toast (src/feedbackToast.ts). Build-time only - flip
+    // to false and ship a new build to disable; there's no remote/live toggle for this flag.
+    feedbackToast: true,
   },
   plugins: [
     ...(config.plugins ?? []),

@@ -2,7 +2,7 @@
  * Key-recovery screen (Stage 3).
  *
  * Reached at login when the escrow exists but the password can no longer unwrap the
- * DEK — typically after an email-token password reset (which can't re-wrap the DEK
+ * DEK - typically after an email-token password reset (which can't re-wrap the DEK
  * server-side). The user enters their recovery code; we unwrap the DEK and re-wrap
  * it under the new password so future logins work normally.
  */
@@ -81,7 +81,7 @@ export default function RecoverKeyScreen() {
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.skipButton} onPress={() => router.replace('/(tabs)')} disabled={isLoading}>
-          <Text style={styles.skipText}>I don&apos;t have my code — skip for now</Text>
+          <Text style={styles.skipText}>I don&apos;t have my code - skip for now</Text>
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>

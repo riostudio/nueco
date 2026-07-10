@@ -40,7 +40,7 @@ export default function AnalyticsConsentScreen() {
         </View>
         <Text style={s.title}>Help improve MemoPad?</Text>
         <Text style={s.body}>
-          Share anonymous usage data — which features you use — so we can make MemoPad better.
+          Share anonymous usage data - which features you use - so we can make MemoPad better.
         </Text>
         <Text style={s.reassure}>
           Your notes, events, and personal content are never collected or sent anywhere. You can

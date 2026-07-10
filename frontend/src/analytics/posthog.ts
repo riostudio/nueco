@@ -64,7 +64,7 @@ export const initPostHog = async (userId?: string): Promise<PostHog | null> => {
       posthogInstance.identify(userId);
     }
 
-    // Respect a saved opt-out (GDPR) — capture() no-ops while opted out.
+    // Respect a saved opt-out (GDPR) - capture() no-ops while opted out.
     if (!(await isAnalyticsEnabled())) {
       posthogInstance.optOut();
     }
