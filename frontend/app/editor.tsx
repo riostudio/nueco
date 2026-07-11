@@ -25,7 +25,7 @@ import { unfurl, needsUnfurl } from '../src/share/unfurl';
 import { plainTextFromContent } from '../src/textContent';
 import { RichText, useEditorBridge, useEditorContent, useBridgeState } from '@10play/tentap-editor';
 import { Tag, CalendarEvent, Attachment } from '../src/types';
-import { TAG_COLORS, C } from '../src/theme';
+import { TAG_COLORS, C, radius } from '../src/theme';
 import { setNewNoteId } from '../src/newNoteSignal';
 import { 
   authStorage, 
@@ -1180,8 +1180,8 @@ export default function EditorScreen() {
         {/* Header */}
         <View style={s.header}>
           <TouchableOpacity testID="back-btn" style={s.headerBtn} onPress={handleSaveAndBack}>
-            <MaterialIcons name="arrow-back" size={28} color={C.primary} />
-            <Text style={[s.headerBtnLabel, { color: C.primary }]}>Back</Text>
+            <MaterialIcons name="arrow-back" size={28} color={C.text} />
+            <Text style={s.headerBtnLabel}>Back</Text>
           </TouchableOpacity>
           <View style={s.headerRight}>
             {/* User Avatar - reads user/logout from auth context internally */}
@@ -1244,7 +1244,7 @@ export default function EditorScreen() {
                   style={s.addTagBtn}
                   onPress={() => setShowTagPicker(!showTagPicker)}
                 >
-                  <MaterialIcons name="add" size={20} color={C.primary} />
+                  <MaterialIcons name="add" size={20} color={C.text} />
                   <Text style={s.addTagText}>Add Tag</Text>
                 </TouchableOpacity>
               )}
@@ -1804,11 +1804,11 @@ const s = StyleSheet.create({
   tagChipText: { fontSize: 16, fontWeight: '600', marginRight: 4 },
   addTagBtn: {
     flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 12, paddingVertical: 6,
-    borderRadius: 8, borderWidth: 1.5, borderColor: C.primary,
-    borderStyle: 'dashed', marginBottom: 8,
+    paddingHorizontal: 14, paddingVertical: 8,
+    borderRadius: radius.pill, borderWidth: 1.5, borderColor: C.border,
+    marginBottom: 8,
   },
-  addTagText: { fontSize: 16, fontWeight: '600', color: C.primary, marginLeft: 4 },
+  addTagText: { fontSize: 16, fontWeight: '600', color: C.text, marginLeft: 4 },
   tagPicker: {
     backgroundColor: C.surface, borderRadius: 12, padding: 16,
     borderWidth: 2, borderColor: C.borderSub, marginTop: 8,

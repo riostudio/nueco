@@ -13,7 +13,7 @@ import { decryptEventsFromServer } from '../../src/crypto/eventCrypto';
 import { CalendarEvent } from '../../src/types';
 import { MONTH_NAMES, DAY_NAMES, radius, borderWidth } from '../../src/theme';
 import { UserAvatar, useAuth } from '../../src/auth';
-import { SegmentedControl, Badge } from '../../src/components';
+import { SegmentedControl } from '../../src/components';
 
 let ExpoCalendar: typeof import('expo-calendar') | null = null;
 if (Platform.OS !== 'web') {
@@ -291,7 +291,7 @@ export default function EventsScreen() {
                 onPress={() => router.push({ pathname: '/event-editor', params: { eventId: event.id } })}
               >
                 <View style={s.eventTimeCol}>
-                  <Badge label={formatEventTime(event.start_time)} tone="accent" />
+                  <Text style={s.timeStart}>{formatEventTime(event.start_time)}</Text>
                   <Text style={s.timeEnd}>{formatEventTime(event.end_time)}</Text>
                 </View>
 
@@ -317,7 +317,7 @@ export default function EventsScreen() {
                       router.push({ pathname: '/event-editor', params: { eventId: event.id } });
                     }}
                   >
-                    <MaterialIcons name="edit" size={20} color={C.secondary} />
+                    <MaterialIcons name="edit" size={18} color={C.text} />
                   </TouchableOpacity>
                   <TouchableOpacity
                     testID={`delete-event-${event.id}`}
@@ -327,7 +327,7 @@ export default function EventsScreen() {
                       handleDeletePress(event.id, event.title, event.device_calendar_event_id);
                     }}
                   >
-                    <MaterialIcons name="delete" size={20} color={C.error} />
+                    <MaterialIcons name="delete" size={18} color={C.text} />
                   </TouchableOpacity>
                 </View>
               </TouchableOpacity>
@@ -419,7 +419,7 @@ const s = StyleSheet.create({
   dateHeader: {
     flexDirection: 'row', alignItems: 'center', marginBottom: 6, marginTop: 12,
   },
-  dateHeaderText: { fontSize: 16, fontWeight: '700', color: C.text },
+  dateHeaderText: { fontSize: 14, fontWeight: '500', color: C.textSec },
   todayBadge: {
     marginLeft: 8, backgroundColor: C.success, borderRadius: 10,
     paddingHorizontal: 8, paddingVertical: 2,
@@ -431,8 +431,9 @@ const s = StyleSheet.create({
     paddingVertical: 10, paddingHorizontal: 12,
     borderWidth: borderWidth.regular, borderColor: C.borderSub, marginBottom: 8,
   },
-  eventTimeCol: { marginRight: 12, alignItems: 'center', minWidth: 64 },
-  timeEnd: { fontSize: 12, fontWeight: '500', color: C.borderSub, marginTop: 4 },
+  eventTimeCol: { marginRight: 12, alignItems: 'flex-start', minWidth: 64 },
+  timeStart: { fontSize: 15, fontWeight: '700', color: C.secondary },
+  timeEnd: { fontSize: 13, fontWeight: '500', color: C.borderSub, marginTop: 1 },
   eventBody: { flex: 1 },
   eventTitle: { fontSize: 16, fontWeight: '600', color: C.text },
   eventDesc: { fontSize: 13, color: C.textSec, marginTop: 2 },

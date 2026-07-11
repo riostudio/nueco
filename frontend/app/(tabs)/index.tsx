@@ -362,7 +362,7 @@ export default function NotesScreen() {
               style={s.actionBtn}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             >
-              <MaterialIcons name="delete" size={22} color={C.error} />
+              <MaterialIcons name="delete" size={22} color={C.text} />
             </TouchableOpacity>
           </View>
         </View>

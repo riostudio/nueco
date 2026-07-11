@@ -644,8 +644,8 @@ export default function EventEditorScreen() {
         {/* Header */}
         <View style={s.header}>
           <TouchableOpacity testID="event-back-btn" style={s.headerBtn} onPress={handleBack}>
-            <MaterialIcons name="arrow-back" size={28} color={C.primary} />
-            <Text style={[s.headerBtnLabel, { color: C.primary }]}>Back</Text>
+            <MaterialIcons name="arrow-back" size={28} color={C.text} />
+            <Text style={s.headerBtnLabel}>Back</Text>
           </TouchableOpacity>
           <Text style={s.headerTitle}>{isEditing ? 'Edit Event' : 'New Event'}</Text>
           <View style={{ width: 80 }} />

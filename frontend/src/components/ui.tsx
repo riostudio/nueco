@@ -164,18 +164,14 @@ export function SegmentedControl<T extends string>({
 }) {
   return (
     <View style={[s.segmented, style]}>
-      {options.map((opt, i) => {
+      {options.map((opt) => {
         const selected = opt.value === value;
         return (
           <TouchableOpacity
             key={opt.value}
             testID={opt.testID}
             onPress={() => onChange(opt.value)}
-            style={[
-              s.segment,
-              selected && s.segmentSelected,
-              i > 0 && s.segmentDivider,
-            ]}
+            style={[s.segment, selected && s.segmentSelected]}
           >
             <Text style={[s.segmentLabel, selected && s.segmentLabelSelected]}>{opt.label}</Text>
           </TouchableOpacity>
@@ -271,20 +267,19 @@ const s = StyleSheet.create({
 
   segmented: {
     flexDirection: 'row',
-    borderWidth: borderWidth.regular,
-    borderColor: C.border,
-    borderRadius: radius.md,
-    overflow: 'hidden',
+    gap: 12,
   },
   segment: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 12,
+    borderWidth: borderWidth.regular,
+    borderColor: C.border,
+    borderRadius: radius.md,
     backgroundColor: C.surface,
   },
-  segmentSelected: { backgroundColor: C.secondaryTint },
-  segmentDivider: { borderLeftWidth: borderWidth.regular, borderLeftColor: C.border },
+  segmentSelected: { backgroundColor: C.secondaryTint, borderColor: C.secondaryTint },
   segmentLabel: { fontSize: 14, fontWeight: '600', color: C.text },
   segmentLabelSelected: { color: C.secondary },
 
