@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo, forwardRef, u
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   ScrollView, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
-  Keyboard, Share, Modal, Image, useWindowDimensions,
+  Keyboard, Share, Modal, Image, useWindowDimensions, Animated,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -173,6 +173,9 @@ export default function EditorScreen() {
   // True when images[0] is the card's thumbnail (kept out of the "Attached Images" gallery).
   const [thumbInImages0, setThumbInImages0] = useState(false);
   const [showImagePicker, setShowImagePicker] = useState(false);
+  // Driven manually (Modal's animationType="none") so the backdrop fades while the sheet slides.
+  const imagePickerBackdrop = useRef(new Animated.Value(0)).current;
+  const imagePickerTranslateY = useRef(new Animated.Value(400)).current;
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
   // In-flight uploads (shared files + in-app picks): shown as filename + radial progress.
@@ -252,6 +255,20 @@ export default function EditorScreen() {
   useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
   useEffect(() => { sourcePostRef.current = sourcePost; }, [sourcePost]);
   useEffect(() => { thumbInImages0Ref.current = thumbInImages0; }, [thumbInImages0]);
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(imagePickerBackdrop, {
+        toValue: showImagePicker ? 1 : 0,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+      Animated.timing(imagePickerTranslateY, {
+        toValue: showImagePicker ? 0 : 400,
+        duration: 250,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [showImagePicker, imagePickerBackdrop, imagePickerTranslateY]);
 
   // Once the note body is known, record it for save + seed-echo detection. <NoteBodyEditor> is
   // mounted with this as initialContent (below), so the editor itself loads reliably without a
@@ -1675,7 +1692,7 @@ export default function EditorScreen() {
       <Modal
         visible={showImagePicker}
         transparent
-        animationType="slide"
+        animationType="none"
         onRequestClose={() => setShowImagePicker(false)}
       >
         <TouchableOpacity
@@ -1683,27 +1700,26 @@ export default function EditorScreen() {
           activeOpacity={1}
           onPress={() => setShowImagePicker(false)}
         >
-          <TouchableOpacity activeOpacity={1} style={s.imagePickerCard}>
-            <View style={s.sheetHandle} />
-            <Text style={s.imagePickerTitle}>Add Image</Text>
+          <Animated.View
+            pointerEvents="none"
+            style={[StyleSheet.absoluteFill, s.sheetBackdrop, { opacity: imagePickerBackdrop }]}
+          />
+          <Animated.View style={{ transform: [{ translateY: imagePickerTranslateY }] }}>
+            <TouchableOpacity activeOpacity={1} style={s.imagePickerCard}>
+              <View style={s.sheetHandle} />
+              <Text style={s.imagePickerTitle}>Add Image</Text>
 
-            <TouchableOpacity style={s.imagePickerOption} onPress={takePhoto}>
-              <MaterialIcons name="camera-alt" size={28} color={C.primary} />
-              <Text style={s.imagePickerOptionText}>Take Photo</Text>
-            </TouchableOpacity>
+              <TouchableOpacity style={s.imagePickerOption} onPress={takePhoto}>
+                <MaterialIcons name="camera-alt" size={28} color={C.primary} />
+                <Text style={s.imagePickerOptionText}>Take Photo</Text>
+              </TouchableOpacity>
 
-            <TouchableOpacity style={s.imagePickerOption} onPress={pickFromGallery}>
-              <MaterialIcons name="photo-library" size={28} color={C.secondary} />
-              <Text style={s.imagePickerOptionText}>Choose from Gallery</Text>
+              <TouchableOpacity style={s.imagePickerOption} onPress={pickFromGallery}>
+                <MaterialIcons name="photo-library" size={28} color={C.secondary} />
+                <Text style={s.imagePickerOptionText}>Choose from Gallery</Text>
+              </TouchableOpacity>
             </TouchableOpacity>
-
-            <TouchableOpacity
-              style={s.imagePickerCancel}
-              onPress={() => setShowImagePicker(false)}
-            >
-              <Text style={s.imagePickerCancelText}>Cancel</Text>
-            </TouchableOpacity>
-          </TouchableOpacity>
+          </Animated.View>
         </TouchableOpacity>
       </Modal>
 
@@ -2239,8 +2255,10 @@ const s = StyleSheet.create({
   // Image Picker Bottom Sheet
   sheetOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'flex-end',
+  },
+  sheetBackdrop: {
+    backgroundColor: 'rgba(0,0,0,0.5)',
   },
   sheetHandle: {
     width: 40, height: 4, borderRadius: 2, backgroundColor: C.borderSub,
@@ -2269,13 +2287,5 @@ const s = StyleSheet.create({
   },
   imagePickerOptionText: {
     fontSize: 18, fontWeight: '600', color: C.text, marginLeft: 16,
-  },
-  imagePickerCancel: {
-    alignItems: 'center',
-    padding: 16,
-    marginTop: 8,
-  },
-  imagePickerCancelText: {
-    fontSize: 18, fontWeight: '600', color: C.textSec,
   },
 });
