@@ -49,6 +49,11 @@ export function UserAvatar({ size = 40 }: UserAvatarProps) {
     router.push('/calendar-sync-settings' as Href);
   };
 
+  const handleCanva = () => {
+    setMenuVisible(false);
+    router.push('/canva-settings' as Href);
+  };
+
   const handleLogout = async () => {
     setMenuVisible(false);
     await logout();
@@ -105,6 +110,11 @@ export function UserAvatar({ size = 40 }: UserAvatarProps) {
             <TouchableOpacity style={styles.menuItem} onPress={handleCalendarSync}>
               <MaterialIcons name="sync" size={24} color={C.text} />
               <Text style={styles.menuText}>Calendar Sync</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.menuItem} onPress={handleCanva}>
+              <MaterialIcons name="design-services" size={24} color={C.text} />
+              <Text style={styles.menuText}>Canva</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.menuItem} onPress={handleChangePassword}>

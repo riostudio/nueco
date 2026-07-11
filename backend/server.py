@@ -1306,6 +1306,10 @@ from auth.reset_password_page import router as reset_password_router
 api_router.include_router(auth_router)
 app.include_router(reset_password_router)
 
+# Include Canva integration router (design import - see backend/canva/)
+from canva.router import router as canva_router
+api_router.include_router(canva_router)
+
 app.include_router(api_router)
 
 

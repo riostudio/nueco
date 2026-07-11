@@ -322,3 +322,39 @@ export const textProcessApi = {
     return result;
   },
 };
+
+export interface CanvaStatus {
+  connected: boolean;
+  connected_at?: string | null;
+}
+
+export interface CanvaDesign {
+  id: string;
+  title: string;
+  thumbnail_url?: string | null;
+  updated_at?: number | null;
+}
+
+export interface CanvaDesignsPage {
+  designs: CanvaDesign[];
+  continuation?: string | null;
+}
+
+// The Canva access/refresh tokens live server-side only (see backend/canva/service.py) - the
+// client never sees them, only this thin proxy.
+export const canvaApi = {
+  connect: (): Promise<{ authorize_url: string }> => fetchApi('/canva/connect'),
+  status: (): Promise<CanvaStatus> => fetchApi('/canva/status'),
+  disconnect: () => fetchApi('/canva/disconnect', { method: 'DELETE' }),
+  listDesigns: (query?: string, continuation?: string): Promise<CanvaDesignsPage> => {
+    const params = new URLSearchParams();
+    if (query) params.set('query', query);
+    if (continuation) params.set('continuation', continuation);
+    const qs = params.toString();
+    return fetchApi(`/canva/designs${qs ? `?${qs}` : ''}`);
+  },
+  exportDesign: (designId: string): Promise<{ job_id: string; status: string }> =>
+    fetchApi(`/canva/designs/${designId}/export`, { method: 'POST' }),
+  exportStatus: (jobId: string): Promise<{ status: string; download_url?: string | null }> =>
+    fetchApi(`/canva/exports/${jobId}`),
+};
