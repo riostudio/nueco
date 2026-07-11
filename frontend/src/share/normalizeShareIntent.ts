@@ -46,14 +46,45 @@ export interface ShareFile {
   mimeType?: string | null;
   fileName?: string | null;
   size?: number | null;
+  width?: number | null;
+  height?: number | null;
+  duration?: number | null; // ms, video/audio only
 }
+
+/**
+ * Extra webpage metadata a share can carry, structurally matching expo-share-intent's
+ * `ShareIntentMeta`. On Android this is just `title` (if the sharing app sets one). On iOS, with
+ * NSExtensionActivationSupportsWebPageWithMaxCount enabled (see app.json), it's every `<meta>`
+ * tag off the shared page - commonly `title`, `og:image`, `og:description`.
+ */
+export type ShareMeta = Record<string, string | undefined>;
 
 /** Structural subset of expo-share-intent's `ShareIntent` that we consume. */
 export interface RawShareIntent {
   text?: string | null;
   webUrl?: string | null;
   files?: ShareFile[] | null;
-  meta?: { title?: string | null } | null;
+  meta?: ShareMeta | null;
+}
+
+/** First non-empty value across a set of possible meta-tag key spellings. */
+function metaValue(meta: ShareMeta | null | undefined, ...keys: string[]): string {
+  if (!meta) return '';
+  for (const key of keys) {
+    const v = meta[key];
+    if (v && v.trim()) return v.trim();
+  }
+  return '';
+}
+
+/** "1:05" for 65_000ms; drops the hour segment when under 60 minutes. */
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.round(ms / 1000);
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
 }
 
 export interface ShareDeps {
@@ -99,7 +130,9 @@ export async function normalizeShareIntent(intent: RawShareIntent, deps: ShareDe
   // caption is the card header; the body/title stay the user's to write.
   const brand = url ? detectSocialSource(url) : null;
   if (url && brand) {
-    const caption = (text ? text.replace(url, '').trim() : '') || (intent.meta?.title || '').trim();
+    const caption = (text ? text.replace(url, '').trim() : '')
+      || metaValue(intent.meta, 'title')
+      || metaValue(intent.meta, 'og:description', 'description');
     draft.sourcePost = { platform: brand.platform, label: brand.label, url, title: caption, kind: 'link' };
     draft.tags = [LINK_TAG];
   } else if (text) {
@@ -134,11 +167,19 @@ export async function normalizeShareIntent(intent: RawShareIntent, deps: ShareDe
     }
   }
 
-  // Attach a thumbnail to a social card: a shared image (already inlined) or a poster frame
-  // generated from a shared video. Either way images[0] holds the thumbnail so it persists.
+  // Attach a thumbnail to a social card, in priority order: a shared image (already inlined),
+  // then webpage metadata the OS/share extension already handed us for free (iOS only, see
+  // NSExtensionActivationSupportsWebPageWithMaxCount in app.json - no network fetch needed),
+  // then a poster frame generated from a shared video, then a deterministic remote poster (e.g.
+  // YouTube's CDN frame). Either way images[0] holds a local thumbnail so it persists with the
+  // note; a remote one rides in thumbUrl instead.
   if (draft.sourcePost) {
+    const metaImage = metaValue(intent.meta, 'og:image', 'og:image:secure_url', 'image');
     if (draft.images.length > 0) {
       draft.sourcePost.thumbnail = draft.images[0];
+      draft.sourcePost.kind = 'image';
+    } else if (metaImage) {
+      draft.sourcePost.thumbUrl = metaImage;
       draft.sourcePost.kind = 'image';
     } else if (deps.videoThumbnail) {
       const video = files.find((f) => (f.mimeType || '').toLowerCase().startsWith('video/'));
@@ -155,9 +196,9 @@ export async function normalizeShareIntent(intent: RawShareIntent, deps: ShareDe
         }
       }
     }
-    // A deterministic remote poster (e.g. YouTube's CDN frame) when we have no local thumbnail.
+    // A deterministic remote poster (e.g. YouTube's CDN frame) when we have no thumbnail yet.
     const poster = derivePosterUrl(url);
-    if (poster && !draft.sourcePost.thumbnail) {
+    if (poster && !draft.sourcePost.thumbnail && !draft.sourcePost.thumbUrl) {
       draft.sourcePost.thumbUrl = poster;
       draft.sourcePost.kind = 'video';
     }
@@ -167,7 +208,12 @@ export async function normalizeShareIntent(intent: RawShareIntent, deps: ShareDe
   // the card owns the header, so a bare photo/video share under a card keeps an empty title).
   if (!draft.title && !draft.sourcePost && files.length > 0) {
     const allImages = files.every((f) => (f.mimeType || '').toLowerCase().startsWith('image/'));
-    draft.title = allImages ? 'Photo note' : stripExt(baseName(files[0].fileName, 'Shared file'));
+    const singleVideo = files.length === 1 && (files[0].mimeType || '').toLowerCase().startsWith('video/') && files[0].duration;
+    draft.title = allImages
+      ? 'Photo note'
+      : singleVideo
+        ? `Video (${formatDuration(files[0].duration as number)})`
+        : stripExt(baseName(files[0].fileName, 'Shared file'));
     draft.needsTitle = false;
   }
 

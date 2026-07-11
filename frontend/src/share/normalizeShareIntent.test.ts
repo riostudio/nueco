@@ -36,6 +36,31 @@ async function main() {
     ok('bare-url text → card', d3.sourcePost?.platform === 'link' && d3.tags[0]?.name === 'link' && d3.content === '');
   }
 
+  console.log('rich webpage metadata (iOS NSExtensionActivationSupportsWebPageWithMaxCount / og tags):');
+  {
+    // og:image is a free thumbnail straight from the share extension - no unfurl() fetch needed.
+    const withImage = await normalizeShareIntent(
+      { webUrl: 'https://claude.ai/share/abc', meta: { title: 'A Claude chat', 'og:image': 'https://cdn/preview.png' } }, deps);
+    ok('og:image → card thumbUrl', withImage.sourcePost?.thumbUrl === 'https://cdn/preview.png');
+    ok('og:image present → kind image', withImage.sourcePost?.kind === 'image');
+
+    // A locally inlined image still wins over a remote og:image.
+    const withImageAndFile = await normalizeShareIntent(
+      { webUrl: 'https://ex.com/x', meta: { 'og:image': 'https://cdn/preview.png' },
+        files: [{ path: 'file:///p.jpg', mimeType: 'image/jpeg', fileName: 'p.jpg', size: 500 }] }, deps);
+    ok('inlined image beats og:image', withImageAndFile.sourcePost?.thumbnail !== undefined && withImageAndFile.sourcePost?.thumbUrl === undefined);
+
+    // No title/caption in text → falls back to og:description before giving up on a caption.
+    const withDescription = await normalizeShareIntent(
+      { webUrl: 'https://ex.com/y', meta: { 'og:description': 'A page about things.' } }, deps);
+    ok('og:description → card caption fallback', withDescription.sourcePost?.title === 'A page about things.');
+
+    // meta.title still wins over og:description when both are present.
+    const titleBeatsDescription = await normalizeShareIntent(
+      { webUrl: 'https://ex.com/z', meta: { title: 'Real Title', 'og:description': 'Ignored.' } }, deps);
+    ok('meta.title beats og:description', titleBeatsDescription.sourcePost?.title === 'Real Title');
+  }
+
   console.log('plain text:');
   {
     const d = await normalizeShareIntent({ text: 'forwarded message body' }, deps);
@@ -79,6 +104,14 @@ async function main() {
     const audio = await normalizeShareIntent(
       { files: [{ path: 'file:///s.m4a', mimeType: 'audio/mp4', fileName: 's.m4a', size: 9000 }] }, deps);
     ok('audio → pending file', audio.pendingFiles.length === 1);
+
+    const video = await normalizeShareIntent(
+      { files: [{ path: 'file:///v.mp4', mimeType: 'video/mp4', fileName: 'VID_20260711.mp4', size: 40000, duration: 65000, width: 1080, height: 1920 }] }, deps);
+    ok('single video w/ duration → "Video (m:ss)" title, not filename', video.title === 'Video (1:05)');
+
+    const videoNoDuration = await normalizeShareIntent(
+      { files: [{ path: 'file:///v2.mp4', mimeType: 'video/mp4', fileName: 'clip.mp4', size: 40000 }] }, deps);
+    ok('video w/o duration → falls back to filename', videoNoDuration.title === 'clip');
   }
 
   console.log('multiple files → one draft:');
