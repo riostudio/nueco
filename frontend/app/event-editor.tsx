@@ -145,8 +145,8 @@ export default function EventEditorScreen() {
   const [location, setLocation] = useState('');
   const [date, setDate] = useState(initialDate);
   const [endDate, setEndDate] = useState(initialDate);
-  const [startTime, setStartTime] = useState(() => { const d = new Date(initialDate); d.setHours(9, 0, 0, 0); return d; });
-  const [endTime, setEndTime] = useState(() => { const d = new Date(initialDate); d.setHours(10, 0, 0, 0); return d; });
+  const [startTime, setStartTime] = useState(() => new Date());
+  const [endTime, setEndTime] = useState(() => addOneHour(new Date()));
   const [loading, setLoading] = useState(isEditing);
   const [saveStatus, setSaveStatus] = useState('');
   const [showSuccessOverlay, setShowSuccessOverlay] = useState(false);
