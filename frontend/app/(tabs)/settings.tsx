@@ -174,8 +174,7 @@ const s = StyleSheet.create({
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 24, paddingTop: 8 },
   card: {
-    backgroundColor: C.surface, borderRadius: radius.md, padding: 20,
-    borderWidth: borderWidth.thick, borderColor: C.borderSub,
+    backgroundColor: C.surface, padding: 20,
   },
   row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10 },
   rowLabel: { fontSize: 18, color: C.text, marginLeft: 16, flex: 1, fontWeight: '500' },

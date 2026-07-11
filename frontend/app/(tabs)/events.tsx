@@ -310,16 +310,6 @@ export default function EventsScreen() {
 
                 <View style={s.actions}>
                   <TouchableOpacity
-                    testID={`edit-event-${event.id}`}
-                    style={s.actionBtn}
-                    onPress={(e) => {
-                      e.stopPropagation();
-                      router.push({ pathname: '/event-editor', params: { eventId: event.id } });
-                    }}
-                  >
-                    <MaterialIcons name="edit" size={18} color={C.text} />
-                  </TouchableOpacity>
-                  <TouchableOpacity
                     testID={`delete-event-${event.id}`}
                     style={s.actionBtn}
                     onPress={(e) => {

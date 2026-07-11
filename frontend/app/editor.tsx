@@ -187,6 +187,14 @@ export default function EditorScreen() {
   const [newTagName, setNewTagName] = useState('');
   const [selectedTagColor, setSelectedTagColor] = useState(TAG_COLORS[0].value);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  // TenTap's own focus-tracking (editorUi.isFocused, driven by the WebView bridge) is permanently
+  // stuck false on Expo - its web-side focusListener module is hard-stubbed to `{ isFocused: false }`
+  // there to dodge a `document`-undefined crash (see node_modules/@10play/tentap-editor/src/
+  // webEditorUtils/focusListener.tsx). So the format bar can never use it to decide visibility.
+  // Track focus on the two plain TextInputs instead (title, tag name) and infer "the rich-text
+  // editor has focus" as "keyboard is up but neither of those does" - together they're the only
+  // three focusable fields on this screen.
+  const [plainInputFocused, setPlainInputFocused] = useState(false);
   // Rich-text editor (TenTap). Content is the note body HTML; `contentRef` holds the latest for
   // saving. The editor lives in <NoteBodyEditor>, mounted with the loaded content as initialContent
   // (below). We drive it imperatively via editorApiRef and mirror its UI state for the toolbar.
@@ -1228,6 +1236,8 @@ export default function EditorScreen() {
               placeholderTextColor={C.borderSub}
               value={title}
               onChangeText={handleTitleChange}
+              onFocus={() => setPlainInputFocused(true)}
+              onBlur={() => setPlainInputFocused(false)}
               returnKeyType="next"
             />
             {tags.length < 3 && (
@@ -1270,6 +1280,8 @@ export default function EditorScreen() {
                     placeholderTextColor={C.borderSub}
                     value={newTagName}
                     onChangeText={setNewTagName}
+                    onFocus={() => setPlainInputFocused(true)}
+                    onBlur={() => setPlainInputFocused(false)}
                   />
                   <View style={s.colorRow}>
                     {TAG_COLORS.map((c) => (
@@ -1494,8 +1506,10 @@ export default function EditorScreen() {
 
         {/* Voice Input Bar + Format Toolbar */}
         <View style={s.bottomBar}>
-          {/* Format Toolbar - drives the TenTap editor; shows while it's focused (disabled on web) */}
-          {editorUi.isFocused && Platform.OS !== 'web' && (
+          {/* Format Toolbar - drives the TenTap editor; shows while it's focused (disabled on web).
+              editorUi.isFocused is unusable here (see plainInputFocused's declaration for why) -
+              keyboard-visible-but-not-a-plain-input is the reliable signal instead. */}
+          {isKeyboardVisible && !plainInputFocused && Platform.OS !== 'web' && (
             <View style={s.formatBar}>
               <TouchableOpacity
                 testID="fmt-bold"

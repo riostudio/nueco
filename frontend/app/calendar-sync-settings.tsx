@@ -11,7 +11,7 @@ import {
   getAllDeviceCalendars,
   runCalendarSync,
 } from '../src/calendarSync';
-import { C, radius, borderWidth } from '../src/theme';
+import { C } from '../src/theme';
 
 type DeviceCalendar = { id: string; title: string; source?: string };
 
@@ -158,8 +158,7 @@ const s = StyleSheet.create({
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 24, paddingTop: 8 },
   card: {
-    backgroundColor: C.surface, borderRadius: radius.md, padding: 20,
-    borderWidth: borderWidth.thick, borderColor: C.borderSub,
+    backgroundColor: C.surface, padding: 20,
   },
   toggleCard: { paddingVertical: 24, paddingHorizontal: 24 },
   sectionLabel: { fontSize: 16, fontWeight: '600', color: C.textSec, marginBottom: 12 },
