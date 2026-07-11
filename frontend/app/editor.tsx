@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo, forwardRef, u
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   ScrollView, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
-  Keyboard, Share, Modal, Image,
+  Keyboard, Share, Modal, Image, useWindowDimensions, Animated, Easing,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -16,7 +16,7 @@ import * as WebBrowser from 'expo-web-browser';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { notesApi, eventsApi, transcribeApi, textProcessApi, attachmentsApi, uploadAttachmentWithProgress, type UploadFile } from '../src/api';
 import { decryptEventFromServer, decryptEventsFromServer } from '../src/crypto/eventCrypto';
-import { RadialProgress, SharedPostCard } from '../src/components';
+import { RadialProgress, SharedPostCard, Button } from '../src/components';
 import { decryptNoteFromServer } from '../src/crypto/noteCrypto';
 import { createNoteOffline, updateNoteOffline, getLocalNotes, processSyncQueue } from '../src/offlineSync';
 import { takePendingShareDraft } from '../src/share/pendingShareDraft';
@@ -25,7 +25,7 @@ import { unfurl, needsUnfurl } from '../src/share/unfurl';
 import { plainTextFromContent } from '../src/textContent';
 import { RichText, useEditorBridge, useEditorContent, useBridgeState } from '@10play/tentap-editor';
 import { Tag, CalendarEvent, Attachment } from '../src/types';
-import { TAG_COLORS, C } from '../src/theme';
+import { TAG_COLORS, C, radius } from '../src/theme';
 import { setNewNoteId } from '../src/newNoteSignal';
 import { 
   authStorage, 
@@ -73,13 +73,26 @@ type EditorUiState = { isFocused: boolean; isBoldActive: boolean; isItalicActive
 // races the webview's readiness (it logs "Editor isn't ready yet" and drops the call, leaving the
 // body empty until tapped). Mounting this only once the content is known sidesteps the race.
 // Writing-area height bounds: TenTap's native auto-height is shimmed on Expo, so we grow the box
-// from the content instead (see bodyHeight) - min keeps a comfortable default. No max: the box is
-// inside the screen's own ScrollView, so a long paste/import should grow the box to fit and show
-// from the top, not get clipped to a fixed height with its own internal (and separately-scrolled)
-// WebView scroll. BODY_SANITY_MAX is only a backstop against a degenerate height estimate, not a
-// real content limit - see bodyHeight below.
-const BODY_MIN_HEIGHT = 180;
+// from the content instead (see bodyHeight). No max: the box is inside the screen's own ScrollView,
+// so a long paste/import should grow the box to fit and show from the top, not get clipped to a
+// fixed height with its own internal (and separately-scrolled) WebView scroll. BODY_SANITY_MAX is
+// only a backstop against a degenerate height estimate, not a real content limit - see bodyHeight
+// below. The min is computed from the window height (see minBodyHeight) so an empty/short note
+// fills the page instead of leaving a small box with dead space below it.
 const BODY_SANITY_MAX_HEIGHT = 20000;
+
+// Drives a bottom sheet's backdrop fade + card slide together. Opening decelerates in
+// (Easing.out) for a soft landing; closing accelerates away (Easing.in) so the dismiss feels
+// snappy rather than lingering. Matched durations keep the fade and slide finishing in sync.
+function animateSheet(backdrop: Animated.Value, translateY: Animated.Value, open: boolean): void {
+  const duration = open ? 280 : 220;
+  const easing = open ? Easing.out(Easing.cubic) : Easing.in(Easing.cubic);
+  Animated.parallel([
+    Animated.timing(backdrop, { toValue: open ? 1 : 0, duration, easing, useNativeDriver: true }),
+    Animated.timing(translateY, { toValue: open ? 0 : 400, duration, easing, useNativeDriver: true }),
+  ]).start();
+}
+
 const NoteBodyEditor = forwardRef<EditorApi, {
   initialContent: string;
   onChange: (html: string) => void;
@@ -90,6 +103,12 @@ const NoteBodyEditor = forwardRef<EditorApi, {
   const editor = useEditorBridge({ autofocus: false, avoidIosKeyboard: true, initialContent });
   const state = useBridgeState(editor);
   const html = useEditorContent(editor, { type: 'html', debounceInterval: 400 });
+  // Proportional rather than a subtract-the-chrome pixel count, since the chrome above (title/tags)
+  // and below (Schedule/Link buttons, then the fixed format bar/actions/voice input) both vary by
+  // state. Capped well under 100% so Schedule/Link stay visible on load instead of requiring a
+  // scroll past the box to discover them.
+  const { height: windowHeight } = useWindowDimensions();
+  const minBodyHeight = Math.max(180, Math.round(windowHeight * 0.4));
 
   // TenTap only resets the WebView's scroll position after boot when `dynamicHeight` is on (its own
   // fix for https://github.com/10play/10tap-editor/issues/236 / 244). We don't use dynamicHeight (see
@@ -112,8 +131,8 @@ const NoteBodyEditor = forwardRef<EditorApi, {
     const text = h.replace(/<[^>]+>/g, ' ').replace(/&[a-z#0-9]+;/gi, ' ');
     const wrapped = Math.ceil((text.trim().length || 1) / 36); // ~36 chars/line at the editor width
     const lines = Math.max(blocks + 1, wrapped);
-    return Math.min(BODY_SANITY_MAX_HEIGHT, Math.max(BODY_MIN_HEIGHT, lines * 26 + 28));
-  }, [html, initialContent]);
+    return Math.min(BODY_SANITY_MAX_HEIGHT, Math.max(minBodyHeight, lines * 26 + 28));
+  }, [html, initialContent, minBodyHeight]);
 
   useImperativeHandle(ref, () => ({
     getHTML: () => editor.getHTML(),
@@ -167,6 +186,11 @@ export default function EditorScreen() {
   // True when images[0] is the card's thumbnail (kept out of the "Attached Images" gallery).
   const [thumbInImages0, setThumbInImages0] = useState(false);
   const [showImagePicker, setShowImagePicker] = useState(false);
+  // Driven manually (Modal's animationType="none") so the backdrop fades while the sheet slides.
+  const imagePickerBackdrop = useRef(new Animated.Value(0)).current;
+  const imagePickerTranslateY = useRef(new Animated.Value(400)).current;
+  const eventPickerBackdrop = useRef(new Animated.Value(0)).current;
+  const eventPickerTranslateY = useRef(new Animated.Value(400)).current;
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
   // In-flight uploads (shared files + in-app picks): shown as filename + radial progress.
@@ -181,6 +205,14 @@ export default function EditorScreen() {
   const [newTagName, setNewTagName] = useState('');
   const [selectedTagColor, setSelectedTagColor] = useState(TAG_COLORS[0].value);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  // TenTap's own focus-tracking (editorUi.isFocused, driven by the WebView bridge) is permanently
+  // stuck false on Expo - its web-side focusListener module is hard-stubbed to `{ isFocused: false }`
+  // there to dodge a `document`-undefined crash (see node_modules/@10play/tentap-editor/src/
+  // webEditorUtils/focusListener.tsx). So the format bar can never use it to decide visibility.
+  // Track focus on the two plain TextInputs instead (title, tag name) and infer "the rich-text
+  // editor has focus" as "keyboard is up but neither of those does" - together they're the only
+  // three focusable fields on this screen.
+  const [plainInputFocused, setPlainInputFocused] = useState(false);
   // Rich-text editor (TenTap). Content is the note body HTML; `contentRef` holds the latest for
   // saving. The editor lives in <NoteBodyEditor>, mounted with the loaded content as initialContent
   // (below). We drive it imperatively via editorApiRef and mirror its UI state for the toolbar.
@@ -238,6 +270,12 @@ export default function EditorScreen() {
   useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
   useEffect(() => { sourcePostRef.current = sourcePost; }, [sourcePost]);
   useEffect(() => { thumbInImages0Ref.current = thumbInImages0; }, [thumbInImages0]);
+  useEffect(() => {
+    animateSheet(imagePickerBackdrop, imagePickerTranslateY, showImagePicker);
+  }, [showImagePicker, imagePickerBackdrop, imagePickerTranslateY]);
+  useEffect(() => {
+    animateSheet(eventPickerBackdrop, eventPickerTranslateY, showEventPicker);
+  }, [showEventPicker, eventPickerBackdrop, eventPickerTranslateY]);
 
   // Once the note body is known, record it for save + seed-echo detection. <NoteBodyEditor> is
   // mounted with this as initialContent (below), so the editor itself loads reliably without a
@@ -1180,8 +1218,8 @@ export default function EditorScreen() {
         {/* Header */}
         <View style={s.header}>
           <TouchableOpacity testID="back-btn" style={s.headerBtn} onPress={handleSaveAndBack}>
-            <MaterialIcons name="arrow-back" size={28} color={C.primary} />
-            <Text style={[s.headerBtnLabel, { color: C.primary }]}>Back</Text>
+            <MaterialIcons name="arrow-back" size={28} color={C.text} />
+            <Text style={s.headerBtnLabel}>Back</Text>
           </TouchableOpacity>
           <View style={s.headerRight}>
             {/* User Avatar - reads user/logout from auth context internally */}
@@ -1213,77 +1251,86 @@ export default function EditorScreen() {
         ) : null}
 
         <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent} keyboardShouldPersistTaps="handled">
-          {/* Title */}
-          <TextInput
-            testID="note-title-input"
-            style={s.titleInput}
-            placeholder="Note title..."
-            placeholderTextColor={C.borderSub}
-            value={title}
-            onChangeText={handleTitleChange}
-            returnKeyType="next"
-          />
-
-          {/* Tags */}
-          <View style={s.tagsSection}>
-            <View style={s.tagsRow}>
-              {tags.map((tag, i) => (
-                <TouchableOpacity
-                  key={i}
-                  testID={`tag-${i}`}
-                  style={[s.tagChip, { backgroundColor: tag.color + '20', borderColor: tag.color }]}
-                  onPress={() => removeTag(i)}
-                >
-                  <Text style={[s.tagChipText, { color: tag.color }]}>{tag.name}</Text>
-                  <MaterialIcons name="close" size={16} color={tag.color} />
-                </TouchableOpacity>
-              ))}
-              {tags.length < 3 && (
-                <TouchableOpacity
-                  testID="add-tag-btn"
-                  style={s.addTagBtn}
-                  onPress={() => setShowTagPicker(!showTagPicker)}
-                >
-                  <MaterialIcons name="add" size={20} color={C.primary} />
-                  <Text style={s.addTagText}>Add Tag</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-
-            {showTagPicker && (
-              <View style={s.tagPicker}>
-                <TextInput
-                  testID="tag-name-input"
-                  style={s.tagInput}
-                  placeholder="Tag name..."
-                  placeholderTextColor={C.borderSub}
-                  value={newTagName}
-                  onChangeText={setNewTagName}
-                />
-                <View style={s.colorRow}>
-                  {TAG_COLORS.map((c) => (
-                    <TouchableOpacity
-                      key={c.value}
-                      testID={`color-${c.name}`}
-                      style={[
-                        s.colorDot,
-                        { backgroundColor: c.value },
-                        selectedTagColor === c.value && s.colorDotSel,
-                      ]}
-                      onPress={() => setSelectedTagColor(c.value)}
-                    />
-                  ))}
-                </View>
-                <TouchableOpacity testID="confirm-tag-btn" style={s.confirmTagBtn} onPress={addTag}>
-                  <Text style={s.confirmTagText}>Add Tag</Text>
-                </TouchableOpacity>
-              </View>
+          {/* Title + Add Tag trigger, side by side */}
+          <View style={s.titleRow}>
+            <TextInput
+              testID="note-title-input"
+              style={[s.titleInput, s.titleInputFlex]}
+              placeholder="Note title..."
+              placeholderTextColor={C.borderSub}
+              value={title}
+              onChangeText={handleTitleChange}
+              onFocus={() => setPlainInputFocused(true)}
+              onBlur={() => setPlainInputFocused(false)}
+              returnKeyType="next"
+            />
+            {tags.length < 3 && (
+              <TouchableOpacity
+                testID="add-tag-btn"
+                style={s.addTagBtn}
+                onPress={() => setShowTagPicker(!showTagPicker)}
+              >
+                <MaterialIcons name="sell" size={18} color={C.text} />
+                <Text style={s.addTagText}>Add Tag</Text>
+              </TouchableOpacity>
             )}
           </View>
+
+          {/* Tag chips + picker */}
+          {(tags.length > 0 || showTagPicker) && (
+            <View style={s.tagsSection}>
+              {tags.length > 0 && (
+                <View style={s.tagsRow}>
+                  {tags.map((tag, i) => (
+                    <TouchableOpacity
+                      key={i}
+                      testID={`tag-${i}`}
+                      style={[s.tagChip, { backgroundColor: tag.color + '20', borderColor: tag.color }]}
+                      onPress={() => removeTag(i)}
+                    >
+                      <Text style={[s.tagChipText, { color: tag.color }]}>{tag.name}</Text>
+                      <MaterialIcons name="close" size={16} color={tag.color} />
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+
+              {showTagPicker && (
+                <View style={s.tagPicker}>
+                  <TextInput
+                    testID="tag-name-input"
+                    style={s.tagInput}
+                    placeholder="Tag name..."
+                    placeholderTextColor={C.borderSub}
+                    value={newTagName}
+                    onChangeText={setNewTagName}
+                    onFocus={() => setPlainInputFocused(true)}
+                    onBlur={() => setPlainInputFocused(false)}
+                  />
+                  <View style={s.colorRow}>
+                    {TAG_COLORS.map((c) => (
+                      <TouchableOpacity
+                        key={c.value}
+                        testID={`color-${c.name}`}
+                        style={[
+                          s.colorDot,
+                          { backgroundColor: c.value },
+                          selectedTagColor === c.value && s.colorDotSel,
+                        ]}
+                        onPress={() => setSelectedTagColor(c.value)}
+                      />
+                    ))}
+                  </View>
+                  <Button testID="confirm-tag-btn" variant="outline" label="Add Tag" onPress={addTag} style={s.confirmTagBtn} />
+                </View>
+              )}
+            </View>
+          )}
 
           {/* Content - the shared-post card sits at the top of the input box, then the writing area */}
           <View style={s.contentContainer}>
             <View style={s.inputBox}>
+
               {/* Shared social post card (Instagram/Facebook/WhatsApp/YouTube/…) - links back to the post */}
               {sourcePost && (
                 <SharedPostCard
@@ -1448,10 +1495,13 @@ export default function EditorScreen() {
               </View>
             </TouchableOpacity>
           ) : (
-            <View>
-              <TouchableOpacity
+            <View style={s.calBtnRow}>
+              <Button
                 testID="schedule-event-btn"
-                style={s.calBtn}
+                variant="box"
+                layout="row"
+                icon="calendar-today"
+                label="Schedule"
                 onPress={() =>
                   router.push({
                     pathname: '/event-editor',
@@ -1461,20 +1511,17 @@ export default function EditorScreen() {
                     },
                   })
                 }
-              >
-                <MaterialIcons name="calendar-today" size={24} color={C.secondary} />
-                <Text style={s.calBtnText}>Schedule New Event</Text>
-                <MaterialIcons name="chevron-right" size={24} color={C.borderSub} />
-              </TouchableOpacity>
-              <TouchableOpacity
+                style={s.calBtnBox}
+              />
+              <Button
                 testID="link-event-btn"
-                style={[s.calBtn, { marginTop: 10 }]}
+                variant="box"
+                layout="row"
+                icon="link"
+                label="Link an event"
                 onPress={openEventPicker}
-              >
-                <MaterialIcons name="link" size={24} color={C.secondary} />
-                <Text style={s.calBtnText}>Link Existing Event</Text>
-                <MaterialIcons name="chevron-right" size={24} color={C.borderSub} />
-              </TouchableOpacity>
+                style={s.calBtnBox}
+              />
             </View>
           )}
 
@@ -1483,8 +1530,10 @@ export default function EditorScreen() {
 
         {/* Voice Input Bar + Format Toolbar */}
         <View style={s.bottomBar}>
-          {/* Format Toolbar - drives the TenTap editor; shows while it's focused (disabled on web) */}
-          {editorUi.isFocused && Platform.OS !== 'web' && (
+          {/* Format Toolbar - drives the TenTap editor; shows while it's focused (disabled on web).
+              editorUi.isFocused is unusable here (see plainInputFocused's declaration for why) -
+              keyboard-visible-but-not-a-plain-input is the reliable signal instead. */}
+          {isKeyboardVisible && !plainInputFocused && Platform.OS !== 'web' && (
             <View style={s.formatBar}>
               <TouchableOpacity
                 testID="fmt-bold"
@@ -1516,33 +1565,49 @@ export default function EditorScreen() {
           {/* Action Buttons - Pin, Add Image, Share, Delete - shows when keyboard is hidden */}
           {!isKeyboardVisible && (
             <View style={s.actionBar}>
-              <TouchableOpacity testID="pin-btn" style={s.actionBtn} onPress={togglePin}>
-                <MaterialIcons
-                  name="push-pin"
-                  size={24}
-                  color={isPinned ? C.primary : C.borderSub}
-                />
-                <Text style={[s.actionBtnLabel, isPinned && { color: C.primary }]}>
-                  {isPinned ? 'Pinned' : 'Pin'}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity testID="add-image-btn" style={s.actionBtn} onPress={() => setShowImagePicker(true)}>
-                <MaterialIcons name="add-photo-alternate" size={24} color={C.secondary} />
-                <Text style={[s.actionBtnLabel, { color: C.secondary }]}>Image</Text>
-              </TouchableOpacity>
-              <TouchableOpacity testID="share-btn" style={s.actionBtn} onPress={handleShare}>
-                <MaterialIcons name="share" size={24} color={C.secondary} />
-                <Text style={[s.actionBtnLabel, { color: C.secondary }]}>Share</Text>
-              </TouchableOpacity>
+              <Button
+                testID="pin-btn"
+                variant="box"
+                layout="stack"
+                icon="push-pin"
+                label={isPinned ? 'Pinned' : 'Pin'}
+                active={isPinned}
+                onPress={togglePin}
+                style={s.actionBoxBtn}
+              />
+              <Button
+                testID="add-image-btn"
+                variant="box"
+                layout="stack"
+                icon="add-photo-alternate"
+                label="Image"
+                onPress={() => setShowImagePicker(true)}
+                style={s.actionBoxBtn}
+              />
+              <Button
+                testID="share-btn"
+                variant="box"
+                layout="stack"
+                icon="share"
+                label="Share"
+                onPress={handleShare}
+                style={s.actionBoxBtn}
+              />
               {noteExists && (
-                <TouchableOpacity testID="delete-note-btn" style={s.actionBtn} onPress={handleDelete}>
-                  <MaterialIcons name="delete" size={24} color={C.error} />
-                  <Text style={[s.actionBtnLabel, { color: C.error }]}>Delete</Text>
-                </TouchableOpacity>
+                <Button
+                  testID="delete-note-btn"
+                  variant="box"
+                  layout="stack"
+                  tone="danger"
+                  icon="delete"
+                  label="Delete"
+                  onPress={handleDelete}
+                  style={s.actionBoxBtn}
+                />
               )}
             </View>
           )}
-          
+
           {/* Voice Input - hide when keyboard is visible */}
           {!isKeyboardVisible && (
             <View style={s.voiceBar}>
@@ -1552,21 +1617,14 @@ export default function EditorScreen() {
                   <Text style={s.transcribingText}>Converting speech to text...</Text>
                 </View>
               ) : (
-                <TouchableOpacity
+                <Button
                   testID="voice-input-btn"
-                  style={[s.voiceBtn, isRecording && s.voiceBtnRec]}
+                  variant="cta"
+                  tone={isRecording ? 'danger' : 'default'}
+                  icon={isRecording ? 'stop' : 'mic'}
+                  label={isRecording ? 'Stop Recording' : 'Voice Input'}
                   onPress={isRecording ? stopRecording : startRecording}
-                  activeOpacity={0.7}
-                >
-                  <MaterialIcons
-                    name={isRecording ? 'stop' : 'mic'}
-                    size={28}
-                    color={isRecording ? C.primaryFg : C.primary}
-                  />
-                  <Text style={[s.voiceBtnText, isRecording && s.voiceBtnTextRec]}>
-                    {isRecording ? 'Stop Recording' : 'Voice Input'}
-                  </Text>
-                </TouchableOpacity>
+                />
               )}
             </View>
           )}
@@ -1637,84 +1695,98 @@ export default function EditorScreen() {
         </View>
       </Modal>
       
-      {/* Image Picker Modal */}
+      {/* Image Picker Bottom Sheet */}
       <Modal
         visible={showImagePicker}
         transparent
-        animationType="slide"
+        animationType="none"
         onRequestClose={() => setShowImagePicker(false)}
       >
-        <View style={s.modalOverlay}>
-          <View style={s.imagePickerCard}>
-            <Text style={s.imagePickerTitle}>Add Image</Text>
-            
-            <TouchableOpacity style={s.imagePickerOption} onPress={takePhoto}>
-              <MaterialIcons name="camera-alt" size={28} color={C.primary} />
-              <Text style={s.imagePickerOptionText}>Take Photo</Text>
+        <TouchableOpacity
+          style={s.sheetOverlay}
+          activeOpacity={1}
+          onPress={() => setShowImagePicker(false)}
+        >
+          <Animated.View
+            pointerEvents="none"
+            style={[StyleSheet.absoluteFill, s.sheetBackdrop, { opacity: imagePickerBackdrop }]}
+          />
+          <Animated.View style={{ transform: [{ translateY: imagePickerTranslateY }] }}>
+            <TouchableOpacity activeOpacity={1} style={s.imagePickerCard}>
+              <View style={s.sheetHandle} />
+              <Text style={s.imagePickerTitle}>Add Image</Text>
+
+              <TouchableOpacity style={s.imagePickerOption} onPress={takePhoto}>
+                <MaterialIcons name="camera-alt" size={28} color={C.primary} />
+                <Text style={s.imagePickerOptionText}>Take Photo</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={s.imagePickerOption} onPress={pickFromGallery}>
+                <MaterialIcons name="photo-library" size={28} color={C.secondary} />
+                <Text style={s.imagePickerOptionText}>Choose from Gallery</Text>
+              </TouchableOpacity>
             </TouchableOpacity>
-            
-            <TouchableOpacity style={s.imagePickerOption} onPress={pickFromGallery}>
-              <MaterialIcons name="photo-library" size={28} color={C.secondary} />
-              <Text style={s.imagePickerOptionText}>Choose from Gallery</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={s.imagePickerCancel} 
-              onPress={() => setShowImagePicker(false)}
-            >
-              <Text style={s.imagePickerCancelText}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+          </Animated.View>
+        </TouchableOpacity>
       </Modal>
 
       {/* Link Existing Event picker */}
       <Modal
         visible={showEventPicker}
         transparent
-        animationType="slide"
+        animationType="none"
         onRequestClose={() => setShowEventPicker(false)}
       >
-        <View style={s.pickerOverlay}>
-          <View style={s.pickerSheet}>
-            <View style={s.pickerHeader}>
-              <Text style={s.pickerTitle}>Link an Event</Text>
-              <TouchableOpacity
-                testID="close-event-picker"
-                onPress={() => setShowEventPicker(false)}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              >
-                <MaterialIcons name="close" size={24} color={C.textSec} />
-              </TouchableOpacity>
-            </View>
-            {loadingPickerEvents ? (
-              <ActivityIndicator size="large" color={C.primary} style={{ marginVertical: 32 }} />
-            ) : pickerEvents.length === 0 ? (
-              <Text style={s.pickerEmpty}>No events yet. Use “Schedule New Event” to create one.</Text>
-            ) : (
-              <ScrollView style={{ maxHeight: 380 }}>
-                {pickerEvents.map((ev) => (
-                  <TouchableOpacity
-                    key={ev.id}
-                    testID={`pick-event-${ev.id}`}
-                    style={s.pickerRow}
-                    onPress={() => linkExistingEvent(ev)}
-                    activeOpacity={0.7}
-                  >
-                    <MaterialIcons name="event" size={22} color={C.secondary} />
-                    <View style={{ flex: 1, marginLeft: 10 }}>
-                      <Text style={s.pickerRowTitle} numberOfLines={1}>{ev.title}</Text>
-                      <Text style={s.pickerRowTime} numberOfLines={1}>
-                        {formatEventDateTime(ev.start_time)}
-                      </Text>
-                    </View>
-                    <MaterialIcons name="link" size={20} color={C.borderSub} />
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            )}
-          </View>
-        </View>
+        <TouchableOpacity
+          style={s.pickerOverlay}
+          activeOpacity={1}
+          onPress={() => setShowEventPicker(false)}
+        >
+          <Animated.View
+            pointerEvents="none"
+            style={[StyleSheet.absoluteFill, s.sheetBackdrop, { opacity: eventPickerBackdrop }]}
+          />
+          <Animated.View style={{ transform: [{ translateY: eventPickerTranslateY }] }}>
+            <TouchableOpacity activeOpacity={1} style={s.pickerSheet}>
+              <View style={s.pickerHeader}>
+                <Text style={s.pickerTitle}>Link an Event</Text>
+                <TouchableOpacity
+                  testID="close-event-picker"
+                  onPress={() => setShowEventPicker(false)}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <MaterialIcons name="close" size={24} color={C.textSec} />
+                </TouchableOpacity>
+              </View>
+              {loadingPickerEvents ? (
+                <ActivityIndicator size="large" color={C.primary} style={{ marginVertical: 32 }} />
+              ) : pickerEvents.length === 0 ? (
+                <Text style={s.pickerEmpty}>No events yet. Use “Schedule New Event” to create one.</Text>
+              ) : (
+                <ScrollView style={{ maxHeight: 380 }}>
+                  {pickerEvents.map((ev) => (
+                    <TouchableOpacity
+                      key={ev.id}
+                      testID={`pick-event-${ev.id}`}
+                      style={s.pickerRow}
+                      onPress={() => linkExistingEvent(ev)}
+                      activeOpacity={0.7}
+                    >
+                      <MaterialIcons name="event" size={22} color={C.secondary} />
+                      <View style={{ flex: 1, marginLeft: 10 }}>
+                        <Text style={s.pickerRowTitle} numberOfLines={1}>{ev.title}</Text>
+                        <Text style={s.pickerRowTime} numberOfLines={1}>
+                          {formatEventDateTime(ev.start_time)}
+                        </Text>
+                      </View>
+                      <MaterialIcons name="link" size={20} color={C.borderSub} />
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              )}
+            </TouchableOpacity>
+          </Animated.View>
+        </TouchableOpacity>
       </Modal>
 
       {/* Delete Confirmation Modal - same look as the notes-list delete confirmation */}
@@ -1780,12 +1852,13 @@ const s = StyleSheet.create({
   statusText: { fontSize: 14, marginLeft: 4 },
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 24, paddingTop: 16 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   titleInput: {
-    fontSize: 28, fontWeight: '700', color: C.text,
-    borderBottomWidth: 2, borderBottomColor: C.borderSub + '60',
+    fontSize: 26, fontWeight: '500', color: C.text,
     paddingBottom: 12, marginBottom: 16,
   },
-  tagsSection: { marginBottom: 16 },
+  titleInputFlex: { flex: 1, marginBottom: 0 },
+  tagsSection: { marginTop: 12, marginBottom: 16 },
   tagsRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' },
   tagChip: {
     flexDirection: 'row', alignItems: 'center',
@@ -1795,27 +1868,22 @@ const s = StyleSheet.create({
   tagChipText: { fontSize: 16, fontWeight: '600', marginRight: 4 },
   addTagBtn: {
     flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 12, paddingVertical: 6,
-    borderRadius: 8, borderWidth: 1.5, borderColor: C.primary,
-    borderStyle: 'dashed', marginBottom: 8,
+    paddingHorizontal: 14, paddingVertical: 8,
+    borderRadius: radius.pill, borderWidth: 1.5, borderColor: C.border,
+    marginBottom: 8,
   },
-  addTagText: { fontSize: 16, fontWeight: '600', color: C.primary, marginLeft: 4 },
+  addTagText: { fontSize: 16, fontWeight: '600', color: C.text, marginLeft: 4 },
   tagPicker: {
-    backgroundColor: C.surface, borderRadius: 12, padding: 16,
-    borderWidth: 2, borderColor: C.borderSub, marginTop: 8,
+    backgroundColor: C.surface, marginTop: 8,
   },
   tagInput: {
-    height: 48, borderWidth: 2, borderColor: C.border, borderRadius: 8,
+    height: 48,
     paddingHorizontal: 12, fontSize: 18, color: C.text, marginBottom: 12,
   },
   colorRow: { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 12 },
   colorDot: { width: 40, height: 40, borderRadius: 20 },
   colorDotSel: { borderWidth: 3, borderColor: C.text },
-  confirmTagBtn: {
-    backgroundColor: C.primary, borderRadius: 12, height: 48,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  confirmTagText: { fontSize: 18, fontWeight: '600', color: C.primaryFg },
+  confirmTagBtn: { height: 48 },
   contentContainer: {
     flex: 1,
     marginBottom: 16,
@@ -1823,9 +1891,9 @@ const s = StyleSheet.create({
   // The bordered box that visually contains both the shared-post card and the writing area.
   inputBox: {
     backgroundColor: C.surface,
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: C.borderSub,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: C.border,
     paddingBottom: 4,
   },
   // The shared-post card nested inside the input box: inset from the border, small gap before text.
@@ -1945,14 +2013,10 @@ const s = StyleSheet.create({
     fontSize: 18,
     lineHeight: 28,
   },
-  calBtn: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: C.surface, borderRadius: 12, padding: 16,
-    borderWidth: 2, borderColor: C.borderSub, marginTop: 16,
-  },
-  calBtnText: { flex: 1, fontSize: 18, color: C.secondary, marginLeft: 12, fontWeight: '500' },
+  calBtnRow: { flexDirection: 'row', gap: 10, marginTop: 16 },
+  calBtnBox: { flex: 1 },
   // Event picker modal
-  pickerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  pickerOverlay: { flex: 1, justifyContent: 'flex-end' },
   pickerSheet: {
     backgroundColor: C.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20,
     paddingHorizontal: 20, paddingTop: 16, paddingBottom: 32,
@@ -2025,40 +2089,19 @@ const s = StyleSheet.create({
   },
   actionBar: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    gap: 10,
     paddingVertical: 12,
     paddingHorizontal: 12,
     backgroundColor: C.bg,
     borderBottomWidth: 1,
     borderBottomColor: C.borderSub + '40',
   },
-  actionBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 4,
-    paddingVertical: 8,
-    gap: 6,
-  },
-  actionBtnLabel: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: C.textSec,
-  },
+  actionBoxBtn: { flex: 1 },
   transcribing: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     height: 56,
   },
   transcribingText: { fontSize: 18, color: C.textSec, marginLeft: 12 },
-  voiceBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    height: 56, borderRadius: 28, borderWidth: 2, borderColor: C.primary,
-    backgroundColor: C.surface,
-  },
-  voiceBtnRec: { backgroundColor: C.error, borderColor: C.error },
-  voiceBtnText: { fontSize: 20, fontWeight: '600', color: C.primary, marginLeft: 8 },
-  voiceBtnTextRec: { color: C.primaryFg },
   // AI Suggestion Modal Styles
   processingOverlay: {
     position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
@@ -2226,13 +2269,26 @@ const s = StyleSheet.create({
   addImageBtnText: {
     fontSize: 16, fontWeight: '600', color: C.secondary, marginLeft: 8,
   },
-  // Image Picker Modal
+  // Image Picker Bottom Sheet
+  sheetOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  sheetBackdrop: {
+    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  sheetHandle: {
+    width: 40, height: 4, borderRadius: 2, backgroundColor: C.borderSub,
+    alignSelf: 'center', marginBottom: 16,
+  },
   imagePickerCard: {
     backgroundColor: C.surface,
-    borderRadius: 20,
-    padding: 24,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: 12,
+    paddingHorizontal: 24,
+    paddingBottom: 40,
     width: '100%',
-    maxWidth: 340,
   },
   imagePickerTitle: {
     fontSize: 22, fontWeight: '700', color: C.text, textAlign: 'center',
@@ -2248,13 +2304,5 @@ const s = StyleSheet.create({
   },
   imagePickerOptionText: {
     fontSize: 18, fontWeight: '600', color: C.text, marginLeft: 16,
-  },
-  imagePickerCancel: {
-    alignItems: 'center',
-    padding: 16,
-    marginTop: 8,
-  },
-  imagePickerCancelText: {
-    fontSize: 18, fontWeight: '600', color: C.textSec,
   },
 });

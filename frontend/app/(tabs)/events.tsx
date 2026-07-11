@@ -11,8 +11,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { eventsApi } from '../../src/api';
 import { decryptEventsFromServer } from '../../src/crypto/eventCrypto';
 import { CalendarEvent } from '../../src/types';
-import { MONTH_NAMES, DAY_NAMES } from '../../src/theme';
+import { MONTH_NAMES, DAY_NAMES, radius, borderWidth } from '../../src/theme';
 import { UserAvatar, useAuth } from '../../src/auth';
+import { SegmentedControl } from '../../src/components';
 
 let ExpoCalendar: typeof import('expo-calendar') | null = null;
 if (Platform.OS !== 'web') {
@@ -235,26 +236,15 @@ export default function EventsScreen() {
       </View>
 
       {/* Filter Toggle */}
-      <View style={s.filterRow}>
-        <TouchableOpacity
-          testID="filter-upcoming-btn"
-          style={[s.filterBtn, filter === 'upcoming' && s.filterBtnActive]}
-          onPress={() => setFilter('upcoming')}
-        >
-          <Text style={[s.filterText, filter === 'upcoming' && s.filterTextActive]}>
-            Upcoming
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          testID="filter-all-btn"
-          style={[s.filterBtn, filter === 'all' && s.filterBtnActive]}
-          onPress={() => setFilter('all')}
-        >
-          <Text style={[s.filterText, filter === 'all' && s.filterTextActive]}>
-            All Events
-          </Text>
-        </TouchableOpacity>
-      </View>
+      <SegmentedControl
+        style={s.filterRow}
+        value={filter}
+        onChange={setFilter}
+        options={[
+          { label: 'Upcoming', value: 'upcoming', testID: 'filter-upcoming-btn' },
+          { label: 'All Events', value: 'all', testID: 'filter-all-btn' },
+        ]}
+      />
 
       <FlatList
         style={s.scroll}
@@ -320,16 +310,6 @@ export default function EventsScreen() {
 
                 <View style={s.actions}>
                   <TouchableOpacity
-                    testID={`edit-event-${event.id}`}
-                    style={s.actionBtn}
-                    onPress={(e) => {
-                      e.stopPropagation();
-                      router.push({ pathname: '/event-editor', params: { eventId: event.id } });
-                    }}
-                  >
-                    <MaterialIcons name="edit" size={20} color={C.secondary} />
-                  </TouchableOpacity>
-                  <TouchableOpacity
                     testID={`delete-event-${event.id}`}
                     style={s.actionBtn}
                     onPress={(e) => {
@@ -337,7 +317,7 @@ export default function EventsScreen() {
                       handleDeletePress(event.id, event.title, event.device_calendar_event_id);
                     }}
                   >
-                    <MaterialIcons name="delete" size={20} color={C.error} />
+                    <MaterialIcons name="delete" size={18} color={C.text} />
                   </TouchableOpacity>
                 </View>
               </TouchableOpacity>
@@ -420,17 +400,7 @@ const s = StyleSheet.create({
     paddingBottom: 12 
   },
   headerTitle: { fontSize: 34, fontWeight: '700', color: C.text },
-  filterRow: {
-    flexDirection: 'row', marginHorizontal: 20, marginBottom: 12,
-    backgroundColor: C.surface, borderRadius: 10,
-    borderWidth: 2, borderColor: C.border, overflow: 'hidden',
-  },
-  filterBtn: {
-    flex: 1, paddingVertical: 10, alignItems: 'center', justifyContent: 'center',
-  },
-  filterBtnActive: { backgroundColor: C.primary },
-  filterText: { fontSize: 16, fontWeight: '600', color: C.textSec },
-  filterTextActive: { color: C.primaryFg },
+  filterRow: { marginHorizontal: 20, marginBottom: 12 },
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 20 },
   empty: { alignItems: 'center', paddingTop: 48 },
@@ -439,7 +409,7 @@ const s = StyleSheet.create({
   dateHeader: {
     flexDirection: 'row', alignItems: 'center', marginBottom: 6, marginTop: 12,
   },
-  dateHeaderText: { fontSize: 16, fontWeight: '700', color: C.text },
+  dateHeaderText: { fontSize: 14, fontWeight: '500', color: C.textSec },
   todayBadge: {
     marginLeft: 8, backgroundColor: C.success, borderRadius: 10,
     paddingHorizontal: 8, paddingVertical: 2,
@@ -447,13 +417,13 @@ const s = StyleSheet.create({
   todayBadgeText: { fontSize: 12, fontWeight: '700', color: C.primaryFg },
   eventCard: {
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: C.surface, borderRadius: 10, 
+    backgroundColor: C.surface, borderRadius: radius.md,
     paddingVertical: 10, paddingHorizontal: 12,
-    borderWidth: 1.5, borderColor: C.borderSub, marginBottom: 8,
+    borderWidth: borderWidth.regular, borderColor: C.borderSub, marginBottom: 8,
   },
-  eventTimeCol: { marginRight: 12, alignItems: 'flex-end', minWidth: 58 },
-  timeStart: { fontSize: 13, fontWeight: '700', color: C.secondary },
-  timeEnd: { fontSize: 12, fontWeight: '500', color: C.borderSub, marginTop: 1 },
+  eventTimeCol: { marginRight: 12, alignItems: 'flex-start', minWidth: 64 },
+  timeStart: { fontSize: 15, fontWeight: '700', color: C.secondary },
+  timeEnd: { fontSize: 13, fontWeight: '500', color: C.borderSub, marginTop: 1 },
   eventBody: { flex: 1 },
   eventTitle: { fontSize: 16, fontWeight: '600', color: C.text },
   eventDesc: { fontSize: 13, color: C.textSec, marginTop: 2 },

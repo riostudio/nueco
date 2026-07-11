@@ -12,21 +12,12 @@ import { isAnalyticsEnabled, setAnalyticsEnabled } from '../../src/analytics';
 import { clearLocalData } from '../../src/offlineSync';
 import { exportMyData } from '../../src/dataExport';
 import { BACKEND_BASE_URL } from '../../src/backendBaseUrl';
+import { C, radius, borderWidth } from '../../src/theme';
 
 // Served from the backend itself (same origin as the API) - see backend/server.py's
 // GET /privacy route and backend/static/privacy.html. Swap to a memopad.app URL if
 // that domain ever gets a custom-domain mapping to this Railway service.
 const PRIVACY_POLICY_URL = `${BACKEND_BASE_URL}/privacy`;
-
-const C = {
-  primary: '#D84315',
-  bg: '#FDFBF7',
-  surface: '#FFFFFF',
-  text: '#121212',
-  textSec: '#37474F',
-  borderSub: '#78909C',
-  danger: '#C62828',
-};
 
 export default function PrivacyDataScreen() {
   const router = useRouter();
@@ -247,8 +238,7 @@ const s = StyleSheet.create({
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 24, paddingTop: 8 },
   card: {
-    backgroundColor: C.surface, borderRadius: 12, padding: 20,
-    borderWidth: 2, borderColor: C.borderSub,
+    backgroundColor: C.surface, padding: 20,
   },
   row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10 },
   rowLabel: { fontSize: 18, color: C.text, marginLeft: 16, flex: 1, fontWeight: '500' },
@@ -256,7 +246,7 @@ const s = StyleSheet.create({
   rowSub: { fontSize: 14, color: C.textSec, marginTop: 2 },
   divider: { height: 1, backgroundColor: C.borderSub + '40', marginVertical: 4 },
   pwInput: {
-    width: '100%', height: 52, borderWidth: 2, borderColor: C.borderSub, borderRadius: 12,
+    width: '100%', height: 52, borderWidth: borderWidth.thick, borderColor: C.borderSub, borderRadius: radius.md,
     paddingHorizontal: 16, fontSize: 18, color: C.text, backgroundColor: C.bg, marginBottom: 8,
   },
   errorText: { color: C.danger, fontSize: 14, alignSelf: 'flex-start', marginBottom: 8 },

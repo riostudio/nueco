@@ -9,12 +9,13 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
-  ActivityIndicator,
   Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+import { MaterialIcons } from '@expo/vector-icons';
 import { authApi } from '../src/auth';
+import { C, radius, borderWidth } from '../src/theme';
+import { Button } from '../src/components';
 
 export default function ForgotPasswordScreen() {
   const router = useRouter();
@@ -56,7 +57,7 @@ export default function ForgotPasswordScreen() {
       <SafeAreaView style={styles.container}>
         <View style={styles.successContainer}>
           <View style={styles.successIcon}>
-            <Ionicons name="mail" size={64} color="#4CAF50" />
+            <MaterialIcons name="email" size={64} color={C.success} />
           </View>
           <Text style={styles.successTitle}>Check Your Email</Text>
           <Text style={styles.successMessage}>
@@ -92,14 +93,14 @@ export default function ForgotPasswordScreen() {
               onPress={() => router.back()}
               activeOpacity={0.7}
             >
-              <Ionicons name="arrow-back" size={28} color="#121212" />
+              <MaterialIcons name="arrow-back" size={28} color={C.text} />
             </TouchableOpacity>
           </View>
 
           {/* Title */}
           <View style={styles.titleSection}>
             <View style={styles.iconContainer}>
-              <Ionicons name="key" size={48} color="#D84315" />
+              <MaterialIcons name="vpn-key" size={48} color={C.primary} />
             </View>
             <Text style={styles.title}>Forgot Password?</Text>
             <Text style={styles.subtitle}>
@@ -113,11 +114,11 @@ export default function ForgotPasswordScreen() {
             <View style={styles.inputGroup}>
               <Text style={styles.label}>Email Address</Text>
               <View style={[styles.inputContainer, error && styles.inputError]}>
-                <Ionicons name="mail-outline" size={24} color="#78909C" style={styles.inputIcon} />
+                <MaterialIcons name="email" size={24} color={C.borderSub} style={styles.inputIcon} />
                 <TextInput
                   style={styles.input}
                   placeholder="Enter your email"
-                  placeholderTextColor="#90A4AE"
+                  placeholderTextColor={C.placeholder}
                   value={email}
                   onChangeText={(text) => {
                     setEmail(text);
@@ -132,25 +133,14 @@ export default function ForgotPasswordScreen() {
             </View>
 
             {/* Submit Button */}
-            <TouchableOpacity
-              style={[styles.submitButton, isLoading && styles.submitButtonDisabled]}
-              onPress={handleSubmit}
-              disabled={isLoading}
-              activeOpacity={0.8}
-            >
-              {isLoading ? (
-                <ActivityIndicator color="#FFFFFF" size="small" />
-              ) : (
-                <Text style={styles.submitButtonText}>Send Reset Link</Text>
-              )}
-            </TouchableOpacity>
+            <Button variant="cta" label="Send Reset Link" onPress={handleSubmit} loading={isLoading} style={styles.submitButton} />
 
             {/* Back to Login Link */}
             <TouchableOpacity
               style={styles.loginLinkButton}
               onPress={() => router.replace('/login')}
             >
-              <Ionicons name="arrow-back" size={20} color="#1565C0" />
+              <MaterialIcons name="arrow-back" size={20} color={C.secondary} />
               <Text style={styles.loginLinkText}>Back to Login</Text>
             </TouchableOpacity>
           </View>
@@ -163,7 +153,7 @@ export default function ForgotPasswordScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FDFBF7',
+    backgroundColor: C.bg,
   },
   keyboardView: {
     flex: 1,
@@ -179,15 +169,12 @@ const styles = StyleSheet.create({
   backButton: {
     width: 48,
     height: 48,
-    borderRadius: 24,
-    backgroundColor: '#FFFFFF',
+    borderRadius: radius.pill,
+    backgroundColor: C.surface,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+    borderWidth: borderWidth.regular,
+    borderColor: C.borderSub,
   },
   titleSection: {
     paddingVertical: 32,
@@ -196,8 +183,8 @@ const styles = StyleSheet.create({
   iconContainer: {
     width: 100,
     height: 100,
-    borderRadius: 50,
-    backgroundColor: '#FFF3E0',
+    borderRadius: radius.pill,
+    backgroundColor: C.surfaceHi,
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 24,
@@ -205,13 +192,13 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 34,
     fontWeight: '700',
-    color: '#121212',
+    color: C.text,
     marginBottom: 12,
     textAlign: 'center',
   },
   subtitle: {
     fontSize: 18,
-    color: '#546E7A',
+    color: C.icon,
     lineHeight: 26,
     textAlign: 'center',
   },
@@ -225,20 +212,20 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#37474F',
+    color: C.textSec,
   },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    borderWidth: 2,
-    borderColor: '#E0E0E0',
+    backgroundColor: C.surface,
+    borderRadius: radius.lg,
+    borderWidth: borderWidth.thick,
+    borderColor: C.borderSub,
     paddingHorizontal: 16,
     minHeight: 60,
   },
   inputError: {
-    borderColor: '#C62828',
+    borderColor: C.error,
   },
   inputIcon: {
     marginRight: 12,
@@ -246,35 +233,16 @@ const styles = StyleSheet.create({
   input: {
     flex: 1,
     fontSize: 18,
-    color: '#121212',
+    color: C.text,
     paddingVertical: 16,
   },
   errorText: {
     fontSize: 14,
-    color: '#C62828',
+    color: C.error,
     marginTop: 4,
   },
   submitButton: {
-    backgroundColor: '#D84315',
-    paddingVertical: 18,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 60,
     marginTop: 16,
-    shadowColor: '#D84315',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  submitButtonDisabled: {
-    opacity: 0.7,
-  },
-  submitButtonText: {
-    color: '#FFFFFF',
-    fontSize: 20,
-    fontWeight: '700',
   },
   loginLinkButton: {
     flexDirection: 'row',
@@ -285,7 +253,7 @@ const styles = StyleSheet.create({
   },
   loginLinkText: {
     fontSize: 16,
-    color: '#1565C0',
+    color: C.secondary,
     fontWeight: '600',
   },
   // Success state styles
@@ -298,8 +266,8 @@ const styles = StyleSheet.create({
   successIcon: {
     width: 120,
     height: 120,
-    borderRadius: 60,
-    backgroundColor: '#E8F5E9',
+    borderRadius: radius.pill,
+    backgroundColor: C.success + '1F',
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 24,
@@ -307,28 +275,28 @@ const styles = StyleSheet.create({
   successTitle: {
     fontSize: 28,
     fontWeight: '700',
-    color: '#121212',
+    color: C.text,
     marginBottom: 16,
     textAlign: 'center',
   },
   successMessage: {
     fontSize: 18,
-    color: '#546E7A',
+    color: C.icon,
     lineHeight: 26,
     textAlign: 'center',
     marginBottom: 32,
   },
   backToLoginButton: {
-    backgroundColor: '#1565C0',
+    backgroundColor: C.secondary,
     paddingVertical: 18,
     paddingHorizontal: 32,
-    borderRadius: 16,
+    borderRadius: radius.pill,
     alignItems: 'center',
     justifyContent: 'center',
     minHeight: 60,
   },
   backToLoginText: {
-    color: '#FFFFFF',
+    color: C.secondaryFg,
     fontSize: 18,
     fontWeight: '700',
   },

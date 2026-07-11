@@ -1,42 +1,52 @@
-export const colors = {
-  primary: '#D84315',
-  primaryForeground: '#FFFFFF',
-  secondary: '#1565C0',
-  secondaryForeground: '#FFFFFF',
-  background: '#FDFBF7',
-  surface: '#FFFFFF',
-  surfaceHighlight: '#FFF8E1',
-  textPrimary: '#121212',
-  textSecondary: '#37474F',
-  border: '#121212',
-  borderSubtle: '#78909C',
-  success: '#2E7D32',
-  error: '#C62828',
-  warning: '#F9A825',
-  overlay: 'rgba(0, 0, 0, 0.7)',
-};
-
-// Shorthand color constants for easier use in components
+// Single source of truth for color. Previously this file also exported a `colors` object with
+// differently-named keys (e.g. `textPrimary` vs `C.text`) that nothing actually imported - screens
+// each kept their own local `const C = {...}` instead, and those copies drifted (some had `danger`,
+// some `error`; some had `surfaceHi`, some didn't). This is the one to import from now.
 export const C = {
   primary: '#D84315',
   primaryFg: '#FFFFFF',
   primaryLight: '#FF7043',
   secondary: '#1565C0',
+  secondaryFg: '#FFFFFF',
+  // Pale fill for a selected/active state (e.g. a segmented control), paired with `secondary` as
+  // the text/icon color on top of it - distinct from `primary`'s solid-fill CTA treatment.
+  secondaryTint: '#DCEAFB',
   bg: '#FDFBF7',
-  cardBg: '#FFFFFF',
   surface: '#FFFFFF',
+  surfaceHi: '#FFF8E1',
+  cardBg: '#FFFFFF',
   text: '#121212',
   textMain: '#121212',
   textSec: '#37474F',
-  border: '#121212',
-  borderDark: '#121212',
+  border: '#CBC4BB',
+  borderDark: '#CBC4BB',
   borderSub: '#78909C',
-  success: '#2E7D32',
-  error: '#C62828',
-  warning: '#FF9800',
   divider: '#F0F0F0',
   icon: '#546E7A',
   placeholder: '#9E9E9E',
+  inactiveTab: '#757575',
+  success: '#2E7D32',
+  error: '#C62828',
+  danger: '#C62828', // alias - some screens used this name for the same color
+  warning: '#F9A825',
+  overlay: 'rgba(0, 0, 0, 0.7)',
+};
+
+// Corner-radius scale. Previously nonexistent - card/button roundedness was a different literal
+// number in every screen's StyleSheet. `pill` is deliberately >= half of any real button height,
+// so `borderRadius: radius.pill` always yields a full stadium shape regardless of the box's height.
+export const radius = {
+  sm: 8,
+  md: 12,
+  lg: 16,
+  pill: 999,
+};
+
+// Border weights used by the shared primitives (src/components/ui.tsx). Card/box borders had
+// drifted between 1.5 and 2 across near-identical components; this is the one place that decides.
+export const borderWidth = {
+  regular: 1.5,
+  thick: 2,
 };
 
 export const typography = {

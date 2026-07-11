@@ -8,20 +8,8 @@ import { useRouter, useFocusEffect } from 'expo-router';
 import { eventsApi } from '../../src/api';
 import { decryptEventsFromServer } from '../../src/crypto/eventCrypto';
 import { CalendarEvent } from '../../src/types';
-import { MONTH_NAMES, DAY_NAMES } from '../../src/theme';
+import { MONTH_NAMES, DAY_NAMES, C, radius, borderWidth } from '../../src/theme';
 import { UserAvatar } from '../../src/auth';
-
-const C = {
-  primary: '#D84315',
-  primaryFg: '#FFFFFF',
-  bg: '#FDFBF7',
-  surface: '#FFFFFF',
-  surfaceHi: '#FFF8E1',
-  text: '#121212',
-  textSec: '#37474F',
-  border: '#121212',
-  borderSub: '#78909C',
-};
 
 export default function CalendarScreen() {
   const router = useRouter();
@@ -239,7 +227,7 @@ const s = StyleSheet.create({
     margin: 2, borderRadius: 12,
   },
   selectedDay: { backgroundColor: C.primary },
-  todayDay: { backgroundColor: C.surfaceHi, borderWidth: 2, borderColor: C.primary },
+  todayDay: { backgroundColor: C.surfaceHi, borderWidth: borderWidth.thick, borderColor: C.primary },
   dayText: { fontSize: 18, fontWeight: '500', color: C.text },
   selectedDayText: { color: C.primaryFg, fontWeight: '700' },
   todayText: { color: C.primary, fontWeight: '700' },
@@ -248,8 +236,8 @@ const s = StyleSheet.create({
   selectedInfo: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     marginHorizontal: 24, marginTop: 20,
-    backgroundColor: C.surface, borderRadius: 12,
-    borderWidth: 2, borderColor: C.borderSub, padding: 16,
+    backgroundColor: C.surface, borderRadius: radius.md,
+    borderWidth: borderWidth.regular, borderColor: C.border, padding: 16,
   },
   selectedDate: { fontSize: 22, fontWeight: '600', color: C.text },
   selectedBadge: {

@@ -10,8 +10,10 @@ import {
 } from 'react-native';
 import { useRouter, type Href } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import { MaterialIcons } from '@expo/vector-icons';
 import { DIAGNOSTICS_ENABLED } from '../src/crypto/flags';
+import { C, radius, borderWidth } from '../src/theme';
+import { Button } from '../src/components';
 
 export default function WelcomeScreen() {
   const router = useRouter();
@@ -19,12 +21,12 @@ export default function WelcomeScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="dark-content" backgroundColor="#FDFBF7" />
+      <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
       <View style={styles.container}>
         {/* Logo and Branding */}
         <View style={styles.brandSection}>
           <View style={styles.logoContainer}>
-            <Ionicons name="document-text" size={64} color="#D84315" />
+            <MaterialIcons name="description" size={64} color={C.primary} />
           </View>
           <Text style={styles.appName}>MemoPad</Text>
           <Text style={styles.tagline}>Your thoughts, organized simply</Text>
@@ -33,36 +35,23 @@ export default function WelcomeScreen() {
         {/* Features Highlight */}
         <View style={styles.featuresSection}>
           <View style={styles.featureItem}>
-            <Ionicons name="mic" size={28} color="#1565C0" />
+            <MaterialIcons name="mic" size={28} color={C.secondary} />
             <Text style={styles.featureText}>Voice-to-text notes</Text>
           </View>
           <View style={styles.featureItem}>
-            <Ionicons name="sync" size={28} color="#1565C0" />
+            <MaterialIcons name="sync" size={28} color={C.secondary} />
             <Text style={styles.featureText}>Sync across devices</Text>
           </View>
           <View style={styles.featureItem}>
-            <Ionicons name="calendar" size={28} color="#1565C0" />
+            <MaterialIcons name="event" size={28} color={C.secondary} />
             <Text style={styles.featureText}>Calendar integration</Text>
           </View>
         </View>
 
         {/* Action Buttons */}
         <View style={[styles.buttonSection, { paddingBottom: insets.bottom + 24 }]}>
-          <TouchableOpacity
-            style={styles.primaryButton}
-            onPress={() => router.push('/signup')}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.primaryButtonText}>Get Started</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.secondaryButton}
-            onPress={() => router.push('/login')}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.secondaryButtonText}>Login</Text>
-          </TouchableOpacity>
+          <Button variant="cta" label="Get Started" onPress={() => router.push('/signup')} />
+          <Button variant="outline" label="Login" onPress={() => router.push('/login')} />
 
           {/* Diagnostic: on-device E2EE self-check & PBKDF2 benchmark.
               Dev/preview only - hidden in production so end users never see it. */}
@@ -85,7 +74,7 @@ export default function WelcomeScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#FDFBF7',
+    backgroundColor: C.bg,
   },
   container: {
     flex: 1,
@@ -100,26 +89,23 @@ const styles = StyleSheet.create({
   logoContainer: {
     width: 120,
     height: 120,
-    borderRadius: 30,
-    backgroundColor: '#FFF3E0',
+    borderRadius: radius.lg,
+    backgroundColor: C.surfaceHi,
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 24,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 4,
+    borderWidth: borderWidth.thick,
+    borderColor: C.border,
   },
   appName: {
     fontSize: 42,
     fontWeight: '700',
-    color: '#121212',
+    color: C.text,
     marginBottom: 8,
   },
   tagline: {
     fontSize: 20,
-    color: '#546E7A',
+    color: C.icon,
     textAlign: 'center',
   },
   featuresSection: {
@@ -130,19 +116,16 @@ const styles = StyleSheet.create({
   featureItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: C.surface,
     padding: 16,
-    borderRadius: 16,
+    borderRadius: radius.lg,
+    borderWidth: borderWidth.regular,
+    borderColor: C.borderSub,
     gap: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
   },
   featureText: {
     fontSize: 18,
-    color: '#37474F',
+    color: C.textSec,
     fontWeight: '500',
   },
   buttonSection: {
@@ -151,46 +134,13 @@ const styles = StyleSheet.create({
     gap: 16,
     marginHorizontal: 0,
   },
-  primaryButton: {
-    backgroundColor: '#D84315',
-    paddingVertical: 18,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 60,
-    shadowColor: '#D84315',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  primaryButtonText: {
-    color: '#FFFFFF',
-    fontSize: 20,
-    fontWeight: '700',
-  },
-  secondaryButton: {
-    backgroundColor: 'transparent',
-    paddingVertical: 18,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 60,
-    borderWidth: 2,
-    borderColor: '#D84315',
-  },
-  secondaryButtonText: {
-    color: '#D84315',
-    fontSize: 18,
-    fontWeight: '600',
-  },
   diagLink: {
     alignItems: 'center',
     paddingVertical: 12,
     marginTop: 4,
   },
   diagLinkText: {
-    color: '#90A4AE',
+    color: C.placeholder,
     fontSize: 14,
     fontWeight: '500',
   },

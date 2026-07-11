@@ -9,8 +9,9 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { eventsApi, notesApi } from '../src/api';
 import { decryptEventFromServer, encryptEventForServer } from '../src/crypto/eventCrypto';
-import { MONTH_NAMES } from '../src/theme';
+import { MONTH_NAMES, C, radius, borderWidth } from '../src/theme';
 import { ReminderMinutes } from '../src/types';
+import { Button } from '../src/components';
 
 // ---- External helpers (defined outside component to avoid re-creation) ----
 
@@ -48,20 +49,6 @@ if (Platform.OS !== 'web') {
 }
 
 // ---- Constants ----
-
-const C = {
-  primary: '#D84315',
-  primaryFg: '#FFFFFF',
-  secondary: '#1565C0',
-  bg: '#FDFBF7',
-  surface: '#FFFFFF',
-  text: '#121212',
-  textSec: '#37474F',
-  border: '#121212',
-  borderSub: '#78909C',
-  error: '#C62828',
-  success: '#2E7D32',
-};
 
 const isWeb = Platform.OS === 'web';
 
@@ -657,8 +644,8 @@ export default function EventEditorScreen() {
         {/* Header */}
         <View style={s.header}>
           <TouchableOpacity testID="event-back-btn" style={s.headerBtn} onPress={handleBack}>
-            <MaterialIcons name="arrow-back" size={28} color={C.primary} />
-            <Text style={[s.headerBtnLabel, { color: C.primary }]}>Back</Text>
+            <MaterialIcons name="arrow-back" size={28} color={C.text} />
+            <Text style={s.headerBtnLabel}>Back</Text>
           </TouchableOpacity>
           <Text style={s.headerTitle}>{isEditing ? 'Edit Event' : 'New Event'}</Text>
           <View style={{ width: 80 }} />
@@ -1075,10 +1062,16 @@ export default function EventEditorScreen() {
 
           {/* Delete Button */}
           {eventExists && (
-            <TouchableOpacity testID="delete-event-btn" style={s.deleteBtn} onPress={handleDeletePress}>
-              <MaterialIcons name="delete" size={24} color={C.error} />
-              <Text style={s.deleteBtnText}>Delete Event</Text>
-            </TouchableOpacity>
+            <Button
+              testID="delete-event-btn"
+              variant="box"
+              layout="row"
+              tone="danger"
+              icon="delete"
+              label="Delete Event"
+              onPress={handleDeletePress}
+              style={s.deleteBtn}
+            />
           )}
 
           <View style={{ height: 40 }} />
@@ -1129,24 +1122,23 @@ const s = StyleSheet.create({
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 24, paddingTop: 24 },
   label: { fontSize: 18, fontWeight: '600', color: C.textSec, marginBottom: 8, marginTop: 20 },
-  input: { height: 56, borderWidth: 2, borderColor: C.border, borderRadius: 12, paddingHorizontal: 16, fontSize: 20, color: C.text, backgroundColor: C.surface },
-  pickerContainer: { backgroundColor: C.surface, borderRadius: 12, borderWidth: 2, borderColor: C.borderSub, overflow: 'hidden' },
-  pickerBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: C.surface, borderRadius: 12, borderWidth: 2, borderColor: C.borderSub, paddingHorizontal: 16, height: 60 },
+  input: { height: 56, borderWidth: 1, borderColor: C.border, borderRadius: 12, paddingHorizontal: 16, fontSize: 20, color: C.text, backgroundColor: C.surface },
+  pickerContainer: { backgroundColor: C.surface, borderRadius: 12, borderWidth: 1, borderColor: C.border, overflow: 'hidden' },
+  pickerBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: C.surface, borderRadius: 12, borderWidth: 1, borderColor: C.border, paddingHorizontal: 16, height: 60 },
   pickerBtnText: { flex: 1, fontSize: 20, fontWeight: '400', color: C.text, marginLeft: 12 },
   locationInput: { flex: 1, fontSize: 20, fontWeight: '400', color: C.text, marginLeft: 12, height: '100%' },
-  descInput: { minHeight: 100, borderWidth: 2, borderColor: C.border, borderRadius: 12, paddingHorizontal: 16, paddingTop: 12, fontSize: 20, color: C.text, backgroundColor: C.surface, textAlignVertical: 'top' },
+  descInput: { minHeight: 100, borderWidth: 1, borderColor: C.border, borderRadius: 12, paddingHorizontal: 16, paddingTop: 12, fontSize: 20, color: C.text, backgroundColor: C.surface, textAlignVertical: 'top' },
   linkedNote: { flexDirection: 'row', alignItems: 'center', backgroundColor: C.secondary + '15', borderRadius: 8, padding: 12, marginTop: 16 },
   linkedNoteText: { fontSize: 16, color: C.secondary, marginLeft: 8, flex: 1 },
   saveBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: C.primary, borderRadius: 16, height: 64, marginTop: 24 },
   saveBtnText: { fontSize: 20, fontWeight: '600', color: C.primaryFg, marginLeft: 8 },
-  deleteBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: C.error, borderRadius: 16, height: 64, marginTop: 12 },
-  deleteBtnText: { fontSize: 20, fontWeight: '600', color: C.error, marginLeft: 8 },
+  deleteBtn: { height: 64, marginTop: 12 },
   calendarToggle: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: C.surface, borderRadius: 16, borderWidth: 2, borderColor: C.secondary + '40', padding: 16, marginTop: 24 },
   calendarToggleLeft: { flexDirection: 'row', alignItems: 'center', flex: 1 },
   calendarToggleTextContainer: { marginLeft: 12, flex: 1 },
   calendarToggleTitle: { fontSize: 18, fontWeight: '600', color: C.text },
   calendarToggleSubtitle: { fontSize: 14, color: C.textSec, marginTop: 2 },
-  importBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: C.surface, borderRadius: 16, borderWidth: 2, borderColor: C.secondary + '40', paddingHorizontal: 16, height: 60, marginBottom: 20 },
+  importBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: C.surface, borderRadius: radius.lg, borderWidth: borderWidth.thick, borderColor: C.secondary + '40', paddingHorizontal: 16, height: 60, marginBottom: 20 },
   importBtnText: { flex: 1, fontSize: 18, fontWeight: '600', color: C.secondary, marginLeft: 12 },
   importModalContent: { maxHeight: '75%' },
   importSearchInput: { height: 52, borderWidth: 2, borderColor: C.borderSub, borderRadius: 12, paddingHorizontal: 16, fontSize: 17, color: C.text, backgroundColor: C.bg, marginHorizontal: 20, marginTop: 12 },
