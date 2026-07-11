@@ -1791,7 +1791,6 @@ const s = StyleSheet.create({
   scrollContent: { paddingHorizontal: 24, paddingTop: 16 },
   titleInput: {
     fontSize: 28, fontWeight: '700', color: C.text,
-    borderBottomWidth: 2, borderBottomColor: C.borderSub + '60',
     paddingBottom: 12, marginBottom: 16,
   },
   tagsSection: { marginBottom: 16 },
