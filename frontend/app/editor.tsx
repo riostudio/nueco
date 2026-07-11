@@ -25,7 +25,7 @@ import { unfurl, needsUnfurl } from '../src/share/unfurl';
 import { plainTextFromContent } from '../src/textContent';
 import { RichText, useEditorBridge, useEditorContent, useBridgeState } from '@10play/tentap-editor';
 import { Tag, CalendarEvent, Attachment } from '../src/types';
-import { TAG_COLORS, C, radius, borderWidth } from '../src/theme';
+import { TAG_COLORS, C, radius } from '../src/theme';
 import { setNewNoteId } from '../src/newNoteSignal';
 import { 
   authStorage, 
@@ -1832,7 +1832,7 @@ const s = StyleSheet.create({
   inputBox: {
     backgroundColor: C.surface,
     borderRadius: radius.md,
-    borderWidth: borderWidth.thick,
+    borderWidth: 1,
     borderColor: C.border,
     paddingBottom: 4,
   },
