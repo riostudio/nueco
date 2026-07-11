@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList,
-  RefreshControl, ActivityIndicator, Alert, Animated,
+  RefreshControl, ActivityIndicator, Alert, Animated, Platform,
   NativeSyntheticEvent, NativeScrollEvent, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -13,6 +13,11 @@ import { decryptEventsFromServer } from '../../src/crypto/eventCrypto';
 import { CalendarEvent } from '../../src/types';
 import { MONTH_NAMES, DAY_NAMES } from '../../src/theme';
 import { UserAvatar, useAuth } from '../../src/auth';
+
+let ExpoCalendar: typeof import('expo-calendar') | null = null;
+if (Platform.OS !== 'web') {
+  try { ExpoCalendar = require('expo-calendar'); } catch {}
+}
 
 const C = {
   primary: '#D84315',
@@ -101,7 +106,7 @@ export default function EventsScreen() {
 
   // Delete confirmation modal state
   const [deleteModalVisible, setDeleteModalVisible] = useState(false);
-  const [eventToDelete, setEventToDelete] = useState<{ id: string; title: string } | null>(null);
+  const [eventToDelete, setEventToDelete] = useState<{ id: string; title: string; deviceCalendarEventId: string | null } | null>(null);
   const [deleting, setDeleting] = useState(false);
 
   const loadEvents = useCallback(async () => {
@@ -142,8 +147,8 @@ export default function EventsScreen() {
     return () => clearInterval(pollInterval);
   }, [loadEvents, refreshing, loading]);
 
-  const handleDeletePress = (eventId: string, eventTitle: string) => {
-    setEventToDelete({ id: eventId, title: eventTitle || 'Untitled Event' });
+  const handleDeletePress = (eventId: string, eventTitle: string, deviceCalendarEventId: string | null) => {
+    setEventToDelete({ id: eventId, title: eventTitle || 'Untitled Event', deviceCalendarEventId });
     setDeleteModalVisible(true);
   };
 
@@ -151,6 +156,12 @@ export default function EventsScreen() {
     if (!eventToDelete) return;
     setDeleting(true);
     try {
+      // Mirrors event-editor.tsx's delete: also remove the device-calendar copy for events
+      // linked via "Import from Calendar" or calendar sync, so deleting here doesn't leave
+      // an orphaned event behind in the user's Apple/Google/Outlook calendar.
+      if (ExpoCalendar && eventToDelete.deviceCalendarEventId && Platform.OS !== 'web') {
+        try { await ExpoCalendar.deleteEventAsync(eventToDelete.deviceCalendarEventId); } catch {}
+      }
       await eventsApi.delete(eventToDelete.id);
       loadEvents();
       setDeleteModalVisible(false);
@@ -323,7 +334,7 @@ export default function EventsScreen() {
                     style={s.actionBtn}
                     onPress={(e) => {
                       e.stopPropagation();
-                      handleDeletePress(event.id, event.title);
+                      handleDeletePress(event.id, event.title, event.device_calendar_event_id);
                     }}
                   >
                     <MaterialIcons name="delete" size={20} color={C.error} />
