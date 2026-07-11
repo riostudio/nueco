@@ -1244,7 +1244,7 @@ export default function EditorScreen() {
                   style={s.addTagBtn}
                   onPress={() => setShowTagPicker(!showTagPicker)}
                 >
-                  <MaterialIcons name="add" size={20} color={C.text} />
+                  <MaterialIcons name="sell" size={18} color={C.text} />
                   <Text style={s.addTagText}>Add Tag</Text>
                 </TouchableOpacity>
               )}
