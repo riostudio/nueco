@@ -37,6 +37,11 @@ export function ShareIntentHandler() {
     busy.current = true;
     (async () => {
       try {
+        // Diagnostic: some source apps share a shape normalizeShareIntent doesn't expect
+        // (e.g. neither text/webUrl nor files populated). Logged unconditionally (not gated on a
+        // debug flag) since it's the only way to see what a specific app actually sent - visible
+        // via `adb logcat` under the ReactNativeJS tag, or Metro's console on a dev client.
+        console.log('[ShareIntentHandler] raw shareIntent:', JSON.stringify(shareIntent));
         // Files aren't uploaded here - they're staged as pendingFiles and the editor
         // uploads them with a visible radial progress.
         const draft = await normalizeShareIntent(shareIntent, {
@@ -53,6 +58,16 @@ export function ShareIntentHandler() {
           },
           onWarn: toast,
         });
+        // The source app sent nothing normalizeShareIntent could recognize (e.g. its share
+        // extension didn't populate text/webUrl/files in a form the OS intent carries) - say so
+        // instead of silently opening an empty note, which looked like the app just ate the share.
+        const isEmpty = !draft.title && !draft.content && !draft.sourcePost
+          && draft.images.length === 0 && draft.pendingFiles.length === 0;
+        if (isEmpty) {
+          console.warn('[ShareIntentHandler] normalized draft is empty; raw intent:', JSON.stringify(shareIntent));
+          toast('Nothing shareable came through from that app.');
+          return;
+        }
         setPendingShareDraft(draft);
         // Let the user choose a new note vs. an existing one, instead of always creating new.
         router.push('/share-target');
