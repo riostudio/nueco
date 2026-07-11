@@ -1796,7 +1796,7 @@ const s = StyleSheet.create({
   scrollContent: { paddingHorizontal: 24, paddingTop: 16 },
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   titleInput: {
-    fontSize: 28, fontWeight: '700', color: C.text,
+    fontSize: 26, fontWeight: '500', color: C.text,
     paddingBottom: 12, marginBottom: 16,
   },
   titleInputFlex: { flex: 1, marginBottom: 0 },
