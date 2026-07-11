@@ -90,10 +90,12 @@ const NoteBodyEditor = forwardRef<EditorApi, {
   const editor = useEditorBridge({ autofocus: false, avoidIosKeyboard: true, initialContent });
   const state = useBridgeState(editor);
   const html = useEditorContent(editor, { type: 'html', debounceInterval: 400 });
-  // Proportional rather than a subtract-the-chrome pixel count, since the chrome above (title/tags/
-  // schedule buttons) and below (format bar/actions/voice input) both vary by state.
+  // Proportional rather than a subtract-the-chrome pixel count, since the chrome above (title/tags)
+  // and below (Schedule/Link buttons, then the fixed format bar/actions/voice input) both vary by
+  // state. Capped well under 100% so Schedule/Link stay visible on load instead of requiring a
+  // scroll past the box to discover them.
   const { height: windowHeight } = useWindowDimensions();
-  const minBodyHeight = Math.max(180, Math.round(windowHeight * 0.55));
+  const minBodyHeight = Math.max(180, Math.round(windowHeight * 0.4));
 
   // TenTap only resets the WebView's scroll position after boot when `dynamicHeight` is on (its own
   // fix for https://github.com/10play/10tap-editor/issues/236 / 244). We don't use dynamicHeight (see
