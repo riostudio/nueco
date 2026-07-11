@@ -50,10 +50,12 @@ export async function registerForPushNotifications(): Promise<void> {
     if (status !== 'granted') return;
 
     if (Platform.OS === 'android') {
+      // Omit `sound` entirely to get the system default notification sound - passing the
+      // string 'default' makes expo-notifications look for a bundled raw resource literally
+      // named "default", which doesn't exist, and logs a "Custom sound not found" error.
       await Notifications.setNotificationChannelAsync(EVENT_REMINDER_CHANNEL, {
         name: 'Event reminders',
         importance: Notifications.AndroidImportance.HIGH,
-        sound: 'default',
       });
     }
 

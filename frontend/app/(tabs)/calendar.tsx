@@ -237,7 +237,7 @@ const s = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     marginHorizontal: 24, marginTop: 20,
     backgroundColor: C.surface, borderRadius: radius.md,
-    borderWidth: borderWidth.thick, borderColor: C.borderSub, padding: 16,
+    borderWidth: borderWidth.regular, borderColor: C.border, padding: 16,
   },
   selectedDate: { fontSize: 22, fontWeight: '600', color: C.text },
   selectedBadge: {

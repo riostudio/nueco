@@ -1671,35 +1671,40 @@ export default function EditorScreen() {
         </View>
       </Modal>
       
-      {/* Image Picker Modal */}
+      {/* Image Picker Bottom Sheet */}
       <Modal
         visible={showImagePicker}
         transparent
         animationType="slide"
         onRequestClose={() => setShowImagePicker(false)}
       >
-        <View style={s.modalOverlay}>
-          <View style={s.imagePickerCard}>
+        <TouchableOpacity
+          style={s.sheetOverlay}
+          activeOpacity={1}
+          onPress={() => setShowImagePicker(false)}
+        >
+          <TouchableOpacity activeOpacity={1} style={s.imagePickerCard}>
+            <View style={s.sheetHandle} />
             <Text style={s.imagePickerTitle}>Add Image</Text>
-            
+
             <TouchableOpacity style={s.imagePickerOption} onPress={takePhoto}>
               <MaterialIcons name="camera-alt" size={28} color={C.primary} />
               <Text style={s.imagePickerOptionText}>Take Photo</Text>
             </TouchableOpacity>
-            
+
             <TouchableOpacity style={s.imagePickerOption} onPress={pickFromGallery}>
               <MaterialIcons name="photo-library" size={28} color={C.secondary} />
               <Text style={s.imagePickerOptionText}>Choose from Gallery</Text>
             </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={s.imagePickerCancel} 
+
+            <TouchableOpacity
+              style={s.imagePickerCancel}
               onPress={() => setShowImagePicker(false)}
             >
               <Text style={s.imagePickerCancelText}>Cancel</Text>
             </TouchableOpacity>
-          </View>
-        </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
       </Modal>
 
       {/* Link Existing Event picker */}
@@ -2231,13 +2236,24 @@ const s = StyleSheet.create({
   addImageBtnText: {
     fontSize: 16, fontWeight: '600', color: C.secondary, marginLeft: 8,
   },
-  // Image Picker Modal
+  // Image Picker Bottom Sheet
+  sheetOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  sheetHandle: {
+    width: 40, height: 4, borderRadius: 2, backgroundColor: C.borderSub,
+    alignSelf: 'center', marginBottom: 16,
+  },
   imagePickerCard: {
     backgroundColor: C.surface,
-    borderRadius: 20,
-    padding: 24,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: 12,
+    paddingHorizontal: 24,
+    paddingBottom: 40,
     width: '100%',
-    maxWidth: 340,
   },
   imagePickerTitle: {
     fontSize: 22, fontWeight: '700', color: C.text, textAlign: 'center',
