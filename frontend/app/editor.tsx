@@ -1224,64 +1224,64 @@ export default function EditorScreen() {
             returnKeyType="next"
           />
 
-          {/* Tags */}
-          <View style={s.tagsSection}>
-            <View style={s.tagsRow}>
-              {tags.map((tag, i) => (
-                <TouchableOpacity
-                  key={i}
-                  testID={`tag-${i}`}
-                  style={[s.tagChip, { backgroundColor: tag.color + '20', borderColor: tag.color }]}
-                  onPress={() => removeTag(i)}
-                >
-                  <Text style={[s.tagChipText, { color: tag.color }]}>{tag.name}</Text>
-                  <MaterialIcons name="close" size={16} color={tag.color} />
-                </TouchableOpacity>
-              ))}
-              {tags.length < 3 && (
-                <TouchableOpacity
-                  testID="add-tag-btn"
-                  style={s.addTagBtn}
-                  onPress={() => setShowTagPicker(!showTagPicker)}
-                >
-                  <MaterialIcons name="sell" size={18} color={C.text} />
-                  <Text style={s.addTagText}>Add Tag</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-
-            {showTagPicker && (
-              <View style={s.tagPicker}>
-                <TextInput
-                  testID="tag-name-input"
-                  style={s.tagInput}
-                  placeholder="Tag name..."
-                  placeholderTextColor={C.borderSub}
-                  value={newTagName}
-                  onChangeText={setNewTagName}
-                />
-                <View style={s.colorRow}>
-                  {TAG_COLORS.map((c) => (
-                    <TouchableOpacity
-                      key={c.value}
-                      testID={`color-${c.name}`}
-                      style={[
-                        s.colorDot,
-                        { backgroundColor: c.value },
-                        selectedTagColor === c.value && s.colorDotSel,
-                      ]}
-                      onPress={() => setSelectedTagColor(c.value)}
-                    />
-                  ))}
-                </View>
-                <Button testID="confirm-tag-btn" variant="outline" label="Add Tag" onPress={addTag} style={s.confirmTagBtn} />
-              </View>
-            )}
-          </View>
-
-          {/* Content - the shared-post card sits at the top of the input box, then the writing area */}
+          {/* Content - tags, then the shared-post card, then the writing area, all inside the input box */}
           <View style={s.contentContainer}>
             <View style={s.inputBox}>
+              {/* Tags */}
+              <View style={s.tagsSection}>
+                <View style={s.tagsRow}>
+                  {tags.map((tag, i) => (
+                    <TouchableOpacity
+                      key={i}
+                      testID={`tag-${i}`}
+                      style={[s.tagChip, { backgroundColor: tag.color + '20', borderColor: tag.color }]}
+                      onPress={() => removeTag(i)}
+                    >
+                      <Text style={[s.tagChipText, { color: tag.color }]}>{tag.name}</Text>
+                      <MaterialIcons name="close" size={16} color={tag.color} />
+                    </TouchableOpacity>
+                  ))}
+                  {tags.length < 3 && (
+                    <TouchableOpacity
+                      testID="add-tag-btn"
+                      style={s.addTagBtn}
+                      onPress={() => setShowTagPicker(!showTagPicker)}
+                    >
+                      <MaterialIcons name="sell" size={18} color={C.text} />
+                      <Text style={s.addTagText}>Add Tag</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+
+                {showTagPicker && (
+                  <View style={s.tagPicker}>
+                    <TextInput
+                      testID="tag-name-input"
+                      style={s.tagInput}
+                      placeholder="Tag name..."
+                      placeholderTextColor={C.borderSub}
+                      value={newTagName}
+                      onChangeText={setNewTagName}
+                    />
+                    <View style={s.colorRow}>
+                      {TAG_COLORS.map((c) => (
+                        <TouchableOpacity
+                          key={c.value}
+                          testID={`color-${c.name}`}
+                          style={[
+                            s.colorDot,
+                            { backgroundColor: c.value },
+                            selectedTagColor === c.value && s.colorDotSel,
+                          ]}
+                          onPress={() => setSelectedTagColor(c.value)}
+                        />
+                      ))}
+                    </View>
+                    <Button testID="confirm-tag-btn" variant="outline" label="Add Tag" onPress={addTag} style={s.confirmTagBtn} />
+                  </View>
+                )}
+              </View>
+
               {/* Shared social post card (Instagram/Facebook/WhatsApp/YouTube/…) - links back to the post */}
               {sourcePost && (
                 <SharedPostCard
@@ -1791,7 +1791,7 @@ const s = StyleSheet.create({
     fontSize: 28, fontWeight: '700', color: C.text,
     paddingBottom: 12, marginBottom: 16,
   },
-  tagsSection: { marginBottom: 16 },
+  tagsSection: { paddingHorizontal: 14, paddingTop: 10, marginBottom: 4 },
   tagsRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' },
   tagChip: {
     flexDirection: 'row', alignItems: 'center',
