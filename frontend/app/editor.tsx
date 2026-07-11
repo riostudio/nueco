@@ -1809,11 +1809,10 @@ const s = StyleSheet.create({
   },
   addTagText: { fontSize: 16, fontWeight: '600', color: C.text, marginLeft: 4 },
   tagPicker: {
-    backgroundColor: C.surface, borderRadius: 12, padding: 16,
-    borderWidth: 2, borderColor: C.borderSub, marginTop: 8,
+    backgroundColor: C.surface, marginTop: 8,
   },
   tagInput: {
-    height: 48, borderWidth: 2, borderColor: C.border, borderRadius: 8,
+    height: 48,
     paddingHorizontal: 12, fontSize: 18, color: C.text, marginBottom: 12,
   },
   colorRow: { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 12 },
