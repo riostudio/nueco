@@ -11,7 +11,7 @@ import * as StoreReview from 'expo-store-review';
 import { notesApi, eventsApi, feedbackApi } from '../../src/api';
 import { decryptEventFromServer, decryptEventsFromServer } from '../../src/crypto/eventCrypto';
 import { CalendarEvent } from '../../src/types';
-import { C } from '../../src/theme';
+import { C, radius, borderWidth } from '../../src/theme';
 import { UserAvatar, useAuth } from '../../src/auth';
 import { trackNoteSearched, trackNoteDeleted, trackEvent } from '../../src/analytics';
 import { useOfflineNotes } from '../../src/useOfflineNotes';
@@ -25,9 +25,6 @@ import { takeNewNoteId } from '../../src/newNoteSignal';
 import { shouldShowFeedbackToast, markFeedbackToastSeen, getNoteCreatedCount } from '../../src/feedbackToast';
 
 const FEEDBACK_TOAST_DELAY_MS = 4000;
-
-// Extend C with surfaceHi for this screen
-const Colors = { ...C, surfaceHi: '#FFF8E1' };
 
 // A note card that can animate its border (for the one-time "newly created" glow).
 const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
@@ -581,8 +578,8 @@ const s = StyleSheet.create({
   searchBox: {
     flexDirection: 'row', alignItems: 'center',
     marginHorizontal: 24, marginBottom: 16,
-    backgroundColor: C.surface, borderRadius: 12,
-    borderWidth: 2, borderColor: C.border,
+    backgroundColor: C.surface, borderRadius: radius.md,
+    borderWidth: borderWidth.thick, borderColor: C.border,
     paddingHorizontal: 16, height: 56,
   },
   searchInput: { flex: 1, fontSize: 20, color: C.text, marginLeft: 12 },
@@ -590,10 +587,10 @@ const s = StyleSheet.create({
   scrollContent: { paddingHorizontal: 24 },
   section: { fontSize: 18, fontWeight: '600', color: C.textSec, marginBottom: 8, marginTop: 4 },
   card: {
-    backgroundColor: C.surface, borderRadius: 10, padding: 12,
-    borderWidth: 2, borderColor: C.borderSub, marginBottom: 10,
+    backgroundColor: C.surface, borderRadius: radius.md, padding: 12,
+    borderWidth: borderWidth.regular, borderColor: C.borderSub, marginBottom: 10,
   },
-  pinnedCard: { borderColor: C.primary, backgroundColor: Colors.surfaceHi },
+  pinnedCard: { borderColor: C.primary, backgroundColor: C.surfaceHi },
   cardHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
   cardActions: {
     flexDirection: 'row',
@@ -641,7 +638,7 @@ const s = StyleSheet.create({
   tagsRow: { flexDirection: 'row', flexWrap: 'wrap', flex: 1 },
   tagChip: {
     paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6,
-    borderWidth: 1.5, marginRight: 6, marginBottom: 2,
+    borderWidth: borderWidth.regular, marginRight: 6, marginBottom: 2,
   },
   tagText: { fontSize: 12, fontWeight: '600' },
   timeText: { fontSize: 14, color: C.borderSub },

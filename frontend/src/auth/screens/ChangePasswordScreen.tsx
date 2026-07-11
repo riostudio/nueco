@@ -14,18 +14,7 @@ import { useRouter } from 'expo-router';
 import { useChangePassword } from '../hooks/useChangePassword';
 import { strings } from '../constants/strings';
 import { EyeIcon } from '../../components/EyeIcon';
-
-const C = {
-  primary: '#D84315',
-  primaryFg: '#FFFFFF',
-  bg: '#FDFBF7',
-  surface: '#FFFFFF',
-  text: '#121212',
-  textSec: '#37474F',
-  border: '#121212',
-  borderSub: '#78909C',
-  error: '#C62828',
-};
+import { C, radius, borderWidth } from '../../theme';
 
 export function ChangePasswordScreen() {
   const router = useRouter();
@@ -210,9 +199,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     height: 56,
-    borderWidth: 2,
+    borderWidth: borderWidth.thick,
     borderColor: C.border,
-    borderRadius: 12,
+    borderRadius: radius.md,
     paddingLeft: 16,
     paddingRight: 8,
     backgroundColor: C.surface,
@@ -238,7 +227,7 @@ const styles = StyleSheet.create({
   submitButton: {
     backgroundColor: C.primary,
     height: 56,
-    borderRadius: 12,
+    borderRadius: radius.md,
     justifyContent: 'center',
     alignItems: 'center',
     marginTop: 8,
