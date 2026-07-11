@@ -45,6 +45,8 @@ interface AuthContextType {
   acknowledgeRecoveryCode: () => void;
   /** Complete post-reset recovery using the user's recovery code. */
   recoverKey: (recoveryCode: string) => Promise<void>;
+  /** Correct your account display name (APP 13 / GDPR Art. 16 right to rectification). */
+  updateUserName: (name: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -196,6 +198,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     pendingPasswordRef.current = null;
   }, []);
 
+  const updateUserName = useCallback(async (name: string) => {
+    const updated = await authApi.updateName(name, null);
+    setUser(updated);
+  }, []);
+
   const logout = useCallback(async () => {
     await authApi.logout();
     if (E2EE_KEYS_ENABLED) {
@@ -228,6 +235,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         recoveryCode,
         acknowledgeRecoveryCode,
         recoverKey,
+        updateUserName,
       }}
     >
       {children}

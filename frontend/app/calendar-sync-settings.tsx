@@ -45,7 +45,7 @@ export default function CalendarSyncSettingsScreen() {
   const showSyncInfo = useCallback(() => {
     Alert.alert(
       'About Calendar Sync',
-      "New/changed events sync in whenever you open MemoPad. A best-effort background sync also runs periodically, but the OS doesn't guarantee exact timing - opening the app is what reliably keeps things up to date. Deleting an event on your device won't delete its MemoPad copy.",
+      "New/changed events sync in whenever you open MemoPad. A best-effort background sync also runs periodically, but the OS doesn't guarantee exact timing - opening the app is what reliably keeps things up to date. Deleting an event on your device won't delete its MemoPad copy.\n\nIf a synced calendar includes events other people created or invited you to (for example a shared work calendar or a meeting invite), those event details are copied into MemoPad too.",
     );
   }, []);
 

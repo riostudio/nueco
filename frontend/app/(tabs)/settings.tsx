@@ -30,15 +30,34 @@ const C = {
 
 export default function PrivacyDataScreen() {
   const router = useRouter();
-  const { logout, user } = useAuth();
+  const { logout, user, updateUserName } = useAuth();
   const [analyticsOn, setAnalyticsOn] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [showDelete, setShowDelete] = useState(false);
   const [password, setPassword] = useState('');
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
+  const [showEditName, setShowEditName] = useState(false);
+  const [nameInput, setNameInput] = useState('');
+  const [savingName, setSavingName] = useState(false);
+  const [nameError, setNameError] = useState('');
 
   useEffect(() => { isAnalyticsEnabled().then(setAnalyticsOn); }, []);
+
+  const confirmEditName = useCallback(async () => {
+    const trimmed = nameInput.trim();
+    if (!trimmed) { setNameError('Name cannot be empty.'); return; }
+    setSavingName(true);
+    setNameError('');
+    try {
+      await updateUserName(trimmed);
+      setShowEditName(false);
+    } catch {
+      setNameError('Could not update your name. Please try again.');
+    } finally {
+      setSavingName(false);
+    }
+  }, [nameInput, updateUserName]);
 
   const handleExport = useCallback(async () => {
     setExporting(true);
@@ -85,6 +104,21 @@ export default function PrivacyDataScreen() {
 
       <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent}>
         <View style={s.card}>
+          <TouchableOpacity
+            testID="edit-name-btn"
+            style={s.row}
+            onPress={() => { setNameInput(user?.name || ''); setNameError(''); setShowEditName(true); }}
+          >
+            <MaterialIcons name="badge" size={24} color={C.textSec} />
+            <View style={{ flex: 1, marginLeft: 16 }}>
+              <Text style={s.rowLabelPlain}>Name</Text>
+              <Text style={s.rowSub}>{user?.name || '—'}</Text>
+            </View>
+            <MaterialIcons name="edit" size={20} color={C.borderSub} />
+          </TouchableOpacity>
+
+          <View style={s.divider} />
+
           <TouchableOpacity style={s.row} onPress={() => Linking.openURL(PRIVACY_POLICY_URL)}>
             <MaterialIcons name="privacy-tip" size={24} color={C.textSec} />
             <Text style={s.rowLabel}>Privacy Policy</Text>
@@ -132,6 +166,36 @@ export default function PrivacyDataScreen() {
 
         <View style={{ height: 40 }} />
       </ScrollView>
+
+      {/* Edit name (correction/rectification right - APP 13, GDPR Art. 16) */}
+      <Modal visible={showEditName} transparent animationType="fade" onRequestClose={() => !savingName && setShowEditName(false)}>
+        <View style={s.modalOverlay}>
+          <View style={s.modalContent}>
+            <MaterialIcons name="badge" size={48} color={C.primary} style={{ marginBottom: 12 }} />
+            <Text style={s.modalTitle}>Edit name</Text>
+            <Text style={s.modalMessage}>This is the name shown on your account.</Text>
+            <TextInput
+              testID="edit-name-input"
+              style={s.pwInput}
+              placeholder="Your name"
+              placeholderTextColor={C.borderSub}
+              autoCapitalize="words"
+              value={nameInput}
+              onChangeText={setNameInput}
+              editable={!savingName}
+            />
+            {nameError ? <Text style={s.errorText}>{nameError}</Text> : null}
+            <View style={s.modalButtons}>
+              <TouchableOpacity style={s.modalCancelBtn} onPress={() => setShowEditName(false)} disabled={savingName} activeOpacity={0.7}>
+                <Text style={s.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity testID="save-name-btn" style={s.modalSaveBtn} onPress={confirmEditName} disabled={savingName} activeOpacity={0.7}>
+                {savingName ? <ActivityIndicator color="#FFFFFF" size="small" /> : <Text style={s.modalDeleteText}>Save</Text>}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Delete-account confirmation (GDPR right to erasure) */}
       <Modal visible={showDelete} transparent animationType="fade" onRequestClose={() => !deleting && setShowDelete(false)}>
@@ -205,4 +269,5 @@ const s = StyleSheet.create({
   modalCancelText: { fontSize: 16, fontWeight: '600', color: C.text },
   modalDeleteBtn: { flex: 1, paddingVertical: 14, borderRadius: 12, backgroundColor: C.danger, alignItems: 'center' },
   modalDeleteText: { fontSize: 16, fontWeight: '600', color: '#FFFFFF' },
+  modalSaveBtn: { flex: 1, paddingVertical: 14, borderRadius: 12, backgroundColor: C.primary, alignItems: 'center' },
 });
