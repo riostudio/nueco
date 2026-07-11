@@ -9,11 +9,13 @@
 import React, { useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, SafeAreaView, TextInput,
-  ScrollView, ActivityIndicator,
+  ScrollView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+import { MaterialIcons } from '@expo/vector-icons';
 import { useAuth } from '../src/auth';
+import { C, radius, borderWidth } from '../src/theme';
+import { Button } from '../src/components';
 
 export default function RecoverKeyScreen() {
   const router = useRouter();
@@ -43,7 +45,7 @@ export default function RecoverKeyScreen() {
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
         <View style={styles.iconWrap}>
-          <Ionicons name="lock-open" size={48} color="#D84315" />
+          <MaterialIcons name="lock-open" size={48} color={C.primary} />
         </View>
         <Text style={styles.title}>Restore your encrypted notes</Text>
         <Text style={styles.subtitle}>
@@ -53,7 +55,7 @@ export default function RecoverKeyScreen() {
 
         {error ? (
           <View style={styles.errorBox}>
-            <Ionicons name="alert-circle" size={20} color="#C62828" />
+            <MaterialIcons name="error" size={20} color={C.error} />
             <Text style={styles.errorText}>{error}</Text>
           </View>
         ) : null}
@@ -62,7 +64,7 @@ export default function RecoverKeyScreen() {
           <TextInput
             style={styles.input}
             placeholder="ABCD-EFGH-…"
-            placeholderTextColor="#90A4AE"
+            placeholderTextColor={C.placeholder}
             value={code}
             onChangeText={(t) => { setCode(t); if (error) setError(''); }}
             autoCapitalize="characters"
@@ -71,14 +73,7 @@ export default function RecoverKeyScreen() {
           />
         </View>
 
-        <TouchableOpacity
-          style={[styles.primaryButton, isLoading && styles.primaryButtonDisabled]}
-          onPress={onSubmit}
-          disabled={isLoading}
-          activeOpacity={0.85}
-        >
-          {isLoading ? <ActivityIndicator color="#FFF" /> : <Text style={styles.primaryButtonText}>Restore access</Text>}
-        </TouchableOpacity>
+        <Button variant="cta" label="Restore access" onPress={onSubmit} loading={isLoading} style={styles.primaryButton} />
 
         <TouchableOpacity style={styles.skipButton} onPress={() => router.replace('/(tabs)')} disabled={isLoading}>
           <Text style={styles.skipText}>I don&apos;t have my code - skip for now</Text>
@@ -89,30 +84,26 @@ export default function RecoverKeyScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#FDFBF7' },
+  container: { flex: 1, backgroundColor: C.bg },
   scroll: { padding: 24, paddingTop: 48, gap: 16 },
   iconWrap: {
-    width: 96, height: 96, borderRadius: 24, backgroundColor: '#FFF3E0',
+    width: 96, height: 96, borderRadius: radius.lg, backgroundColor: C.surfaceHi,
     justifyContent: 'center', alignItems: 'center', alignSelf: 'center',
   },
-  title: { fontSize: 28, fontWeight: '700', color: '#121212', textAlign: 'center' },
-  subtitle: { fontSize: 16, color: '#546E7A', lineHeight: 23, textAlign: 'center' },
+  title: { fontSize: 28, fontWeight: '700', color: C.text, textAlign: 'center' },
+  subtitle: { fontSize: 16, color: C.icon, lineHeight: 23, textAlign: 'center' },
   errorBox: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: '#FFEBEE', padding: 16, borderRadius: 12,
+    backgroundColor: C.error + '15', borderWidth: borderWidth.regular, borderColor: C.error,
+    padding: 16, borderRadius: radius.md,
   },
-  errorText: { flex: 1, fontSize: 15, color: '#C62828', lineHeight: 21 },
+  errorText: { flex: 1, fontSize: 15, color: C.error, lineHeight: 21 },
   inputContainer: {
-    backgroundColor: '#FFFFFF', borderRadius: 16, borderWidth: 2, borderColor: '#E0E0E0',
+    backgroundColor: C.surface, borderRadius: radius.lg, borderWidth: borderWidth.thick, borderColor: C.borderSub,
     paddingHorizontal: 16, minHeight: 64, justifyContent: 'center',
   },
-  input: { fontSize: 18, color: '#121212', paddingVertical: 16, letterSpacing: 1, fontFamily: 'monospace' },
-  primaryButton: {
-    backgroundColor: '#D84315', paddingVertical: 18, borderRadius: 16,
-    alignItems: 'center', justifyContent: 'center', minHeight: 60, marginTop: 8,
-  },
-  primaryButtonDisabled: { opacity: 0.6 },
-  primaryButtonText: { color: '#FFFFFF', fontSize: 18, fontWeight: '700' },
+  input: { fontSize: 18, color: C.text, paddingVertical: 16, letterSpacing: 1, fontFamily: 'monospace' },
+  primaryButton: { marginTop: 8 },
   skipButton: { alignItems: 'center', paddingVertical: 12 },
-  skipText: { fontSize: 15, color: '#78909C', fontWeight: '500' },
+  skipText: { fontSize: 15, color: C.borderSub, fontWeight: '500' },
 });
