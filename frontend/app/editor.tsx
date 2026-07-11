@@ -107,6 +107,22 @@ const NoteBodyEditor = forwardRef<EditorApi, {
   const editor = useEditorBridge({ autofocus: false, avoidIosKeyboard: true, initialContent });
   const state = useBridgeState(editor);
   const html = useEditorContent(editor, { type: 'html', debounceInterval: 400 });
+
+  // state.isReady is NOT a boot signal despite the name - TenTap's core bridge hardcodes it to
+  // `true` inside every StateUpdate payload (node_modules/@10play/tentap-editor/.../bridges/
+  // core.js extendEditorState), and StateUpdate only ever fires from onTransaction/
+  // onSelectionUpdate inside the webview - i.e. only after the user has already interacted with
+  // the editor. A note the user never taps into (e.g. a share appended in the background) would
+  // report not-ready forever. The webview DOES post an unconditional 'editor-ready' message on
+  // its own onCreate, independent of interaction - that's the real boot signal, so intercept it
+  // directly via RichText's onMessage instead of trusting state.isReady.
+  const [bridgeReady, setBridgeReady] = useState(false);
+  const handleWebviewMessage = useCallback((event: { nativeEvent: { data: string } }) => {
+    try {
+      const { type } = JSON.parse(event.nativeEvent.data);
+      if (type === 'editor-ready') setBridgeReady(true);
+    } catch {}
+  }, []);
   // Proportional rather than a subtract-the-chrome pixel count, since the chrome above (title/tags)
   // and below (Schedule/Link buttons, then the fixed format bar/actions/voice input) both vary by
   // state. Capped well under 100% so Schedule/Link stay visible on load instead of requiring a
@@ -120,12 +136,12 @@ const NoteBodyEditor = forwardRef<EditorApi, {
   // finish reflowing after `initialContent` loads - clipping the first line of imported/shared text.
   // Runs once, right as the freshly-mounted editor reports ready.
   useEffect(() => {
-    if (!state.isReady) return;
+    if (!bridgeReady) return;
     const t = setTimeout(() => {
       editor.webviewRef.current?.injectJavaScript('window.scrollTo(0, 0); true;');
     }, 100);
     return () => clearTimeout(t);
-  }, [state.isReady]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [bridgeReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Estimate the writing-area height from the content so a long paste (e.g. text copied from a
   // webpage) grows the box to show all of it, instead of being clipped to a fixed height.
@@ -153,13 +169,19 @@ const NoteBodyEditor = forwardRef<EditorApi, {
       isBoldActive: state.isBoldActive,
       isItalicActive: state.isItalicActive,
       isBulletListActive: state.isBulletListActive,
-      isReady: state.isReady,
+      isReady: bridgeReady,
     });
-  }, [state.isFocused, state.isBoldActive, state.isItalicActive, state.isBulletListActive, state.isReady]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [state.isFocused, state.isBoldActive, state.isItalicActive, state.isBulletListActive, bridgeReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <View style={s.richTextWrap}>
-      <RichText editor={editor} style={[s.richText, { height: bodyHeight }]} scrollEnabled />
+      <RichText
+        editor={editor}
+        style={[s.richText, { height: bodyHeight }]}
+        scrollEnabled
+        onMessage={handleWebviewMessage}
+        exclusivelyUseCustomOnMessage={false}
+      />
     </View>
   );
 });
