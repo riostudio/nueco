@@ -1274,9 +1274,7 @@ export default function EditorScreen() {
                     />
                   ))}
                 </View>
-                <TouchableOpacity testID="confirm-tag-btn" style={s.confirmTagBtn} onPress={addTag}>
-                  <Text style={s.confirmTagText}>Add Tag</Text>
-                </TouchableOpacity>
+                <Button testID="confirm-tag-btn" variant="outline" label="Add Tag" onPress={addTag} style={s.confirmTagBtn} />
               </View>
             )}
           </View>
@@ -1818,11 +1816,7 @@ const s = StyleSheet.create({
   colorRow: { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 12 },
   colorDot: { width: 40, height: 40, borderRadius: 20 },
   colorDotSel: { borderWidth: 3, borderColor: C.text },
-  confirmTagBtn: {
-    backgroundColor: C.primary, borderRadius: 12, height: 48,
-    justifyContent: 'center', alignItems: 'center',
-  },
-  confirmTagText: { fontSize: 18, fontWeight: '600', color: C.primaryFg },
+  confirmTagBtn: { height: 48 },
   contentContainer: {
     flex: 1,
     marginBottom: 16,
