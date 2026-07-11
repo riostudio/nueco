@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo, forwardRef, u
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   ScrollView, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
-  Keyboard, Share, Modal, Image, useWindowDimensions, Animated,
+  Keyboard, Share, Modal, Image, useWindowDimensions, Animated, Easing,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -80,6 +80,19 @@ type EditorUiState = { isFocused: boolean; isBoldActive: boolean; isItalicActive
 // below. The min is computed from the window height (see minBodyHeight) so an empty/short note
 // fills the page instead of leaving a small box with dead space below it.
 const BODY_SANITY_MAX_HEIGHT = 20000;
+
+// Drives a bottom sheet's backdrop fade + card slide together. Opening decelerates in
+// (Easing.out) for a soft landing; closing accelerates away (Easing.in) so the dismiss feels
+// snappy rather than lingering. Matched durations keep the fade and slide finishing in sync.
+function animateSheet(backdrop: Animated.Value, translateY: Animated.Value, open: boolean): void {
+  const duration = open ? 280 : 220;
+  const easing = open ? Easing.out(Easing.cubic) : Easing.in(Easing.cubic);
+  Animated.parallel([
+    Animated.timing(backdrop, { toValue: open ? 1 : 0, duration, easing, useNativeDriver: true }),
+    Animated.timing(translateY, { toValue: open ? 0 : 400, duration, easing, useNativeDriver: true }),
+  ]).start();
+}
+
 const NoteBodyEditor = forwardRef<EditorApi, {
   initialContent: string;
   onChange: (html: string) => void;
@@ -176,6 +189,8 @@ export default function EditorScreen() {
   // Driven manually (Modal's animationType="none") so the backdrop fades while the sheet slides.
   const imagePickerBackdrop = useRef(new Animated.Value(0)).current;
   const imagePickerTranslateY = useRef(new Animated.Value(400)).current;
+  const eventPickerBackdrop = useRef(new Animated.Value(0)).current;
+  const eventPickerTranslateY = useRef(new Animated.Value(400)).current;
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
   // In-flight uploads (shared files + in-app picks): shown as filename + radial progress.
@@ -256,19 +271,11 @@ export default function EditorScreen() {
   useEffect(() => { sourcePostRef.current = sourcePost; }, [sourcePost]);
   useEffect(() => { thumbInImages0Ref.current = thumbInImages0; }, [thumbInImages0]);
   useEffect(() => {
-    Animated.parallel([
-      Animated.timing(imagePickerBackdrop, {
-        toValue: showImagePicker ? 1 : 0,
-        duration: 200,
-        useNativeDriver: true,
-      }),
-      Animated.timing(imagePickerTranslateY, {
-        toValue: showImagePicker ? 0 : 400,
-        duration: 250,
-        useNativeDriver: true,
-      }),
-    ]).start();
+    animateSheet(imagePickerBackdrop, imagePickerTranslateY, showImagePicker);
   }, [showImagePicker, imagePickerBackdrop, imagePickerTranslateY]);
+  useEffect(() => {
+    animateSheet(eventPickerBackdrop, eventPickerTranslateY, showEventPicker);
+  }, [showEventPicker, eventPickerBackdrop, eventPickerTranslateY]);
 
   // Once the note body is known, record it for save + seed-echo detection. <NoteBodyEditor> is
   // mounted with this as initialContent (below), so the editor itself loads reliably without a
@@ -1727,49 +1734,59 @@ export default function EditorScreen() {
       <Modal
         visible={showEventPicker}
         transparent
-        animationType="slide"
+        animationType="none"
         onRequestClose={() => setShowEventPicker(false)}
       >
-        <View style={s.pickerOverlay}>
-          <View style={s.pickerSheet}>
-            <View style={s.pickerHeader}>
-              <Text style={s.pickerTitle}>Link an Event</Text>
-              <TouchableOpacity
-                testID="close-event-picker"
-                onPress={() => setShowEventPicker(false)}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              >
-                <MaterialIcons name="close" size={24} color={C.textSec} />
-              </TouchableOpacity>
-            </View>
-            {loadingPickerEvents ? (
-              <ActivityIndicator size="large" color={C.primary} style={{ marginVertical: 32 }} />
-            ) : pickerEvents.length === 0 ? (
-              <Text style={s.pickerEmpty}>No events yet. Use “Schedule New Event” to create one.</Text>
-            ) : (
-              <ScrollView style={{ maxHeight: 380 }}>
-                {pickerEvents.map((ev) => (
-                  <TouchableOpacity
-                    key={ev.id}
-                    testID={`pick-event-${ev.id}`}
-                    style={s.pickerRow}
-                    onPress={() => linkExistingEvent(ev)}
-                    activeOpacity={0.7}
-                  >
-                    <MaterialIcons name="event" size={22} color={C.secondary} />
-                    <View style={{ flex: 1, marginLeft: 10 }}>
-                      <Text style={s.pickerRowTitle} numberOfLines={1}>{ev.title}</Text>
-                      <Text style={s.pickerRowTime} numberOfLines={1}>
-                        {formatEventDateTime(ev.start_time)}
-                      </Text>
-                    </View>
-                    <MaterialIcons name="link" size={20} color={C.borderSub} />
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            )}
-          </View>
-        </View>
+        <TouchableOpacity
+          style={s.pickerOverlay}
+          activeOpacity={1}
+          onPress={() => setShowEventPicker(false)}
+        >
+          <Animated.View
+            pointerEvents="none"
+            style={[StyleSheet.absoluteFill, s.sheetBackdrop, { opacity: eventPickerBackdrop }]}
+          />
+          <Animated.View style={{ transform: [{ translateY: eventPickerTranslateY }] }}>
+            <TouchableOpacity activeOpacity={1} style={s.pickerSheet}>
+              <View style={s.pickerHeader}>
+                <Text style={s.pickerTitle}>Link an Event</Text>
+                <TouchableOpacity
+                  testID="close-event-picker"
+                  onPress={() => setShowEventPicker(false)}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <MaterialIcons name="close" size={24} color={C.textSec} />
+                </TouchableOpacity>
+              </View>
+              {loadingPickerEvents ? (
+                <ActivityIndicator size="large" color={C.primary} style={{ marginVertical: 32 }} />
+              ) : pickerEvents.length === 0 ? (
+                <Text style={s.pickerEmpty}>No events yet. Use “Schedule New Event” to create one.</Text>
+              ) : (
+                <ScrollView style={{ maxHeight: 380 }}>
+                  {pickerEvents.map((ev) => (
+                    <TouchableOpacity
+                      key={ev.id}
+                      testID={`pick-event-${ev.id}`}
+                      style={s.pickerRow}
+                      onPress={() => linkExistingEvent(ev)}
+                      activeOpacity={0.7}
+                    >
+                      <MaterialIcons name="event" size={22} color={C.secondary} />
+                      <View style={{ flex: 1, marginLeft: 10 }}>
+                        <Text style={s.pickerRowTitle} numberOfLines={1}>{ev.title}</Text>
+                        <Text style={s.pickerRowTime} numberOfLines={1}>
+                          {formatEventDateTime(ev.start_time)}
+                        </Text>
+                      </View>
+                      <MaterialIcons name="link" size={20} color={C.borderSub} />
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              )}
+            </TouchableOpacity>
+          </Animated.View>
+        </TouchableOpacity>
       </Modal>
 
       {/* Delete Confirmation Modal - same look as the notes-list delete confirmation */}
@@ -1999,7 +2016,7 @@ const s = StyleSheet.create({
   calBtnRow: { flexDirection: 'row', gap: 10, marginTop: 16 },
   calBtnBox: { flex: 1 },
   // Event picker modal
-  pickerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  pickerOverlay: { flex: 1, justifyContent: 'flex-end' },
   pickerSheet: {
     backgroundColor: C.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20,
     paddingHorizontal: 20, paddingTop: 16, paddingBottom: 32,
