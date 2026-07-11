@@ -16,9 +16,11 @@ interface Props {
   onThumbsUp: () => void;
   onThumbsDown: () => void;
   onDismiss: () => void;
+  /** False for the retry showing - stays up until the user acts instead of auto-hiding. */
+  autoDismiss?: boolean;
 }
 
-export default function FeedbackToast({ visible, onThumbsUp, onThumbsDown, onDismiss }: Props) {
+export default function FeedbackToast({ visible, onThumbsUp, onThumbsDown, onDismiss, autoDismiss = true }: Props) {
   const translateY = useRef(new Animated.Value(80)).current;
   const opacity = useRef(new Animated.Value(0)).current;
   const dismissTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -30,12 +32,12 @@ export default function FeedbackToast({ visible, onThumbsUp, onThumbsDown, onDis
     ]).start();
 
     if (dismissTimer.current) clearTimeout(dismissTimer.current);
-    if (visible) {
+    if (visible && autoDismiss) {
       dismissTimer.current = setTimeout(onDismiss, AUTO_DISMISS_MS);
     }
     return () => { if (dismissTimer.current) clearTimeout(dismissTimer.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visible]);
+  }, [visible, autoDismiss]);
 
   if (!visible) return null;
 

@@ -22,7 +22,10 @@ import { getSyncQueue, getLocalNotes, LocalNote } from '../../src/offlineSync';
 import { parseSourcePost } from '../../src/share/socialSource';
 import { plainTextFromContent } from '../../src/textContent';
 import { takeNewNoteId } from '../../src/newNoteSignal';
-import { shouldShowFeedbackToast, markFeedbackToastSeen, getNoteCreatedCount } from '../../src/feedbackToast';
+import {
+  shouldShowFeedbackToast, markFeedbackToastSeen, getNoteCreatedCount,
+  isFeedbackToastRetry, handleFeedbackToastNoAction,
+} from '../../src/feedbackToast';
 
 const FEEDBACK_TOAST_DELAY_MS = 4000;
 
@@ -69,8 +72,10 @@ export default function NotesScreen() {
   const [noteToDelete, setNoteToDelete] = useState<{ id: string; title: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  // One-time "Enjoying MemoPad?" feedback toast (fires after the 5th note ever created).
+  // "Enjoying MemoPad?" feedback toast (fires after the 5th note ever created; if left
+  // unanswered, retries once 5 notes later and that retry stays up until dismissed).
   const [showFeedbackToast, setShowFeedbackToast] = useState(false);
+  const [isFeedbackRetry, setIsFeedbackRetry] = useState(false);
   const [showFeedbackComment, setShowFeedbackComment] = useState(false);
   const [submittingFeedback, setSubmittingFeedback] = useState(false);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -188,6 +193,7 @@ export default function NotesScreen() {
       // Delayed (not instant) so it never interrupts right after saving a note.
       feedbackTimer.current = setTimeout(async () => {
         if (await shouldShowFeedbackToast()) {
+          setIsFeedbackRetry(await isFeedbackToastRetry());
           setShowFeedbackToast(true);
           trackEvent('feedback_toast_shown');
         }
@@ -199,7 +205,7 @@ export default function NotesScreen() {
 
   const dismissFeedbackToast = useCallback(() => {
     setShowFeedbackToast(false);
-    markFeedbackToastSeen().catch(() => {});
+    handleFeedbackToastNoAction().catch(() => {});
     trackEvent('feedback_toast_response', { value: 'dismissed' });
   }, []);
 
@@ -511,6 +517,7 @@ export default function NotesScreen() {
         onThumbsUp={handleFeedbackThumbsUp}
         onThumbsDown={handleFeedbackThumbsDown}
         onDismiss={dismissFeedbackToast}
+        autoDismiss={!isFeedbackRetry}
       />
       <FeedbackCommentModal
         visible={showFeedbackComment}
