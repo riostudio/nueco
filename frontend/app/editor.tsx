@@ -25,7 +25,7 @@ import { unfurl, needsUnfurl } from '../src/share/unfurl';
 import { plainTextFromContent } from '../src/textContent';
 import { RichText, useEditorBridge, useEditorContent, useBridgeState } from '@10play/tentap-editor';
 import { Tag, CalendarEvent, Attachment } from '../src/types';
-import { TAG_COLORS, C, radius } from '../src/theme';
+import { TAG_COLORS, C, radius, borderWidth } from '../src/theme';
 import { setNewNoteId } from '../src/newNoteSignal';
 import { 
   authStorage, 
@@ -1832,9 +1832,9 @@ const s = StyleSheet.create({
   // The bordered box that visually contains both the shared-post card and the writing area.
   inputBox: {
     backgroundColor: C.surface,
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: C.borderSub,
+    borderRadius: radius.md,
+    borderWidth: borderWidth.thick,
+    borderColor: C.border,
     paddingBottom: 4,
   },
   // The shared-post card nested inside the input box: inset from the border, small gap before text.
