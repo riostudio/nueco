@@ -73,9 +73,13 @@ type EditorUiState = { isFocused: boolean; isBoldActive: boolean; isItalicActive
 // races the webview's readiness (it logs "Editor isn't ready yet" and drops the call, leaving the
 // body empty until tapped). Mounting this only once the content is known sidesteps the race.
 // Writing-area height bounds: TenTap's native auto-height is shimmed on Expo, so we grow the box
-// from the content instead (see bodyHeight) - min keeps a comfortable default, max caps runaway.
+// from the content instead (see bodyHeight) - min keeps a comfortable default. No max: the box is
+// inside the screen's own ScrollView, so a long paste/import should grow the box to fit and show
+// from the top, not get clipped to a fixed height with its own internal (and separately-scrolled)
+// WebView scroll. BODY_SANITY_MAX is only a backstop against a degenerate height estimate, not a
+// real content limit - see bodyHeight below.
 const BODY_MIN_HEIGHT = 180;
-const BODY_MAX_HEIGHT = 720;
+const BODY_SANITY_MAX_HEIGHT = 20000;
 const NoteBodyEditor = forwardRef<EditorApi, {
   initialContent: string;
   onChange: (html: string) => void;
@@ -108,7 +112,7 @@ const NoteBodyEditor = forwardRef<EditorApi, {
     const text = h.replace(/<[^>]+>/g, ' ').replace(/&[a-z#0-9]+;/gi, ' ');
     const wrapped = Math.ceil((text.trim().length || 1) / 36); // ~36 chars/line at the editor width
     const lines = Math.max(blocks + 1, wrapped);
-    return Math.min(BODY_MAX_HEIGHT, Math.max(BODY_MIN_HEIGHT, lines * 26 + 28));
+    return Math.min(BODY_SANITY_MAX_HEIGHT, Math.max(BODY_MIN_HEIGHT, lines * 26 + 28));
   }, [html, initialContent]);
 
   useImperativeHandle(ref, () => ({
