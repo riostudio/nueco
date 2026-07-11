@@ -451,6 +451,16 @@ export default function EditorScreen() {
         setSeedHtml(lp.content || '');
         bodySeeded = true;
         if (lp.sourcePost) { setSourcePost(lp.sourcePost); setThumbInImages0(lp.thumbInImages0); }
+        // Same local-first treatment for the rest of the note - title/tags/pin/images visibly
+        // lagging a beat behind the instantly-seeded body (while the network reconcile below is
+        // still in flight) reads as a bug even though the data was already sitting in storage.
+        // The reconcile block further down re-sets all of these once the server copy resolves,
+        // so this is just removing the wait, not skipping the sync.
+        setTitle(localCopy.title);
+        setTags(localCopy.tags);
+        setIsPinned(localCopy.is_pinned);
+        setImages(localCopy.images || []);
+        setAttachments(localCopy.attachments || []);
       }
 
       let note: any;
