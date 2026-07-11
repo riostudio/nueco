@@ -9,15 +9,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { hasAnalyticsDecision, setAnalyticsEnabled } from '../src/analytics';
-
-const C = {
-  primary: '#D84315',
-  primaryFg: '#FFFFFF',
-  bg: '#FDFBF7',
-  text: '#121212',
-  textSec: '#37474F',
-  borderSub: '#78909C',
-};
+import { C, radius } from '../src/theme';
+import { Button } from '../src/components';
 
 export default function AnalyticsConsentScreen() {
   const router = useRouter();
@@ -49,9 +42,7 @@ export default function AnalyticsConsentScreen() {
       </View>
 
       <View style={s.actions}>
-        <TouchableOpacity testID="consent-allow" style={s.allowBtn} onPress={() => choose(true)} activeOpacity={0.85}>
-          <Text style={s.allowText}>Allow anonymous analytics</Text>
-        </TouchableOpacity>
+        <Button testID="consent-allow" variant="cta" label="Allow anonymous analytics" onPress={() => choose(true)} />
         <TouchableOpacity testID="consent-deny" style={s.denyBtn} onPress={() => choose(false)} activeOpacity={0.7}>
           <Text style={s.denyText}>No thanks</Text>
         </TouchableOpacity>
@@ -64,18 +55,13 @@ const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: C.bg, justifyContent: 'space-between' },
   content: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 28 },
   iconCircle: {
-    width: 96, height: 96, borderRadius: 48, backgroundColor: '#FBE9E7',
+    width: 96, height: 96, borderRadius: radius.pill, backgroundColor: C.surfaceHi,
     alignItems: 'center', justifyContent: 'center', marginBottom: 28,
   },
   title: { fontSize: 28, fontWeight: '700', color: C.text, textAlign: 'center', marginBottom: 16 },
   body: { fontSize: 19, color: C.text, textAlign: 'center', lineHeight: 28, marginBottom: 16 },
   reassure: { fontSize: 16, color: C.textSec, textAlign: 'center', lineHeight: 24 },
-  actions: { paddingHorizontal: 24, paddingBottom: 24 },
-  allowBtn: {
-    height: 56, borderRadius: 14, backgroundColor: C.primary,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  allowText: { fontSize: 18, fontWeight: '700', color: C.primaryFg },
-  denyBtn: { height: 52, alignItems: 'center', justifyContent: 'center', marginTop: 8 },
+  actions: { paddingHorizontal: 24, paddingBottom: 24, gap: 8 },
+  denyBtn: { height: 52, alignItems: 'center', justifyContent: 'center' },
   denyText: { fontSize: 17, fontWeight: '600', color: C.textSec },
 });

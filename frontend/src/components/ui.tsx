@@ -6,18 +6,20 @@
  * screens compose them instead of re-declaring the look.
  */
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, StyleProp, ViewStyle } from 'react-native';
+import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, StyleProp, ViewStyle } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { C, radius, borderWidth } from '../theme';
 
 type IconName = React.ComponentProps<typeof MaterialIcons>['name'];
 
 // ---- Button ----
-// 'cta'    - solid pill, bold white label (Voice input, New event).
+// 'cta'    - solid pill, bold white label (Voice input, New event, Get Started).
+// 'outline'- pill outline, primary-colored border/label, transparent fill (a lower-emphasis CTA
+//            alongside a 'cta' one, e.g. "Login" next to "Get Started").
 // 'box'    - outlined bordered box, icon + label (Pin/Image/Share, Schedule event/Link event).
 // 'toolbar'- icon + label, no border/fill - for lower-emphasis actions that shouldn't compete
 //            with the boxed ones on the same screen.
-type ButtonVariant = 'cta' | 'box' | 'toolbar';
+type ButtonVariant = 'cta' | 'outline' | 'box' | 'toolbar';
 type ButtonLayout = 'row' | 'stack'; // 'box' only: icon-beside-label vs icon-above-label
 type ButtonTone = 'default' | 'danger';
 
@@ -30,11 +32,13 @@ export function Button({
   tone = 'default',
   active = false,
   disabled = false,
+  loading = false,
   style,
   testID,
 }: {
   label: string;
-  icon: IconName;
+  /** Optional - 'cta'/'outline' buttons are often text-only (e.g. a form submit button). */
+  icon?: IconName;
   onPress: () => void;
   variant?: ButtonVariant;
   layout?: ButtonLayout;
@@ -43,6 +47,9 @@ export function Button({
    * with `primary` regardless of `tone`. */
   active?: boolean;
   disabled?: boolean;
+  /** 'cta'/'outline' only - swaps icon+label for a spinner and implies disabled (a submitting
+   * form button). */
+  loading?: boolean;
   style?: StyleProp<ViewStyle>;
   testID?: string;
 }) {
@@ -56,13 +63,40 @@ export function Button({
     return (
       <TouchableOpacity
         testID={testID}
-        disabled={disabled}
+        disabled={disabled || loading}
         onPress={onPress}
         activeOpacity={0.85}
-        style={[s.cta, { backgroundColor: ctaBg }, disabled && s.disabled, style]}
+        style={[s.cta, { backgroundColor: ctaBg }, (disabled || loading) && s.disabled, style]}
       >
-        <MaterialIcons name={icon} size={22} color={C.primaryFg} />
-        <Text style={s.ctaLabel}>{label}</Text>
+        {loading ? (
+          <ActivityIndicator color={C.primaryFg} size="small" />
+        ) : (
+          <>
+            {icon && <MaterialIcons name={icon} size={22} color={C.primaryFg} />}
+            <Text style={s.ctaLabel}>{label}</Text>
+          </>
+        )}
+      </TouchableOpacity>
+    );
+  }
+
+  if (variant === 'outline') {
+    return (
+      <TouchableOpacity
+        testID={testID}
+        disabled={disabled || loading}
+        onPress={onPress}
+        activeOpacity={0.7}
+        style={[s.cta, s.outline, (disabled || loading) && s.disabled, style]}
+      >
+        {loading ? (
+          <ActivityIndicator color={C.primary} size="small" />
+        ) : (
+          <>
+            {icon && <MaterialIcons name={icon} size={22} color={C.primary} />}
+            <Text style={[s.ctaLabel, s.outlineLabel]}>{label}</Text>
+          </>
+        )}
       </TouchableOpacity>
     );
   }
@@ -75,7 +109,7 @@ export function Button({
         onPress={onPress}
         style={[s.toolbarBtn, disabled && s.disabled, style]}
       >
-        <MaterialIcons name={icon} size={22} color={toneColor} />
+        {icon && <MaterialIcons name={icon} size={22} color={toneColor} />}
         <Text style={[s.toolbarLabel, { color: toneColor }]}>{label}</Text>
       </TouchableOpacity>
     );
@@ -95,7 +129,7 @@ export function Button({
         style,
       ]}
     >
-      <MaterialIcons name={icon} size={20} color={toneColor} />
+      {icon && <MaterialIcons name={icon} size={20} color={toneColor} />}
       <Text style={[s.boxLabel, { color: toneColor }]}>{label}</Text>
     </TouchableOpacity>
   );
@@ -188,6 +222,12 @@ const s = StyleSheet.create({
     backgroundColor: C.primary,
   },
   ctaLabel: { fontSize: 16, fontWeight: '700', color: C.primaryFg },
+  outline: {
+    backgroundColor: 'transparent',
+    borderWidth: borderWidth.thick,
+    borderColor: C.primary,
+  },
+  outlineLabel: { color: C.primary },
 
   toolbarBtn: {
     flexDirection: 'row',

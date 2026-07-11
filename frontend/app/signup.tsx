@@ -9,12 +9,13 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
-  ActivityIndicator,
   Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+import { MaterialIcons } from '@expo/vector-icons';
 import { authApi } from '../src/auth';
+import { C, radius, borderWidth } from '../src/theme';
+import { Button, EyeIcon } from '../src/components';
 
 export default function SignupScreen() {
   const router = useRouter();
@@ -85,7 +86,7 @@ export default function SignupScreen() {
       <SafeAreaView style={styles.container}>
         <View style={styles.successContainer}>
           <View style={styles.successIcon}>
-            <Ionicons name="checkmark-circle" size={80} color="#4CAF50" />
+            <MaterialIcons name="check-circle" size={80} color={C.success} />
           </View>
           <Text style={styles.successTitle}>Account Created!</Text>
           <Text style={styles.successMessage}>
@@ -95,13 +96,7 @@ export default function SignupScreen() {
           <Text style={styles.successHint}>
             Please check your email and click the verification link before logging in.
           </Text>
-          <TouchableOpacity
-            style={styles.successButton}
-            onPress={() => router.replace('/login')}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.successButtonText}>Go to Login</Text>
-          </TouchableOpacity>
+          <Button variant="cta" label="Go to Login" onPress={() => router.replace('/login')} style={styles.successButton} />
         </View>
       </SafeAreaView>
     );
@@ -125,7 +120,7 @@ export default function SignupScreen() {
               onPress={() => router.back()}
               activeOpacity={0.7}
             >
-              <Ionicons name="arrow-back" size={28} color="#121212" />
+              <MaterialIcons name="arrow-back" size={28} color={C.text} />
             </TouchableOpacity>
           </View>
 
@@ -140,7 +135,7 @@ export default function SignupScreen() {
             {/* General Error */}
             {errors.general ? (
               <View style={styles.generalErrorContainer}>
-                <Ionicons name="alert-circle" size={20} color="#C62828" />
+                <MaterialIcons name="error" size={20} color={C.error} />
                 <Text style={styles.generalErrorText}>{errors.general}</Text>
               </View>
             ) : null}
@@ -149,11 +144,11 @@ export default function SignupScreen() {
             <View style={styles.inputGroup}>
               <Text style={styles.label}>Full Name</Text>
               <View style={[styles.inputContainer, errors.name && styles.inputError]}>
-                <Ionicons name="person-outline" size={24} color="#78909C" style={styles.inputIcon} />
+                <MaterialIcons name="person-outline" size={24} color={C.borderSub} style={styles.inputIcon} />
                 <TextInput
                   style={styles.input}
                   placeholder="Enter your name"
-                  placeholderTextColor="#90A4AE"
+                  placeholderTextColor={C.placeholder}
                   value={name}
                   onChangeText={(text) => {
                     setName(text);
@@ -170,11 +165,11 @@ export default function SignupScreen() {
             <View style={styles.inputGroup}>
               <Text style={styles.label}>Email Address</Text>
               <View style={[styles.inputContainer, errors.email && styles.inputError]}>
-                <Ionicons name="mail-outline" size={24} color="#78909C" style={styles.inputIcon} />
+                <MaterialIcons name="email" size={24} color={C.borderSub} style={styles.inputIcon} />
                 <TextInput
                   style={styles.input}
                   placeholder="Enter your email"
-                  placeholderTextColor="#90A4AE"
+                  placeholderTextColor={C.placeholder}
                   value={email}
                   onChangeText={(text) => {
                     setEmail(text);
@@ -192,11 +187,11 @@ export default function SignupScreen() {
             <View style={styles.inputGroup}>
               <Text style={styles.label}>Password</Text>
               <View style={[styles.inputContainer, errors.password && styles.inputError]}>
-                <Ionicons name="lock-closed-outline" size={24} color="#78909C" style={styles.inputIcon} />
+                <MaterialIcons name="lock-outline" size={24} color={C.borderSub} style={styles.inputIcon} />
                 <TextInput
                   style={styles.input}
                   placeholder="Create a password"
-                  placeholderTextColor="#90A4AE"
+                  placeholderTextColor={C.placeholder}
                   value={password}
                   onChangeText={(text) => {
                     setPassword(text);
@@ -209,11 +204,7 @@ export default function SignupScreen() {
                   onPress={() => setShowPassword(!showPassword)}
                   style={styles.eyeButton}
                 >
-                  <Ionicons
-                    name={showPassword ? 'eye-off-outline' : 'eye-outline'}
-                    size={24}
-                    color="#78909C"
-                  />
+                  <EyeIcon off={showPassword} size={24} color={C.borderSub} />
                 </TouchableOpacity>
               </View>
               {errors.password ? <Text style={styles.errorText}>{errors.password}</Text> : null}
@@ -224,11 +215,11 @@ export default function SignupScreen() {
             <View style={styles.inputGroup}>
               <Text style={styles.label}>Confirm Password</Text>
               <View style={[styles.inputContainer, errors.confirmPassword && styles.inputError]}>
-                <Ionicons name="lock-closed-outline" size={24} color="#78909C" style={styles.inputIcon} />
+                <MaterialIcons name="lock-outline" size={24} color={C.borderSub} style={styles.inputIcon} />
                 <TextInput
                   style={styles.input}
                   placeholder="Confirm your password"
-                  placeholderTextColor="#90A4AE"
+                  placeholderTextColor={C.placeholder}
                   value={confirmPassword}
                   onChangeText={(text) => {
                     setConfirmPassword(text);
@@ -241,29 +232,14 @@ export default function SignupScreen() {
                   onPress={() => setShowConfirmPassword(!showConfirmPassword)}
                   style={styles.eyeButton}
                 >
-                  <Ionicons
-                    name={showConfirmPassword ? 'eye-off-outline' : 'eye-outline'}
-                    size={24}
-                    color="#78909C"
-                  />
+                  <EyeIcon off={showConfirmPassword} size={24} color={C.borderSub} />
                 </TouchableOpacity>
               </View>
               {errors.confirmPassword ? <Text style={styles.errorText}>{errors.confirmPassword}</Text> : null}
             </View>
 
             {/* Sign Up Button */}
-            <TouchableOpacity
-              style={[styles.submitButton, isLoading && styles.submitButtonDisabled]}
-              onPress={handleSignup}
-              disabled={isLoading}
-              activeOpacity={0.8}
-            >
-              {isLoading ? (
-                <ActivityIndicator color="#FFFFFF" size="small" />
-              ) : (
-                <Text style={styles.submitButtonText}>Create Account</Text>
-              )}
-            </TouchableOpacity>
+            <Button variant="cta" label="Create Account" onPress={handleSignup} loading={isLoading} style={styles.submitButton} />
 
             {/* Login Link */}
             <View style={styles.loginLinkContainer}>
@@ -282,7 +258,7 @@ export default function SignupScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FDFBF7',
+    backgroundColor: C.bg,
   },
   keyboardView: {
     flex: 1,
@@ -298,15 +274,12 @@ const styles = StyleSheet.create({
   backButton: {
     width: 48,
     height: 48,
-    borderRadius: 24,
-    backgroundColor: '#FFFFFF',
+    borderRadius: radius.pill,
+    backgroundColor: C.surface,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+    borderWidth: borderWidth.regular,
+    borderColor: C.borderSub,
   },
   titleSection: {
     paddingVertical: 24,
@@ -314,12 +287,12 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 34,
     fontWeight: '700',
-    color: '#121212',
+    color: C.text,
     marginBottom: 8,
   },
   subtitle: {
     fontSize: 18,
-    color: '#546E7A',
+    color: C.icon,
     lineHeight: 24,
   },
   form: {
@@ -332,20 +305,20 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#37474F',
+    color: C.textSec,
   },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    borderWidth: 2,
-    borderColor: '#E0E0E0',
+    backgroundColor: C.surface,
+    borderRadius: radius.lg,
+    borderWidth: borderWidth.thick,
+    borderColor: C.borderSub,
     paddingHorizontal: 16,
     minHeight: 60,
   },
   inputError: {
-    borderColor: '#C62828',
+    borderColor: C.error,
   },
   inputIcon: {
     marginRight: 12,
@@ -353,7 +326,7 @@ const styles = StyleSheet.create({
   input: {
     flex: 1,
     fontSize: 18,
-    color: '#121212',
+    color: C.text,
     paddingVertical: 16,
   },
   eyeButton: {
@@ -361,35 +334,16 @@ const styles = StyleSheet.create({
   },
   errorText: {
     fontSize: 14,
-    color: '#C62828',
+    color: C.error,
     marginTop: 4,
   },
   hint: {
     fontSize: 14,
-    color: '#78909C',
+    color: C.borderSub,
     marginTop: 4,
   },
   submitButton: {
-    backgroundColor: '#D84315',
-    paddingVertical: 18,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 60,
     marginTop: 16,
-    shadowColor: '#D84315',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  submitButtonDisabled: {
-    opacity: 0.7,
-  },
-  submitButtonText: {
-    color: '#FFFFFF',
-    fontSize: 20,
-    fontWeight: '700',
   },
   loginLinkContainer: {
     flexDirection: 'row',
@@ -399,27 +353,29 @@ const styles = StyleSheet.create({
   },
   loginText: {
     fontSize: 16,
-    color: '#546E7A',
+    color: C.icon,
   },
   loginLink: {
     fontSize: 16,
-    color: '#1565C0',
+    color: C.secondary,
     fontWeight: '600',
   },
   // General error styles
   generalErrorContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFEBEE',
+    backgroundColor: C.error + '15',
+    borderWidth: borderWidth.regular,
+    borderColor: C.error,
     padding: 16,
-    borderRadius: 12,
+    borderRadius: radius.md,
     gap: 12,
     marginBottom: 8,
   },
   generalErrorText: {
     flex: 1,
     fontSize: 16,
-    color: '#C62828',
+    color: C.error,
     lineHeight: 22,
   },
   // Success screen styles
@@ -435,46 +391,30 @@ const styles = StyleSheet.create({
   successTitle: {
     fontSize: 32,
     fontWeight: '700',
-    color: '#121212',
+    color: C.text,
     marginBottom: 16,
     textAlign: 'center',
   },
   successMessage: {
     fontSize: 18,
-    color: '#546E7A',
+    color: C.icon,
     textAlign: 'center',
     lineHeight: 26,
     marginBottom: 8,
   },
   successEmail: {
-    color: '#1565C0',
+    color: C.secondary,
     fontWeight: '600',
   },
   successHint: {
     fontSize: 16,
-    color: '#78909C',
+    color: C.borderSub,
     textAlign: 'center',
     lineHeight: 24,
     marginBottom: 32,
     paddingHorizontal: 16,
   },
   successButton: {
-    backgroundColor: '#D84315',
-    paddingVertical: 18,
     paddingHorizontal: 48,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 60,
-    shadowColor: '#D84315',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  successButtonText: {
-    color: '#FFFFFF',
-    fontSize: 20,
-    fontWeight: '700',
   },
 });
