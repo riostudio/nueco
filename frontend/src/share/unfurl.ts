@@ -8,6 +8,10 @@
  *   - Instagram / Facebook / Threads / LinkedIn → scrape Open Graph tags. These gate
  *     logged-out requests behind a login wall, so og:image/og:title are usually absent; the
  *     caller keeps its badge+caption card when nothing comes back. (LinkedIn especially.)
+ *   - Any other link (the generic `link` platform - includes AI-tool share pages like
+ *     claude.ai/share/…, chatgpt.com/share/…, perplexity.ai/search/…) → the same Open Graph
+ *     scrape. Unlike the gated platforms above, most of these expose og:title/og:image freely,
+ *     since the page is meant to be publicly shareable.
  *
  * The network call lives in `unfurl()`; the parsing (`parseTikTokOEmbed`, `parseRedditJson`,
  * `parseOpenGraph`) is pure and unit-tested. The card renders instantly; the caller fetches in
@@ -22,7 +26,7 @@ export interface UnfurlResult {
   kind?: 'image' | 'video'; // card treatment hint (video → play overlay); set by Reddit only
 }
 
-const UNFURL_PLATFORMS = new Set(['tiktok', 'reddit', 'instagram', 'facebook', 'threads', 'linkedin']);
+const UNFURL_PLATFORMS = new Set(['tiktok', 'reddit', 'instagram', 'facebook', 'threads', 'linkedin', 'link']);
 
 // Reddit blocks generic/empty User-Agents (429s); a descriptive UA keeps the `.json` API happy.
 const REDDIT_UA = 'MemoPad/1.0 (link unfurl)';
@@ -140,7 +144,8 @@ export async function unfurl(url: string, platform: string, fetchImpl: typeof fe
       if (!res.ok) return {};
       return parseRedditJson(await res.json());
     }
-    // Instagram / Facebook / Threads / LinkedIn: best-effort Open Graph scrape (usually gated).
+    // Everything else (Instagram/Facebook/Threads/LinkedIn - usually gated - and any generic
+    // link, which usually isn't): best-effort Open Graph scrape.
     const res = await fetchImpl(url, { headers: { 'User-Agent': 'facebookexternalhit/1.1' } });
     if (!res.ok) return {};
     return parseOpenGraph(await res.text());

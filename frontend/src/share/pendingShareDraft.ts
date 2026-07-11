@@ -28,3 +28,8 @@ export function clearPendingShareDraft(): void {
 export function hasPendingShareDraft(): boolean {
   return pending !== null;
 }
+
+/** Look at the staged draft without consuming it (for a preview UI). */
+export function peekPendingShareDraft(): NoteDraft | null {
+  return pending;
+}

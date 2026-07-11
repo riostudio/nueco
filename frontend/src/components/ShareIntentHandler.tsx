@@ -2,9 +2,10 @@
  * Bridges an OS share (via expo-share-intent) into the note editor.
  *
  * Rendered once, under <ShareIntentProvider> in the root layout. On a fresh share it
- * normalizes the payload into a NoteDraft, stages it, and routes to the editor pre-filled
- * (`/editor?shared=1`). Handles cold-start, background, and foreground shares (the hook
- * fires for each). Renders nothing.
+ * normalizes the payload into a NoteDraft, stages it, and routes to /share-target so the user
+ * can pick a new note or an existing one (both land on the editor pre-filled/appended, see
+ * editor.tsx's two shared-draft effects). Handles cold-start, background, and foreground shares
+ * (the hook fires for each). Renders nothing.
  */
 import { useEffect, useRef } from 'react';
 import { Platform, ToastAndroid, Alert } from 'react-native';
@@ -53,7 +54,8 @@ export function ShareIntentHandler() {
           onWarn: toast,
         });
         setPendingShareDraft(draft);
-        router.push('/editor?shared=1');
+        // Let the user choose a new note vs. an existing one, instead of always creating new.
+        router.push('/share-target');
       } catch (e) {
         console.error('Share intent handling failed:', e);
         toast('Could not open the shared content.');

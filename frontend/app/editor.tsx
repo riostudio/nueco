@@ -19,7 +19,7 @@ import { decryptEventFromServer, decryptEventsFromServer } from '../src/crypto/e
 import { RadialProgress, SharedPostCard, Button } from '../src/components';
 import { decryptNoteFromServer } from '../src/crypto/noteCrypto';
 import { createNoteOffline, updateNoteOffline, getLocalNotes, processSyncQueue } from '../src/offlineSync';
-import { takePendingShareDraft } from '../src/share/pendingShareDraft';
+import { takePendingShareDraft, peekPendingShareDraft } from '../src/share/pendingShareDraft';
 import { parseSourcePost, serializeSourcePost, type SourcePost } from '../src/share/socialSource';
 import { unfurl, needsUnfurl } from '../src/share/unfurl';
 import { plainTextFromContent } from '../src/textContent';
@@ -66,7 +66,7 @@ type EditorApi = {
   toggleItalic: () => void;
   toggleBulletList: () => void;
 };
-type EditorUiState = { isFocused: boolean; isBoldActive: boolean; isItalicActive: boolean; isBulletListActive: boolean };
+type EditorUiState = { isFocused: boolean; isBoldActive: boolean; isItalicActive: boolean; isBulletListActive: boolean; isReady: boolean };
 
 // The TenTap rich-text body, isolated so the bridge is created with the note's content as
 // `initialContent`. That's the reliable way to load existing content: `setContent` after mount
@@ -80,6 +80,10 @@ type EditorUiState = { isFocused: boolean; isBoldActive: boolean; isItalicActive
 // below. The min is computed from the window height (see minBodyHeight) so an empty/short note
 // fills the page instead of leaving a small box with dead space below it.
 const BODY_SANITY_MAX_HEIGHT = 20000;
+
+function escapeHtml(t: string): string {
+  return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
 
 // Drives a bottom sheet's backdrop fade + card slide together. Opening decelerates in
 // (Easing.out) for a soft landing; closing accelerates away (Easing.in) so the dismiss feels
@@ -149,8 +153,9 @@ const NoteBodyEditor = forwardRef<EditorApi, {
       isBoldActive: state.isBoldActive,
       isItalicActive: state.isItalicActive,
       isBulletListActive: state.isBulletListActive,
+      isReady: state.isReady,
     });
-  }, [state.isFocused, state.isBoldActive, state.isItalicActive, state.isBulletListActive]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [state.isFocused, state.isBoldActive, state.isItalicActive, state.isBulletListActive, state.isReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <View style={s.richTextWrap}>
@@ -217,7 +222,7 @@ export default function EditorScreen() {
   // saving. The editor lives in <NoteBodyEditor>, mounted with the loaded content as initialContent
   // (below). We drive it imperatively via editorApiRef and mirror its UI state for the toolbar.
   const editorApiRef = useRef<EditorApi | null>(null);
-  const [editorUi, setEditorUi] = useState<EditorUiState>({ isFocused: false, isBoldActive: false, isItalicActive: false, isBulletListActive: false });
+  const [editorUi, setEditorUi] = useState<EditorUiState>({ isFocused: false, isBoldActive: false, isItalicActive: false, isBulletListActive: false, isReady: false });
   // HTML to load into the editor once the note is available (null until loaded - editor waits).
   const [seedHtml, setSeedHtml] = useState<string | null>(isNew && shared !== '1' ? '' : null);
   const seededRef = useRef(false);
@@ -354,6 +359,62 @@ export default function EditorScreen() {
     triggerAutoSave();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Append a shared draft into an EXISTING note (chosen via the share-target picker) instead of
+  // overwriting it. Gated on both the note finishing its load AND the WebView bridge reporting
+  // ready (editorUi.isReady) - calling setContent before the bridge is ready silently drops (see
+  // NoteBodyEditor's initialContent comment above), so a plain "note loaded" check isn't enough.
+  const sharedAppendedRef = useRef(false);
+  useEffect(() => {
+    if (isNew || shared !== '1' || loading || !editorUi.isReady || sharedAppendedRef.current) return;
+    const draft = peekPendingShareDraft();
+    if (!draft) return;
+    sharedAppendedRef.current = true;
+    takePendingShareDraft(); // now that we're committed to applying it
+    isSharedRef.current = true;
+    userEditedRef.current = true;
+
+    (async () => {
+      // A note can only carry one source-post card (single trailing marker) - if this note
+      // already has one, fold the incoming link into the body as a plain paragraph instead of
+      // dropping it.
+      const hadCard = !!sourcePostRef.current;
+      let extraHtml = draft.content || '';
+      if (draft.sourcePost) {
+        if (!hadCard) {
+          setSourcePost(draft.sourcePost);
+          setThumbInImages0(!!draft.sourcePost.thumbnail);
+        } else {
+          const label = escapeHtml(draft.sourcePost.title || draft.sourcePost.url);
+          extraHtml += `<p><a href="${draft.sourcePost.url}">${label}</a></p>`;
+        }
+      }
+      if (extraHtml) {
+        let current = '';
+        try { current = (await editorApiRef.current?.getHTML()) || ''; } catch {}
+        const base = current.replace(/<p><\/p>\s*$/i, ''); // drop a trailing empty paragraph
+        editorApiRef.current?.setContent(base + extraHtml);
+      }
+
+      if (draft.images?.length) {
+        // A fresh card's thumbnail must land at images[0] (the persisted-marker convention) -
+        // prepend when we just adopted the card; otherwise append after any existing images.
+        const adoptedCardThumb = !hadCard && !!draft.sourcePost?.thumbnail;
+        setImages(prev => (adoptedCardThumb ? [...draft.images, ...prev] : [...prev, ...draft.images]));
+      }
+      if (draft.tags?.length) {
+        setTags(prev => {
+          const have = new Set(prev.map(t => t.name));
+          const extra = (draft.tags as Tag[]).filter(t => !have.has(t.name));
+          return extra.length ? [...prev, ...extra] : prev;
+        });
+      }
+      // Big shared files upload here (in the editor) with visible radial progress.
+      if (draft.pendingFiles?.length) uploadFiles(draft.pendingFiles);
+      triggerAutoSave();
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isNew, shared, loading, editorUi.isReady]);
 
   const loadNote = async (id: string) => {
     try {
@@ -587,8 +648,6 @@ export default function EditorScreen() {
   };
 
   // Insert plain text (voice transcription / AI output) into the rich editor as new paragraphs.
-  const escapeHtml = (t: string) =>
-    t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const appendToEditor = async (text: string) => {
     const clean = (text || '').trim();
     if (!clean) return;

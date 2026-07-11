@@ -46,6 +46,7 @@ function AppWithAnalytics() {
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="analytics-consent" options={{ headerShown: false, gestureEnabled: false, animation: 'fade' }} />
         <Stack.Screen name="editor" options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="share-target" options={{ presentation: 'modal' }} />
         <Stack.Screen name="event-editor" options={{ presentation: 'modal' }} />
         <Stack.Screen name="change-password" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="calendar-sync-settings" options={{ animation: 'slide_from_right' }} />

@@ -22,7 +22,7 @@ async function main() {
     ok('threads', needsUnfurl('threads'));
     ok('linkedin', needsUnfurl('linkedin'));
     ok('youtube → no (derivable poster)', !needsUnfurl('youtube'));
-    ok('generic link → no', !needsUnfurl('link'));
+    ok('generic link → yes (og scrape, e.g. AI-tool share pages)', needsUnfurl('link'));
   }
 
   console.log('redditJsonUrl:');
@@ -117,6 +117,12 @@ async function main() {
     const li = await unfurl('https://www.linkedin.com/posts/x', 'linkedin',
       (async () => ({ ok: true, text: async () => '<meta property="og:title" content="LI Post">' })) as unknown as typeof fetch);
     ok('linkedin via og scrape', li.title === 'LI Post');
+
+    // Generic link (the fallback platform for any unrecognized host - e.g. an AI-tool share
+    // page) also gets the OG scrape, since most such pages expose it freely.
+    const genericLink = await unfurl('https://claude.ai/share/abc', 'link',
+      (async () => ({ ok: true, text: async () => '<meta property="og:title" content="A Claude conversation"><meta property="og:image" content="https://cdn/claude.png">' })) as unknown as typeof fetch);
+    ok('generic link via og scrape', genericLink.title === 'A Claude conversation' && genericLink.thumbnailUrl === 'https://cdn/claude.png');
 
     const redditFetch = (async (u: string) => {
       ok('reddit hits .json api', typeof u === 'string' && u.includes('/comments/r1.json'));
