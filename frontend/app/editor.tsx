@@ -14,7 +14,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as WebBrowser from 'expo-web-browser';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { notesApi, eventsApi, transcribeApi, textProcessApi, attachmentsApi, uploadAttachmentWithProgress, type UploadFile } from '../src/api';
+import { notesApi, eventsApi, transcribeApi, textProcessApi, attachmentsApi, uploadAttachmentWithProgress, type UploadFile, type NoteType } from '../src/api';
 import { decryptEventFromServer, decryptEventsFromServer } from '../src/crypto/eventCrypto';
 import { RadialProgress, SharedPostCard, Button } from '../src/components';
 import { decryptNoteFromServer } from '../src/crypto/noteCrypto';
@@ -183,6 +183,7 @@ export default function EditorScreen() {
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isProcessingText, setIsProcessingText] = useState(false);
+  const [isSmartFormatting, setIsSmartFormatting] = useState(false);
   const [showAiSuggestion, setShowAiSuggestion] = useState(false);
   const [transcribedText, setTranscribedText] = useState('');
   const [images, setImages] = useState<string[]>([]);
@@ -876,6 +877,35 @@ export default function EditorScreen() {
     } finally {
       setIsProcessingText(false);
       setTranscribedText('');
+    }
+  };
+
+  const NOTE_TYPE_LABELS: Record<NoteType, string> = {
+    recipe: 'Recipe', checklist: 'Checklist', meeting_notes: 'Meeting notes', general: 'Note',
+  };
+
+  // AI detects what kind of note this is (recipe / checklist / meeting notes / general) and
+  // restructures the body accordingly - replaces the body, doesn't append (unlike voice insert).
+  const handleSmartFormat = async () => {
+    let plain = '';
+    try { plain = plainTextFromContent((await editorApiRef.current?.getHTML()) || ''); } catch {}
+    if (!plain.trim()) {
+      Alert.alert('Nothing to format', 'Write some note content first.');
+      return;
+    }
+    setIsSmartFormatting(true);
+    try {
+      const result = await textProcessApi.processText(plain, 'smart_format');
+      editorApiRef.current?.setContent(result.text);
+      userEditedRef.current = true;
+      triggerAutoSave();
+      const label = NOTE_TYPE_LABELS[result.note_type || 'general'];
+      Alert.alert('Formatted', `Detected: ${label}`);
+    } catch (e) {
+      console.error('Smart format failed:', e);
+      Alert.alert('Error', 'AI formatting failed. Please try again.');
+    } finally {
+      setIsSmartFormatting(false);
     }
   };
 
@@ -1584,6 +1614,16 @@ export default function EditorScreen() {
             </View>
           )}
 
+          <Button
+            testID="smart-format-btn"
+            variant="outline"
+            icon="auto-awesome"
+            label="AI Format"
+            loading={isSmartFormatting}
+            onPress={handleSmartFormat}
+            style={s.smartFormatBtn}
+          />
+
           <View style={{ height: 120 }} />
         </ScrollView>
 
@@ -2074,6 +2114,7 @@ const s = StyleSheet.create({
   },
   calBtnRow: { flexDirection: 'row', gap: 10, marginTop: 16 },
   calBtnBox: { flex: 1 },
+  smartFormatBtn: { marginTop: 12 },
   // Event picker modal
   pickerOverlay: { flex: 1, justifyContent: 'flex-end' },
   pickerSheet: {

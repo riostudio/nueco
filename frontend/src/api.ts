@@ -288,8 +288,15 @@ export const transcribeApi = {
   },
 };
 
+export type NoteType = 'recipe' | 'checklist' | 'meeting_notes' | 'general';
+
 export const textProcessApi = {
-  processText: async (text: string, action: 'organize' | 'summarize'): Promise<{ text: string }> => {
+  /** 'smart_format' detects the note's type (recipe/checklist/meeting notes/general) and
+   * restructures it accordingly - the response's note_type says which one it picked. */
+  processText: async (
+    text: string,
+    action: 'organize' | 'summarize' | 'smart_format',
+  ): Promise<{ text: string; note_type?: NoteType }> => {
     console.log(`Processing text with action: ${action}, length: ${text.length}`);
     
     // Get auth headers for the request
