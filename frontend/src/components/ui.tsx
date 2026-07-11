@@ -28,6 +28,7 @@ export function Button({
   variant = 'box',
   layout = 'row',
   tone = 'default',
+  active = false,
   disabled = false,
   style,
   testID,
@@ -38,21 +39,27 @@ export function Button({
   variant?: ButtonVariant;
   layout?: ButtonLayout;
   tone?: ButtonTone;
+  /** Toggled-on state for a box/toolbar button (e.g. Pin once pinned) - tints icon/label/border
+   * with `primary` regardless of `tone`. */
+  active?: boolean;
   disabled?: boolean;
   style?: StyleProp<ViewStyle>;
   testID?: string;
 }) {
-  const toneColor = tone === 'danger' ? C.error : C.text;
-  const toneBorder = tone === 'danger' ? C.error : C.border;
+  const toneColor = active ? C.primary : tone === 'danger' ? C.error : C.text;
+  const toneBorder = active ? C.primary : tone === 'danger' ? C.error : C.border;
 
   if (variant === 'cta') {
+    // `tone="danger"` on a cta gives a solid red fill (e.g. an active voice recording) instead of
+    // the default solid primary fill - same shape, different state.
+    const ctaBg = tone === 'danger' ? C.error : C.primary;
     return (
       <TouchableOpacity
         testID={testID}
         disabled={disabled}
         onPress={onPress}
         activeOpacity={0.85}
-        style={[s.cta, disabled && s.disabled, style]}
+        style={[s.cta, { backgroundColor: ctaBg }, disabled && s.disabled, style]}
       >
         <MaterialIcons name={icon} size={22} color={C.primaryFg} />
         <Text style={s.ctaLabel}>{label}</Text>
@@ -116,7 +123,7 @@ export function SegmentedControl<T extends string>({
   onChange,
   style,
 }: {
-  options: { label: string; value: T }[];
+  options: { label: string; value: T; testID?: string }[];
   value: T;
   onChange: (value: T) => void;
   style?: StyleProp<ViewStyle>;
@@ -128,6 +135,7 @@ export function SegmentedControl<T extends string>({
         return (
           <TouchableOpacity
             key={opt.value}
+            testID={opt.testID}
             onPress={() => onChange(opt.value)}
             style={[
               s.segment,

@@ -16,7 +16,7 @@ import * as WebBrowser from 'expo-web-browser';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { notesApi, eventsApi, transcribeApi, textProcessApi, attachmentsApi, uploadAttachmentWithProgress, type UploadFile } from '../src/api';
 import { decryptEventFromServer, decryptEventsFromServer } from '../src/crypto/eventCrypto';
-import { RadialProgress, SharedPostCard } from '../src/components';
+import { RadialProgress, SharedPostCard, Button } from '../src/components';
 import { decryptNoteFromServer } from '../src/crypto/noteCrypto';
 import { createNoteOffline, updateNoteOffline, getLocalNotes, processSyncQueue } from '../src/offlineSync';
 import { takePendingShareDraft } from '../src/share/pendingShareDraft';
@@ -1448,10 +1448,13 @@ export default function EditorScreen() {
               </View>
             </TouchableOpacity>
           ) : (
-            <View>
-              <TouchableOpacity
+            <View style={s.calBtnRow}>
+              <Button
                 testID="schedule-event-btn"
-                style={s.calBtn}
+                variant="box"
+                layout="row"
+                icon="calendar-today"
+                label="Schedule New Event"
                 onPress={() =>
                   router.push({
                     pathname: '/event-editor',
@@ -1461,20 +1464,17 @@ export default function EditorScreen() {
                     },
                   })
                 }
-              >
-                <MaterialIcons name="calendar-today" size={24} color={C.secondary} />
-                <Text style={s.calBtnText}>Schedule New Event</Text>
-                <MaterialIcons name="chevron-right" size={24} color={C.borderSub} />
-              </TouchableOpacity>
-              <TouchableOpacity
+                style={s.calBtnBox}
+              />
+              <Button
                 testID="link-event-btn"
-                style={[s.calBtn, { marginTop: 10 }]}
+                variant="box"
+                layout="row"
+                icon="link"
+                label="Link Existing Event"
                 onPress={openEventPicker}
-              >
-                <MaterialIcons name="link" size={24} color={C.secondary} />
-                <Text style={s.calBtnText}>Link Existing Event</Text>
-                <MaterialIcons name="chevron-right" size={24} color={C.borderSub} />
-              </TouchableOpacity>
+                style={s.calBtnBox}
+              />
             </View>
           )}
 
@@ -1516,33 +1516,49 @@ export default function EditorScreen() {
           {/* Action Buttons - Pin, Add Image, Share, Delete - shows when keyboard is hidden */}
           {!isKeyboardVisible && (
             <View style={s.actionBar}>
-              <TouchableOpacity testID="pin-btn" style={s.actionBtn} onPress={togglePin}>
-                <MaterialIcons
-                  name="push-pin"
-                  size={24}
-                  color={isPinned ? C.primary : C.borderSub}
-                />
-                <Text style={[s.actionBtnLabel, isPinned && { color: C.primary }]}>
-                  {isPinned ? 'Pinned' : 'Pin'}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity testID="add-image-btn" style={s.actionBtn} onPress={() => setShowImagePicker(true)}>
-                <MaterialIcons name="add-photo-alternate" size={24} color={C.secondary} />
-                <Text style={[s.actionBtnLabel, { color: C.secondary }]}>Image</Text>
-              </TouchableOpacity>
-              <TouchableOpacity testID="share-btn" style={s.actionBtn} onPress={handleShare}>
-                <MaterialIcons name="share" size={24} color={C.secondary} />
-                <Text style={[s.actionBtnLabel, { color: C.secondary }]}>Share</Text>
-              </TouchableOpacity>
+              <Button
+                testID="pin-btn"
+                variant="box"
+                layout="stack"
+                icon="push-pin"
+                label={isPinned ? 'Pinned' : 'Pin'}
+                active={isPinned}
+                onPress={togglePin}
+                style={s.actionBoxBtn}
+              />
+              <Button
+                testID="add-image-btn"
+                variant="box"
+                layout="stack"
+                icon="add-photo-alternate"
+                label="Image"
+                onPress={() => setShowImagePicker(true)}
+                style={s.actionBoxBtn}
+              />
+              <Button
+                testID="share-btn"
+                variant="box"
+                layout="stack"
+                icon="share"
+                label="Share"
+                onPress={handleShare}
+                style={s.actionBoxBtn}
+              />
               {noteExists && (
-                <TouchableOpacity testID="delete-note-btn" style={s.actionBtn} onPress={handleDelete}>
-                  <MaterialIcons name="delete" size={24} color={C.error} />
-                  <Text style={[s.actionBtnLabel, { color: C.error }]}>Delete</Text>
-                </TouchableOpacity>
+                <Button
+                  testID="delete-note-btn"
+                  variant="box"
+                  layout="stack"
+                  tone="danger"
+                  icon="delete"
+                  label="Delete"
+                  onPress={handleDelete}
+                  style={s.actionBoxBtn}
+                />
               )}
             </View>
           )}
-          
+
           {/* Voice Input - hide when keyboard is visible */}
           {!isKeyboardVisible && (
             <View style={s.voiceBar}>
@@ -1552,21 +1568,14 @@ export default function EditorScreen() {
                   <Text style={s.transcribingText}>Converting speech to text...</Text>
                 </View>
               ) : (
-                <TouchableOpacity
+                <Button
                   testID="voice-input-btn"
-                  style={[s.voiceBtn, isRecording && s.voiceBtnRec]}
+                  variant="cta"
+                  tone={isRecording ? 'danger' : 'default'}
+                  icon={isRecording ? 'stop' : 'mic'}
+                  label={isRecording ? 'Stop Recording' : 'Voice Input'}
                   onPress={isRecording ? stopRecording : startRecording}
-                  activeOpacity={0.7}
-                >
-                  <MaterialIcons
-                    name={isRecording ? 'stop' : 'mic'}
-                    size={28}
-                    color={isRecording ? C.primaryFg : C.primary}
-                  />
-                  <Text style={[s.voiceBtnText, isRecording && s.voiceBtnTextRec]}>
-                    {isRecording ? 'Stop Recording' : 'Voice Input'}
-                  </Text>
-                </TouchableOpacity>
+                />
               )}
             </View>
           )}
@@ -1945,12 +1954,8 @@ const s = StyleSheet.create({
     fontSize: 18,
     lineHeight: 28,
   },
-  calBtn: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: C.surface, borderRadius: 12, padding: 16,
-    borderWidth: 2, borderColor: C.borderSub, marginTop: 16,
-  },
-  calBtnText: { flex: 1, fontSize: 18, color: C.secondary, marginLeft: 12, fontWeight: '500' },
+  calBtnRow: { flexDirection: 'row', gap: 10, marginTop: 16 },
+  calBtnBox: { flex: 1 },
   // Event picker modal
   pickerOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
   pickerSheet: {
@@ -2025,40 +2030,19 @@ const s = StyleSheet.create({
   },
   actionBar: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    gap: 10,
     paddingVertical: 12,
     paddingHorizontal: 12,
     backgroundColor: C.bg,
     borderBottomWidth: 1,
     borderBottomColor: C.borderSub + '40',
   },
-  actionBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 4,
-    paddingVertical: 8,
-    gap: 6,
-  },
-  actionBtnLabel: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: C.textSec,
-  },
+  actionBoxBtn: { flex: 1 },
   transcribing: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     height: 56,
   },
   transcribingText: { fontSize: 18, color: C.textSec, marginLeft: 12 },
-  voiceBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    height: 56, borderRadius: 28, borderWidth: 2, borderColor: C.primary,
-    backgroundColor: C.surface,
-  },
-  voiceBtnRec: { backgroundColor: C.error, borderColor: C.error },
-  voiceBtnText: { fontSize: 20, fontWeight: '600', color: C.primary, marginLeft: 8 },
-  voiceBtnTextRec: { color: C.primaryFg },
   // AI Suggestion Modal Styles
   processingOverlay: {
     position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
