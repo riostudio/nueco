@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef, ReactNode } from 'react';
+import { Platform } from 'react-native';
 import { User } from '../types/auth.types';
 import { authApi } from '../api/authApi';
 import { authStorage } from '../storage/authStorage';
@@ -19,6 +20,21 @@ import { resetCalendarSyncState } from '../../calendarSync';
 // explicit log-out/log-in. Guarded on loadDek() being non-null: with no DEK, decrypt is a
 // no-op pass-through, so `user.name` is still ciphertext - pushing that back as "plaintext"
 // would permanently bake the ciphertext in as the display name with no way to recover it.
+// Front-loads the calendar permission prompt right after login instead of waiting for the user
+// to first create/edit an event - so event-editor's device-calendar write and MemoPad's own
+// sync queue both have access from the start. Safe to call on every login: if permission was
+// already granted (or permanently denied), requestCalendarPermissionsAsync resolves immediately
+// with no UI, same as the OS does for any repeat request.
+async function requestCalendarSyncPermission(): Promise<void> {
+  if (Platform.OS === 'web') return;
+  try {
+    const ExpoCalendar = require('expo-calendar');
+    await ExpoCalendar.requestCalendarPermissionsAsync();
+  } catch (e) {
+    console.warn('Calendar permission request failed:', e);
+  }
+}
+
 async function pushBackPlaintextName(user: User | null | undefined): Promise<void> {
   if (!user?.enc_version || !user?.name || user.name === UNDECRYPTABLE_PLACEHOLDER) return;
   try {
@@ -126,6 +142,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Set user first so auth state is ready
     setUser(result.user);
     setIsSyncReady(false);
+    requestCalendarSyncPermission();
 
     // E2EE key bootstrap (Stage 3): establish the DEK in the device keystore now
     // that we have both a session and the password. Gated by feature flag.

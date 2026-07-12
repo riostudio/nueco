@@ -10,6 +10,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { eventsApi, notesApi } from '../src/api';
 import { decryptEventFromServer } from '../src/crypto/eventCrypto';
 import { createEventOffline, updateEventOffline, deleteEventOffline } from '../src/offlineSync';
+import { bumpDeviceCalendarSync } from '../src/deviceCalendarSync';
 import { MONTH_NAMES, C, radius, borderWidth } from '../src/theme';
 import { ReminderMinutes } from '../src/types';
 import { Button } from '../src/components';
@@ -428,15 +429,19 @@ export default function EventEditorScreen() {
 
       const eventDetails = { title: eventTitle, notes: eventDesc, location: eventLoc, startDate, endDate, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone };
 
+      let resultId: string;
       if (existingEventId) {
         try {
           await ExpoCalendar.updateEventAsync(existingEventId, eventDetails);
-          return existingEventId;
+          resultId = existingEventId;
         } catch {
-          return await ExpoCalendar.createEventAsync(targetCalId, eventDetails);
+          resultId = await ExpoCalendar.createEventAsync(targetCalId, eventDetails);
         }
+      } else {
+        resultId = await ExpoCalendar.createEventAsync(targetCalId, eventDetails);
       }
-      return await ExpoCalendar.createEventAsync(targetCalId, eventDetails);
+      bumpDeviceCalendarSync();
+      return resultId;
     } catch (e) {
       console.error('Device calendar write error:', e);
       return null;
@@ -606,7 +611,7 @@ export default function EventEditorScreen() {
     setDeleting(true);
     try {
       if (ExpoCalendar && deviceCalendarEventIdRef.current && !isWeb) {
-        try { await ExpoCalendar.deleteEventAsync(deviceCalendarEventIdRef.current); } catch {}
+        try { await ExpoCalendar.deleteEventAsync(deviceCalendarEventIdRef.current); bumpDeviceCalendarSync(); } catch {}
       }
       await deleteEventOffline(idToDelete, { push: true });
       setDeleteModalVisible(false);

@@ -8,6 +8,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { deleteEventOffline, getLocalEvents, fullSync } from '../../src/offlineSync';
+import { bumpDeviceCalendarSync } from '../../src/deviceCalendarSync';
 import { CalendarEvent } from '../../src/types';
 import { MONTH_NAMES, DAY_NAMES, radius, borderWidth } from '../../src/theme';
 import { UserAvatar } from '../../src/auth';
@@ -152,7 +153,7 @@ export default function EventsScreen() {
       // linked via "Import from Calendar" or calendar sync, so deleting here doesn't leave
       // an orphaned event behind in the user's Apple/Google/Outlook calendar.
       if (ExpoCalendar && eventToDelete.deviceCalendarEventId && Platform.OS !== 'web') {
-        try { await ExpoCalendar.deleteEventAsync(eventToDelete.deviceCalendarEventId); } catch {}
+        try { await ExpoCalendar.deleteEventAsync(eventToDelete.deviceCalendarEventId); bumpDeviceCalendarSync(); } catch {}
       }
       await deleteEventOffline(eventToDelete.id, { push: true });
       loadEvents();
