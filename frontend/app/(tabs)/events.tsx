@@ -7,12 +7,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { eventsApi } from '../../src/api';
-import { decryptEventsFromServer } from '../../src/crypto/eventCrypto';
+import { deleteEventOffline, getLocalEvents, fullSync } from '../../src/offlineSync';
 import { CalendarEvent } from '../../src/types';
 import { MONTH_NAMES, DAY_NAMES, radius, borderWidth } from '../../src/theme';
-import { UserAvatar, useAuth } from '../../src/auth';
+import { UserAvatar } from '../../src/auth';
 import { SegmentedControl } from '../../src/components';
 
 let ExpoCalendar: typeof import('expo-calendar') | null = null;
@@ -94,8 +92,6 @@ function groupEventsByDate(events: CalendarEvent[]): GroupedEvents {
 
 export default function EventsScreen() {
   const router = useRouter();
-  const { user } = useAuth();
-  const cacheKey = `events_cache_${user?.id ?? 'anon'}`; // per-user so events don't leak across accounts
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -110,29 +106,24 @@ export default function EventsScreen() {
   const [eventToDelete, setEventToDelete] = useState<{ id: string; title: string; deviceCalendarEventId: string | null } | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  // Local-first, same pattern (tabs)/index.tsx uses for notes: show what's already on disk
+  // instantly (including anything still sitting in the offline retry queue - see
+  // offlineSync.ts), then reconcile with the server. Replaces the previous network-only fetch
+  // + its own ad-hoc AsyncStorage cache with the shared offline store.
   const loadEvents = useCallback(async () => {
     try {
-      const data = await decryptEventsFromServer<CalendarEvent>(await eventsApi.getAll());
-      setEvents(data);
-      AsyncStorage.setItem(cacheKey, JSON.stringify(data)).catch(() => {});
+      const local = await getLocalEvents();
+      setEvents(local.filter(e => !e._pendingDelete) as CalendarEvent[]);
+      await fullSync();
+      const fresh = await getLocalEvents();
+      setEvents(fresh.filter(e => !e._pendingDelete) as CalendarEvent[]);
     } catch (e) {
       console.error('Failed to load events:', e);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [cacheKey]);
-
-  // Instant: show the last-fetched events from cache while the network refresh runs.
-  useEffect(() => {
-    AsyncStorage.getItem(cacheKey).then((raw) => {
-      if (!raw) return;
-      try {
-        const cached = JSON.parse(raw);
-        if (Array.isArray(cached) && cached.length) setEvents((cur) => (cur.length ? cur : cached));
-      } catch {}
-    }).catch(() => {});
-  }, [cacheKey]);
+  }, []);
 
   useFocusEffect(useCallback(() => { loadEvents(); }, [loadEvents]));
 
@@ -163,7 +154,7 @@ export default function EventsScreen() {
       if (ExpoCalendar && eventToDelete.deviceCalendarEventId && Platform.OS !== 'web') {
         try { await ExpoCalendar.deleteEventAsync(eventToDelete.deviceCalendarEventId); } catch {}
       }
-      await eventsApi.delete(eventToDelete.id);
+      await deleteEventOffline(eventToDelete.id, { push: true });
       loadEvents();
       setDeleteModalVisible(false);
       setEventToDelete(null);

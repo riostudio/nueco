@@ -312,6 +312,109 @@ export async function deleteLocalEvent(id: string): Promise<void> {
   await saveLocalEvents(events.filter(e => e.id !== id));
 }
 
+// Offline-first event create/update/delete - same shape as the note operations above (local
+// write first, then enqueue, then push now if online), so events get the same durable retry
+// queue notes already had. `writeToDeviceCalendar()` in event-editor.tsx still runs before these
+// - that write is local/native (no network), unaffected by any of this.
+
+export async function createEventOffline(
+  data: Omit<LocalEvent, 'id' | 'created_at' | '_isLocal'>,
+  opts: { push?: boolean } = {},
+): Promise<LocalEvent> {
+  const now = new Date().toISOString();
+  const tempId = `local_${uuid.v4()}`;
+  const event: LocalEvent = { ...data, id: tempId, created_at: now, _isLocal: true };
+
+  await upsertLocalEvent(event);
+  await enqueueOperation({ id: tempId, entity: 'event', operation: 'create', payload: data, timestamp: now });
+
+  if (opts.push !== false && (await isOnline())) {
+    // Deliberately NOT the generic processSyncQueue() here (unlike createNoteOffline): the
+    // caller (event-editor.tsx) needs the real server id back in this same call, to link a note
+    // to the event it just created. processSyncQueue() would swap the id in storage but hand
+    // the caller back a stale local reference holding the temp id. Do the immediate push
+    // directly instead, so success returns the real id synchronously; on failure, the item is
+    // already queued above and will retry via the background sync listener.
+    try {
+      const created = await eventsApi.create(await encryptEventForServer(data));
+      const events = await getLocalEvents();
+      const idx = events.findIndex(e => e.id === tempId);
+      const resolved: LocalEvent = { ...event, id: created.id, _isLocal: false };
+      if (idx >= 0) {
+        events[idx] = resolved;
+        await saveLocalEvents(events);
+      }
+      const queue = await getSyncQueue();
+      await saveSyncQueue(queue.filter(q => !(q.id === tempId && q.entity === 'event')));
+      return resolved;
+    } catch {
+      // Immediate push failed - stays queued (enqueued above), will retry on reconnect.
+    }
+  }
+  return event;
+}
+
+export async function updateEventOffline(
+  id: string,
+  data: Partial<LocalEvent>,
+  opts: { push?: boolean } = {},
+): Promise<void> {
+  const now = new Date().toISOString();
+  const events = await getLocalEvents();
+  const existing = events.find(e => e.id === id);
+  if (!existing) return;
+
+  const updated: LocalEvent = { ...existing, ...data };
+  await upsertLocalEvent(updated);
+
+  await enqueueOperation({
+    id,
+    entity: 'event',
+    // An event still local (never synced) stays a pending 'create' - enqueueOperation merges
+    // this into its existing create op rather than emitting a doomed 'update'.
+    operation: existing._isLocal ? 'create' : 'update',
+    payload: { ...existing, ...data },
+    timestamp: now,
+  });
+
+  if (opts.push !== false && (await isOnline())) {
+    try {
+      await processSyncQueue();
+    } catch {
+      // Sync failed - update is saved locally and stays queued.
+    }
+  }
+}
+
+export async function deleteEventOffline(id: string, opts: { push?: boolean } = {}): Promise<void> {
+  const events = await getLocalEvents();
+  const existing = events.find(e => e.id === id);
+
+  if (existing?._isLocal) {
+    // Never synced - remove locally and drop the now-pointless pending create from the queue.
+    await deleteLocalEvent(id);
+    const queue = await getSyncQueue();
+    await saveSyncQueue(queue.filter(q => !(q.id === id && q.entity === 'event')));
+    return;
+  }
+
+  // Mark pending-delete locally so it disappears from the UI immediately, even before the
+  // server confirms.
+  const updated = events.map(e => (e.id === id ? { ...e, _pendingDelete: true } : e));
+  await saveLocalEvents(updated);
+
+  await enqueueOperation({ id, entity: 'event', operation: 'delete', timestamp: new Date().toISOString() });
+
+  if (opts.push !== false && (await isOnline())) {
+    try {
+      await processSyncQueue();
+    } catch {
+      // Sync failed - delete stays queued, will retry via background sync.
+    }
+    await deleteLocalEvent(id);
+  }
+}
+
 // ---- Sync Engine ----
 
 let _isSyncing = false;
@@ -457,7 +560,20 @@ export async function fullSync(): Promise<void> {
     // 4. Merge server events (independently - a failure here won't lose notes)
     if (eventsResult.status === 'fulfilled') {
       const decryptedEvents = await decryptEventsFromServer(eventsResult.value);
-      const mergedEvents: LocalEvent[] = decryptedEvents.map((e: any) => ({ ...e, _isLocal: false }));
+      const localEvents = await getLocalEvents();
+      const mergedEvents: LocalEvent[] = [...decryptedEvents.map((e: any) => ({ ...e, _isLocal: false }))];
+
+      // Same preservation as the notes merge above - without this, an event created/edited
+      // offline (still queued, not yet on the server) would get silently wiped the next time
+      // fullSync() runs, since the server's response wouldn't include it yet.
+      for (const local of localEvents) {
+        if (local._pendingDelete) continue;
+        if (local._isLocal) {
+          mergedEvents.push(local);
+          continue;
+        }
+      }
+
       await saveLocalEvents(mergedEvents);
     } else {
       console.warn('fullSync: events fetch failed:', eventsResult.reason);

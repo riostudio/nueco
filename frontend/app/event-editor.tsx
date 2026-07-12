@@ -8,23 +8,16 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { eventsApi, notesApi } from '../src/api';
-import { decryptEventFromServer, encryptEventForServer } from '../src/crypto/eventCrypto';
+import { decryptEventFromServer } from '../src/crypto/eventCrypto';
+import { createEventOffline, updateEventOffline, deleteEventOffline } from '../src/offlineSync';
 import { MONTH_NAMES, C, radius, borderWidth } from '../src/theme';
 import { ReminderMinutes } from '../src/types';
 import { Button } from '../src/components';
 
-// ---- External helpers (defined outside component to avoid re-creation) ----
-
-async function retryOperation(operation: () => Promise<any>, maxRetries = 3): Promise<any> {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      return await operation();
-    } catch (e) {
-      if (attempt === maxRetries) throw e;
-      await new Promise(resolve => setTimeout(resolve, attempt * 500));
-    }
-  }
-}
+// `isSynced` = false means the calendar is local-only (Android's `source.isLocalAccount`, or
+// iOS's SourceType.LOCAL "On My iPhone") - an event written there never leaves this device, so
+// it can't reach Google/Outlook/iCloud, let alone another device signed into the same account.
+type DeviceCalendar = { id: string; title: string; source?: string; isSynced: boolean };
 
 // ---- Lazy imports ----
 
@@ -162,7 +155,7 @@ export default function EventEditorScreen() {
   const [deleting, setDeleting] = useState(false);
   const [eventExists, setEventExists] = useState(isEditing);
   // Device-calendar picker: the user's writable calendars + their chosen target (persisted).
-  const [calendars, setCalendars] = useState<{ id: string; title: string; source?: string }[]>([]);
+  const [calendars, setCalendars] = useState<DeviceCalendar[]>([]);
   const [preferredCalendarId, setPreferredCalendarId] = useState<string | null>(null);
   const [showCalendarPicker, setShowCalendarPicker] = useState(false);
   // Import-from-device picker: browse existing device calendar events to prefill a new MemoPad event.
@@ -186,7 +179,7 @@ export default function EventEditorScreen() {
   const deviceCalendarEventIdRef = useRef(deviceCalendarEventId);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSavedDataRef = useRef<string>(''); // Track last saved data to avoid duplicate saves
-  const calendarsRef = useRef<{ id: string; title: string; source?: string }[]>([]); // cached writable calendars
+  const calendarsRef = useRef<DeviceCalendar[]>([]); // cached writable calendars
   const preferredCalendarIdRef = useRef<string | null>(null);
 
   // Sync refs with state
@@ -293,7 +286,7 @@ export default function EventEditorScreen() {
   // Load + cache the device's writable calendars. Silent by default (won't prompt for permission);
   // pass { prompt: true } to request it (from the picker and on write). { force: true } refetches.
   const loadCalendars = useCallback(async (opts: { prompt?: boolean; force?: boolean } = {}) => {
-    if (!ExpoCalendar || isWeb) return [] as { id: string; title: string; source?: string }[];
+    if (!ExpoCalendar || isWeb) return [] as DeviceCalendar[];
     if (calendarsRef.current.length && !opts.force) return calendarsRef.current;
     try {
       let status = (await ExpoCalendar.getCalendarPermissionsAsync()).status;
@@ -305,7 +298,12 @@ export default function EventEditorScreen() {
       const all = await ExpoCalendar.getCalendarsAsync(ExpoCalendar.EntityTypes.EVENT);
       const writable = all
         .filter((c: any) => c.allowsModifications)
-        .map((c: any) => ({ id: c.id as string, title: c.title as string, source: c.source?.name as string | undefined }));
+        .map((c: any) => ({
+          id: c.id as string,
+          title: c.title as string,
+          source: c.source?.name as string | undefined,
+          isSynced: Platform.OS === 'android' ? c.source?.isLocalAccount !== true : c.source?.type !== 'local',
+        }));
       calendarsRef.current = writable;
       setCalendars(writable);
       return writable;
@@ -409,11 +407,17 @@ export default function EventEditorScreen() {
           : undefined;
       if (!targetCalId) {
         if (Platform.OS === 'ios') {
+          // Respects whatever the user set as their device default (that's their own call - if
+          // they deliberately default to "On My iPhone", don't second-guess it).
           try { targetCalId = (await ExpoCalendar.getDefaultCalendarAsync()).id; }
           catch { targetCalId = cals[0]?.id; }
         } else {
-          const googleCal = cals.find(c => c.source?.toLowerCase().includes('google'));
-          targetCalId = googleCal?.id || cals[0]?.id;
+          // Android has no per-device "default calendar" API to defer to, so prefer any
+          // account-synced calendar (Google, Outlook/Exchange, etc. - not just Google by name)
+          // over the bare first-writable fallback: a local-only calendar never leaves this
+          // device, so an event written there can't reach another device at all.
+          const synced = cals.find(c => c.isSynced);
+          targetCalId = synced?.id || cals[0]?.id;
         }
       }
 
@@ -513,10 +517,12 @@ export default function EventEditorScreen() {
           await scheduleReminder(titleRef.current.trim(), st, reminderMinutesRef.current);
         }
 
-        const eventData = await encryptEventForServer(buildEventData(st, et, newDeviceCalEventId));
+        // Local-first + a durable retry queue (offlineSync.ts) instead of a direct API call -
+        // encryption happens inside these, callers pass plaintext.
+        const eventData = buildEventData(st, et, newDeviceCalEventId);
 
         if (!isCreatedRef.current) {
-          const created = await retryOperation(() => eventsApi.create(eventData));
+          const created = await createEventOffline(eventData, { push: true });
           eventIdRef.current = created.id;
           isCreatedRef.current = true;
           setEventExists(true);
@@ -530,7 +536,7 @@ export default function EventEditorScreen() {
             } catch {}
           }
         } else {
-          await retryOperation(() => eventsApi.update(eventIdRef.current, eventData));
+          await updateEventOffline(eventIdRef.current, eventData, { push: true });
         }
 
         lastSavedDataRef.current = dataHash;
@@ -565,9 +571,9 @@ export default function EventEditorScreen() {
             );
             if (written) { devId = written; deviceCalendarEventIdRef.current = written; }
           }
-          const eventData = await encryptEventForServer(buildEventData(st, et, devId));
+          const eventData = buildEventData(st, et, devId);
           if (!isCreatedRef.current) {
-            const created = await eventsApi.create(eventData);
+            const created = await createEventOffline(eventData, { push: true });
             if (params.noteId && params.noteId !== 'new') {
               await notesApi.update(params.noteId, { linked_event_id: created.id });
             } else if (params.noteId === 'new') {
@@ -575,7 +581,7 @@ export default function EventEditorScreen() {
               await AsyncStorage.setItem('pendingLinkedEventId', created.id);
             }
           } else {
-            await eventsApi.update(eventIdRef.current, eventData);
+            await updateEventOffline(eventIdRef.current, eventData, { push: true });
           }
         } catch (e) {
           console.error('Final save on back failed:', e);
@@ -602,7 +608,7 @@ export default function EventEditorScreen() {
       if (ExpoCalendar && deviceCalendarEventIdRef.current && !isWeb) {
         try { await ExpoCalendar.deleteEventAsync(deviceCalendarEventIdRef.current); } catch {}
       }
-      await eventsApi.delete(idToDelete);
+      await deleteEventOffline(idToDelete, { push: true });
       setDeleteModalVisible(false);
       router.back();
     } catch (e) {
@@ -989,7 +995,7 @@ export default function EventEditorScreen() {
                   >
                     <MaterialIcons name="event-available" size={22} color={preferredCalendarId === cal.id ? C.primaryFg : C.textSec} />
                     <Text style={[s.reminderOptionText, preferredCalendarId === cal.id && s.reminderOptionTextSelected]} numberOfLines={1}>
-                      {cal.title}{cal.source ? ` · ${cal.source}` : ''}
+                      {cal.title}{cal.source ? ` · ${cal.source}` : ''}{!cal.isSynced ? ' (this device only)' : ''}
                     </Text>
                     {preferredCalendarId === cal.id && <MaterialIcons name="check" size={22} color={C.primaryFg} />}
                   </TouchableOpacity>
