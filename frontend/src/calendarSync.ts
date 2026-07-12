@@ -142,7 +142,14 @@ export async function runCalendarSync(opts: { force?: boolean } = {}): Promise<v
       const hashes = await readHashes();
       const nextHashes: Record<string, string> = {};
       const currentIdsKey = JSON.stringify([...calendarIds].sort());
-      const calendarSelectionUnchanged = (await AsyncStorage.getItem(KEYS.LAST_CALENDAR_IDS)) === currentIdsKey;
+      const storedIdsKey = await AsyncStorage.getItem(KEYS.LAST_CALENDAR_IDS);
+      // storedIdsKey is null both for a brand-new sync setup and for a user upgrading from a build
+      // that predates this tracking key. Tell those apart via the hash map: if it already has
+      // entries, a sync ran before under the old code with whatever selection produced them - trust
+      // that baseline instead of forcing one skipped run before deletions can ever be detected.
+      const calendarSelectionUnchanged = storedIdsKey === null
+        ? Object.keys(hashes).length > 0
+        : storedIdsKey === currentIdsKey;
 
       for (const de of deviceEvents as any[]) {
         const hash = hashDeviceEvent({

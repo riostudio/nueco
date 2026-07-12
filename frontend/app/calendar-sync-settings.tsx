@@ -21,6 +21,8 @@ export default function CalendarSyncSettingsScreen() {
   const [loading, setLoading] = useState(true);
   const [calendars, setCalendars] = useState<DeviceCalendar[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [syncing, setSyncing] = useState(false);
+  const [lastSyncedAt, setLastSyncedAt] = useState<Date | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -37,7 +39,7 @@ export default function CalendarSyncSettingsScreen() {
   const showSyncInfo = useCallback(() => {
     Alert.alert(
       'About Calendar Sync',
-      "New/changed events sync in whenever you open MemoPad. A best-effort background sync also runs periodically, but the OS doesn't guarantee exact timing - opening the app is what reliably keeps things up to date. Deleting an event on your device won't delete its MemoPad copy.\n\nIf a synced calendar includes events other people created or invited you to (for example a shared work calendar or a meeting invite), those event details are copied into MemoPad too.",
+      "New, changed, and deleted events sync in whenever you open MemoPad. A best-effort background sync also runs periodically, but the OS doesn't guarantee exact timing - opening the app (or tapping Sync Now below) is what reliably keeps things up to date.\n\nIf a synced calendar includes events other people created or invited you to (for example a shared work calendar or a meeting invite), those event details are copied into MemoPad too.",
     );
   }, []);
 
@@ -59,6 +61,16 @@ export default function CalendarSyncSettingsScreen() {
       setSyncedCalendarIds(next).then(() => runCalendarSync({ force: true }).catch(() => {}));
       return next;
     });
+  }, []);
+
+  const syncNow = useCallback(async () => {
+    setSyncing(true);
+    try {
+      await runCalendarSync({ force: true });
+      setLastSyncedAt(new Date());
+    } finally {
+      setSyncing(false);
+    }
   }, []);
 
   if (loading) {
@@ -136,6 +148,24 @@ export default function CalendarSyncSettingsScreen() {
           </View>
         )}
 
+        {enabled && (
+          <TouchableOpacity
+            testID="calendar-sync-now-btn"
+            style={[s.card, s.syncNowCard]}
+            onPress={syncNow}
+            disabled={syncing}
+          >
+            {syncing ? (
+              <ActivityIndicator size="small" color={C.primary} />
+            ) : (
+              <MaterialIcons name="sync" size={20} color={C.primary} />
+            )}
+            <Text style={s.syncNowText}>
+              {syncing ? 'Syncing…' : lastSyncedAt ? `Synced ${lastSyncedAt.toLocaleTimeString()}` : 'Sync Now'}
+            </Text>
+          </TouchableOpacity>
+        )}
+
         <View style={{ height: 40 }} />
       </ScrollView>
     </SafeAreaView>
@@ -161,6 +191,10 @@ const s = StyleSheet.create({
     backgroundColor: C.surface, padding: 20,
   },
   toggleCard: { paddingVertical: 24, paddingHorizontal: 24 },
+  syncNowCard: {
+    marginTop: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
+  },
+  syncNowText: { fontSize: 16, fontWeight: '600', color: C.primary },
   sectionLabel: { fontSize: 16, fontWeight: '600', color: C.textSec, marginBottom: 12 },
   row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10 },
   toggleRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, paddingHorizontal: 4 },

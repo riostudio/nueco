@@ -1348,7 +1348,7 @@ export default function EditorScreen() {
             <TextInput
               testID="note-title-input"
               style={[s.titleInput, s.titleInputFlex]}
-              placeholder="Note title..."
+              placeholder="What do you have in mind?"
               placeholderTextColor={C.borderSub}
               value={title}
               onChangeText={handleTitleChange}
