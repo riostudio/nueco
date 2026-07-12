@@ -6,13 +6,20 @@
  *
  * Matching a device event to a MemoPad event reuses the existing `device_calendar_event_id` field
  * (the same one the manual import + device-calendar export paths already populate). A device event
- * that disappears at the source is dropped from the local hash map but its MemoPad copy is never
- * auto-deleted - this runs unattended, so it must not take destructive action.
+ * that disappears at the source has its MemoPad copy deleted too (via the offline queue, so it
+ * survives being offline) - but only when we're confident the disappearance is real:
+ *  - the selected-calendar set must be unchanged since the last run (otherwise a user deselecting
+ *    a calendar in settings would look identical to every one of its events being deleted), and
+ *  - this run's device event fetch must have returned at least one event (guards against a
+ *    transient empty/failed read - e.g. a mid-flight account sync - being misread as "everything
+ *    was deleted"). This runs unattended, so it must stay conservative about destructive action.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import { eventsApi } from './api';
 import { encryptEventForServer } from './crypto/eventCrypto';
+import { deleteEventOffline } from './offlineSync';
+import { bumpDeviceCalendarSync } from './deviceCalendarSync';
 
 let ExpoCalendar: typeof import('expo-calendar') | null = null;
 if (Platform.OS !== 'web') {
@@ -25,6 +32,7 @@ const KEYS = {
   EVENT_HASHES: 'calendar_sync_event_hashes',
   LAST_RUN_AT: 'calendar_sync_last_run_at',
   LOCK: 'calendar_sync_lock',
+  LAST_CALENDAR_IDS: 'calendar_sync_last_calendar_ids',
 };
 
 const THROTTLE_MS = 15 * 60 * 1000;
@@ -59,7 +67,7 @@ export async function setSyncedCalendarIds(ids: string[]): Promise<void> {
 // the next account to log in would otherwise inherit the previous user's sync opt-in + calendar
 // selection and silently push their device-calendar events into the new account.
 export async function resetCalendarSyncState(): Promise<void> {
-  await AsyncStorage.multiRemove([KEYS.ENABLED, KEYS.CALENDAR_IDS, KEYS.EVENT_HASHES, KEYS.LAST_RUN_AT, KEYS.LOCK]);
+  await AsyncStorage.multiRemove([KEYS.ENABLED, KEYS.CALENDAR_IDS, KEYS.EVENT_HASHES, KEYS.LAST_RUN_AT, KEYS.LOCK, KEYS.LAST_CALENDAR_IDS]);
 }
 
 // Every device calendar the OS knows about (Apple/Google/Outlook/etc. - anything the user has
@@ -113,6 +121,11 @@ export async function runCalendarSync(opts: { force?: boolean } = {}): Promise<v
       const status = (await ExpoCalendar.getCalendarPermissionsAsync()).status;
       if (status !== 'granted') return;
 
+      // Best-effort nudge so Android pulls fresh Google/Exchange changes down to the device
+      // calendar before we read it - doesn't block this run (the sync it kicks off completes
+      // later), but keeps the device calendar fresher for this and the next run.
+      bumpDeviceCalendarSync();
+
       const rangeStart = new Date(); rangeStart.setDate(rangeStart.getDate() - WINDOW_PAST_DAYS);
       const rangeEnd = new Date(); rangeEnd.setDate(rangeEnd.getDate() + WINDOW_FUTURE_DAYS);
       const deviceEvents = await ExpoCalendar.getEventsAsync(calendarIds, rangeStart, rangeEnd);
@@ -128,6 +141,8 @@ export async function runCalendarSync(opts: { force?: boolean } = {}): Promise<v
 
       const hashes = await readHashes();
       const nextHashes: Record<string, string> = {};
+      const currentIdsKey = JSON.stringify([...calendarIds].sort());
+      const calendarSelectionUnchanged = (await AsyncStorage.getItem(KEYS.LAST_CALENDAR_IDS)) === currentIdsKey;
 
       for (const de of deviceEvents as any[]) {
         const hash = hashDeviceEvent({
@@ -163,10 +178,26 @@ export async function runCalendarSync(opts: { force?: boolean } = {}): Promise<v
           else delete nextHashes[de.id];
         }
       }
-      // Device events that disappeared since last sync are simply dropped from the hash map -
-      // their MemoPad copy is left alone (see file header).
+      // Device events that disappeared since last sync: delete their MemoPad copy, but only when
+      // both safety conditions from the file header hold (unchanged calendar selection, non-empty
+      // fetch) - otherwise just let the hash map re-baseline from this run's results, so a real
+      // deletion is still caught on a later, safe-to-act-on run.
+      if (calendarSelectionUnchanged && deviceEvents.length > 0) {
+        for (const [deviceId, prevHash] of Object.entries(hashes)) {
+          if (deviceId in nextHashes) continue; // still present at the source
+          const match = byDeviceId.get(deviceId);
+          if (!match) continue; // no MemoPad copy (already deleted, or never matched)
+          try {
+            await deleteEventOffline(match.id, { push: true });
+          } catch (e) {
+            console.error('Calendar sync: failed to delete event for removed device event', deviceId, e);
+            nextHashes[deviceId] = prevHash; // retry next run
+          }
+        }
+      }
 
       await AsyncStorage.setItem(KEYS.EVENT_HASHES, JSON.stringify(nextHashes));
+      await AsyncStorage.setItem(KEYS.LAST_CALENDAR_IDS, currentIdsKey);
       await AsyncStorage.setItem(KEYS.LAST_RUN_AT, new Date().toISOString());
     } finally {
       await AsyncStorage.removeItem(KEYS.LOCK);
