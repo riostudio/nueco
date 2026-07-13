@@ -13,6 +13,7 @@ import { CalendarEvent } from '../../src/types';
 import { MONTH_NAMES, DAY_NAMES, radius, borderWidth } from '../../src/theme';
 import { UserAvatar } from '../../src/auth';
 import { SegmentedControl } from '../../src/components';
+import { nextOccurrenceOnOrAfter, formatRecurrenceSummary } from '../../src/recurrence';
 
 let ExpoCalendar: typeof import('expo-calendar') | null = null;
 if (Platform.OS !== 'web') {
@@ -75,11 +76,22 @@ function groupEventsByDate(events: CalendarEvent[]): GroupedEvents {
   const map = new Map<string, { displayDate: string; isToday: boolean; events: CalendarEvent[] }>();
 
   for (const evt of events) {
-    const dateKey = evt.start_time.substring(0, 10);
+    // Recurring events group by their next upcoming occurrence (not the original
+    // start_time) so a series created weeks/months ago still sorts near "today"
+    // instead of staying pinned under its creation date - and since this groups the
+    // single CalendarEvent object by one computed date, it naturally produces exactly
+    // one row per recurring event rather than one per occurrence. If the series has
+    // already ended (nextOccurrenceOnOrAfter returns null because `until` passed),
+    // fall back to start_time so the ended series still shows up somewhere instead of
+    // silently disappearing from the list.
+    const displayIso = evt.recurrence
+      ? (nextOccurrenceOnOrAfter(evt, new Date())?.toISOString() ?? evt.start_time)
+      : evt.start_time;
+    const dateKey = displayIso.substring(0, 10);
     if (!map.has(dateKey)) {
       map.set(dateKey, {
-        displayDate: formatEventDate(evt.start_time),
-        isToday: isEventToday(evt.start_time),
+        displayDate: formatEventDate(displayIso),
+        isToday: isEventToday(displayIso),
         events: [],
       });
     }
@@ -296,6 +308,12 @@ export default function EventsScreen() {
                     <View style={s.reminderRow}>
                       <MaterialIcons name="notifications" size={14} color={C.primary} />
                       <Text style={s.reminderText}>{formatReminderMinutes(event.reminder_minutes)}</Text>
+                    </View>
+                  ) : null}
+                  {event.recurrence ? (
+                    <View style={s.reminderRow}>
+                      <MaterialIcons name="repeat" size={14} color={C.secondary} />
+                      <Text style={[s.reminderText, { color: C.secondary }]}>{formatRecurrenceSummary(event.recurrence)}</Text>
                     </View>
                   ) : null}
                 </View>

@@ -9,10 +9,11 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { eventsApi, notesApi } from '../src/api';
 import { decryptEventFromServer } from '../src/crypto/eventCrypto';
-import { createEventOffline, updateEventOffline, deleteEventOffline } from '../src/offlineSync';
+import { createEventOffline, updateEventOffline, deleteEventOffline, getLocalEvents, setLocalEventNotificationId } from '../src/offlineSync';
 import { bumpDeviceCalendarSync } from '../src/deviceCalendarSync';
-import { MONTH_NAMES, C, radius, borderWidth } from '../src/theme';
-import { ReminderMinutes } from '../src/types';
+import { nextOccurrenceOnOrAfter } from '../src/recurrence';
+import { MONTH_NAMES, DAY_NAMES, C, radius, borderWidth } from '../src/theme';
+import { ReminderMinutes, Recurrence, RecurrenceFreq, CalendarEvent } from '../src/types';
 import { Button } from '../src/components';
 
 // `isSynced` = false means the calendar is local-only (Android's `source.isLocalAccount`, or
@@ -65,6 +66,14 @@ const REMINDER_OPTIONS: { label: string; value: ReminderMinutes | null }[] = [
   { label: '30 minutes before', value: 30 },
   { label: '1 hour before', value: 60 },
   { label: '1 day before', value: 1440 },
+];
+
+type RecurrenceFreqOption = 'none' | RecurrenceFreq;
+
+const RECURRENCE_OPTIONS: { label: string; value: RecurrenceFreqOption }[] = [
+  { label: 'Does not repeat', value: 'none' },
+  { label: 'Daily', value: 'daily' },
+  { label: 'Weekly', value: 'weekly' },
 ];
 
 // ---- Utility functions ----
@@ -147,7 +156,13 @@ export default function EventEditorScreen() {
   const [addToDeviceCal, setAddToDeviceCal] = useState(true);
   const [reminderMinutes, setReminderMinutes] = useState<ReminderMinutes | null>(15);
   const [deviceCalendarEventId, setDeviceCalendarEventId] = useState<string | null>(null);
+  const [localNotificationId, setLocalNotificationId] = useState<string | null>(null);
+  const [recurrenceFreq, setRecurrenceFreq] = useState<RecurrenceFreqOption>('none');
+  const [recurrenceDays, setRecurrenceDays] = useState<number[]>([]);
+  const [recurrenceUntil, setRecurrenceUntil] = useState<Date | null>(null);
   const [showReminderPicker, setShowReminderPicker] = useState(false);
+  const [showRecurrencePicker, setShowRecurrencePicker] = useState(false);
+  const [showRecurrenceUntilPicker, setShowRecurrenceUntilPicker] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showEndDatePicker, setShowEndDatePicker] = useState(false);
   const [showStartPicker, setShowStartPicker] = useState(false);
@@ -178,6 +193,10 @@ export default function EventEditorScreen() {
   const endTimeRef = useRef(endTime);
   const reminderMinutesRef = useRef(reminderMinutes);
   const deviceCalendarEventIdRef = useRef(deviceCalendarEventId);
+  const localNotificationIdRef = useRef(localNotificationId);
+  const recurrenceFreqRef = useRef(recurrenceFreq);
+  const recurrenceDaysRef = useRef(recurrenceDays);
+  const recurrenceUntilRef = useRef(recurrenceUntil);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSavedDataRef = useRef<string>(''); // Track last saved data to avoid duplicate saves
   const calendarsRef = useRef<DeviceCalendar[]>([]); // cached writable calendars
@@ -193,6 +212,10 @@ export default function EventEditorScreen() {
   useEffect(() => { endTimeRef.current = endTime; }, [endTime]);
   useEffect(() => { reminderMinutesRef.current = reminderMinutes; }, [reminderMinutes]);
   useEffect(() => { deviceCalendarEventIdRef.current = deviceCalendarEventId; }, [deviceCalendarEventId]);
+  useEffect(() => { localNotificationIdRef.current = localNotificationId; }, [localNotificationId]);
+  useEffect(() => { recurrenceFreqRef.current = recurrenceFreq; }, [recurrenceFreq]);
+  useEffect(() => { recurrenceDaysRef.current = recurrenceDays; }, [recurrenceDays]);
+  useEffect(() => { recurrenceUntilRef.current = recurrenceUntil; }, [recurrenceUntil]);
   useEffect(() => { preferredCalendarIdRef.current = preferredCalendarId; }, [preferredCalendarId]);
 
   useEffect(() => {
@@ -272,9 +295,29 @@ export default function EventEditorScreen() {
       setEndTime(end);
       setReminderMinutes(event.reminder_minutes || null);
       setDeviceCalendarEventId(event.device_calendar_event_id || null);
+      if (event.recurrence) {
+        setRecurrenceFreq(event.recurrence.freq);
+        setRecurrenceDays(event.recurrence.byweekday || []);
+        setRecurrenceUntil(event.recurrence.until ? new Date(event.recurrence.until) : null);
+      } else {
+        setRecurrenceFreq('none');
+        setRecurrenceDays([]);
+        setRecurrenceUntil(null);
+      }
       eventIdRef.current = event.id;
       isCreatedRef.current = true;
       setEventExists(true);
+
+      // `local_notification_id` is device-local-only (never returned by the server) - read it
+      // from the local cache, which `fullSync`'s merge (offlineSync.ts) preserves across refreshes.
+      try {
+        const locals = await getLocalEvents();
+        const localMatch = locals.find((e) => e.id === event.id);
+        if (localMatch?.local_notification_id) {
+          setLocalNotificationId(localMatch.local_notification_id);
+          localNotificationIdRef.current = localMatch.local_notification_id;
+        }
+      } catch {}
     } catch (e) {
       console.error('Failed to load event:', e);
     } finally {
@@ -392,6 +435,8 @@ export default function EventEditorScreen() {
     startDate: Date,
     endDate: Date,
     existingEventId: string | null = null,
+    recurrence: Recurrence | null = null,
+    recurrenceTimezone: string | null = null,
   ): Promise<string | null> => {
     if (!ExpoCalendar || isWeb) return null;
     try {
@@ -427,7 +472,28 @@ export default function EventEditorScreen() {
         return null;
       }
 
-      const eventDetails = { title: eventTitle, notes: eventDesc, location: eventLoc, startDate, endDate, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone };
+      // For a recurring event, the device-calendar entry is a plain one-off that always
+      // points at the *upcoming* occurrence rather than the event's original start_time -
+      // not a native recurrenceRule (deliberately avoided, see recurrence.ts's header comment
+      // re: iOS/Android weekday-index risk). It gets refreshed to the following occurrence via
+      // `refreshRecurringDeviceCalendarEntries` (deviceCalendarSync.ts) on every app foreground.
+      let displayStart = startDate;
+      let displayEnd = endDate;
+      if (recurrence) {
+        const durationMs = endDate.getTime() - startDate.getTime();
+        const pseudoEvent = {
+          start_time: startDate.toISOString(),
+          recurrence,
+          timezone: recurrenceTimezone,
+        } as unknown as CalendarEvent;
+        const next = nextOccurrenceOnOrAfter(pseudoEvent, new Date());
+        if (next) {
+          displayStart = next;
+          displayEnd = new Date(next.getTime() + durationMs);
+        }
+      }
+
+      const eventDetails = { title: eventTitle, notes: eventDesc, location: eventLoc, startDate: displayStart, endDate: displayEnd, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone };
 
       let resultId: string;
       if (existingEventId) {
@@ -448,20 +514,45 @@ export default function EventEditorScreen() {
     }
   };
 
-  const scheduleReminder = async (eventTitle: string, eventStartTime: Date, minutesBefore: number) => {
-    if (!Notifications || isWeb) return;
+  // Schedules (or reschedules) this event's local notification, returning the new
+  // notification id (or null if no future reminder was scheduled). Cancels only THIS
+  // event's previous notification (by id) rather than
+  // `Notifications.cancelAllScheduledNotificationsAsync()` - that used to wipe every other
+  // locally scheduled notification on the device, which is fine for one event per note but
+  // becomes a real cross-contamination bug once a note carries several independently-edited
+  // reminders (editing one used to silently cancel the others too).
+  const scheduleReminder = async (eventTitle: string, eventStartTime: Date, minutesBefore: number): Promise<string | null> => {
+    if (!Notifications || isWeb) return localNotificationIdRef.current;
     try {
-      await Notifications.cancelAllScheduledNotificationsAsync();
+      if (localNotificationIdRef.current) {
+        try { await Notifications.cancelScheduledNotificationAsync(localNotificationIdRef.current); } catch {}
+      }
       const reminderTime = new Date(eventStartTime.getTime() - minutesBefore * 60 * 1000);
+      let newId: string | null = null;
       if (reminderTime > new Date()) {
-        await Notifications.scheduleNotificationAsync({
+        newId = await Notifications.scheduleNotificationAsync({
           content: { title: '⏰ Event Reminder', body: `"${eventTitle}" starts in ${getReminderLabel(minutesBefore)}`, sound: true },
           trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: reminderTime },
         });
       }
+      localNotificationIdRef.current = newId;
+      setLocalNotificationId(newId);
+      return newId;
     } catch (e) {
       console.error('Failed to schedule reminder:', e);
+      return localNotificationIdRef.current;
     }
+  };
+
+  // Cancels this event's previously scheduled local notification (e.g. the user turned the
+  // reminder off) without touching any other event's. Same id-tracking as scheduleReminder.
+  const cancelLocalNotification = async (): Promise<null> => {
+    if (Notifications && !isWeb && localNotificationIdRef.current) {
+      try { await Notifications.cancelScheduledNotificationAsync(localNotificationIdRef.current); } catch {}
+    }
+    localNotificationIdRef.current = null;
+    setLocalNotificationId(null);
+    return null;
   };
 
   const getReminderLabel = (minutes: number): string => {
@@ -470,16 +561,39 @@ export default function EventEditorScreen() {
 
   // ---- Save logic ----
 
-  const buildEventData = (st: Date, et: Date, deviceCalId: string | null) => ({
-    title: titleRef.current.trim(),
-    description: descriptionRef.current.trim(),
-    location: locationRef.current.trim(),
-    start_time: st.toISOString(),
-    end_time: et.toISOString(),
-    linked_note_ids: params.noteId && params.noteId !== 'new' ? [params.noteId] : [],
-    reminder_minutes: reminderMinutesRef.current,
-    device_calendar_event_id: deviceCalId,
-  });
+  // Builds the `Recurrence` payload from state (or `null` for "does not repeat"). Shared by
+  // `buildEventData` (what's sent to the server) and `writeToDeviceCalendar`'s callers (which
+  // need it separately to compute the next-occurrence display date) so the freq/day/until
+  // mapping only lives in one place.
+  const getRecurrenceValue = (): Recurrence | null => {
+    const freq = recurrenceFreqRef.current;
+    if (freq === 'none') return null;
+    return {
+      freq,
+      byweekday: freq === 'weekly' ? recurrenceDaysRef.current : null,
+      until: recurrenceUntilRef.current ? toDateString(recurrenceUntilRef.current) : null,
+    };
+  };
+
+  const buildEventData = (st: Date, et: Date, deviceCalId: string | null) => {
+    const recurrence = getRecurrenceValue();
+    return {
+      title: titleRef.current.trim(),
+      description: descriptionRef.current.trim(),
+      location: locationRef.current.trim(),
+      start_time: st.toISOString(),
+      end_time: et.toISOString(),
+      linked_note_ids: params.noteId && params.noteId !== 'new' ? [params.noteId] : [],
+      reminder_minutes: reminderMinutesRef.current,
+      device_calendar_event_id: deviceCalId,
+      // `recurrence`/`timezone` are always sent explicitly (including `null` for "does not
+      // repeat"), not omitted - the backend's update_event only clears a field on an explicit
+      // `null` in the request body, not on an absent key, so omitting it here would fail to
+      // clear recurrence when a user turns it off on a previously-recurring event.
+      recurrence,
+      timezone: recurrence ? Intl.DateTimeFormat().resolvedOptions().timeZone : null,
+    };
+  };
 
   const triggerAutoSave = useCallback(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -496,7 +610,8 @@ export default function EventEditorScreen() {
       if (et <= st) { setSaveStatus('End must be after start'); return; }
 
       // Check if data actually changed to avoid unnecessary saves
-      const dataHash = `${titleRef.current}|${descriptionRef.current}|${locationRef.current}|${st.toISOString()}|${et.toISOString()}|${reminderMinutesRef.current}`;
+      const recurrenceForHash = getRecurrenceValue();
+      const dataHash = `${titleRef.current}|${descriptionRef.current}|${locationRef.current}|${st.toISOString()}|${et.toISOString()}|${reminderMinutesRef.current}|${recurrenceForHash ? `${recurrenceForHash.freq}|${(recurrenceForHash.byweekday || []).join(',')}|${recurrenceForHash.until || ''}` : 'none'}`;
       if (dataHash === lastSavedDataRef.current) return;
 
       setSaveStatus('Saving...');
@@ -505,12 +620,15 @@ export default function EventEditorScreen() {
         // calendar) natively - no browser redirect. The OS handles syncing to Google/iCloud.
         let newDeviceCalEventId = deviceCalendarEventIdRef.current;
         if (addToDeviceCal && !isWeb) {
+          const recurrence = getRecurrenceValue();
           newDeviceCalEventId = await writeToDeviceCalendar(
             titleRef.current.trim(),
             descriptionRef.current.trim(),
             locationRef.current.trim(),
             st, et,
-            deviceCalendarEventIdRef.current
+            deviceCalendarEventIdRef.current,
+            recurrence,
+            recurrence ? Intl.DateTimeFormat().resolvedOptions().timeZone : null,
           );
           if (newDeviceCalEventId) {
             deviceCalendarEventIdRef.current = newDeviceCalEventId;
@@ -518,8 +636,13 @@ export default function EventEditorScreen() {
           }
         }
 
-        if (reminderMinutesRef.current && !isWeb) {
-          await scheduleReminder(titleRef.current.trim(), st, reminderMinutesRef.current);
+        let newNotificationId = localNotificationIdRef.current;
+        if (!isWeb) {
+          if (reminderMinutesRef.current) {
+            newNotificationId = await scheduleReminder(titleRef.current.trim(), st, reminderMinutesRef.current);
+          } else if (localNotificationIdRef.current) {
+            newNotificationId = await cancelLocalNotification();
+          }
         }
 
         // Local-first + a durable retry queue (offlineSync.ts) instead of a direct API call -
@@ -542,6 +665,14 @@ export default function EventEditorScreen() {
           }
         } else {
           await updateEventOffline(eventIdRef.current, eventData, { push: true });
+        }
+
+        // `local_notification_id` is device-local-only (see LocalEvent's comment in
+        // offlineSync.ts) - persisted separately from `eventData` above so it's never sent to
+        // the server. Done after create/update so `eventIdRef.current` holds the real id (for a
+        // brand-new event this is empty until `createEventOffline` resolves above).
+        if (eventIdRef.current) {
+          try { await setLocalEventNotificationId(eventIdRef.current, newNotificationId); } catch {}
         }
 
         lastSavedDataRef.current = dataHash;
@@ -571,8 +702,11 @@ export default function EventEditorScreen() {
           // back-out still lands the event on the calendar. Idempotent via the stored event id.
           let devId = deviceCalendarEventIdRef.current;
           if (addToDeviceCal && !isWeb) {
+            const recurrence = getRecurrenceValue();
             const written = await writeToDeviceCalendar(
               titleRef.current.trim(), descriptionRef.current.trim(), locationRef.current.trim(), st, et, devId,
+              recurrence,
+              recurrence ? Intl.DateTimeFormat().resolvedOptions().timeZone : null,
             );
             if (written) { devId = written; deviceCalendarEventIdRef.current = written; }
           }
@@ -613,6 +747,11 @@ export default function EventEditorScreen() {
       if (ExpoCalendar && deviceCalendarEventIdRef.current && !isWeb) {
         try { await ExpoCalendar.deleteEventAsync(deviceCalendarEventIdRef.current); bumpDeviceCalendarSync(); } catch {}
       }
+      // Deleting the event should also cancel its own scheduled local notification - otherwise
+      // it fires later pointing at an event that no longer exists.
+      if (Notifications && localNotificationIdRef.current && !isWeb) {
+        try { await Notifications.cancelScheduledNotificationAsync(localNotificationIdRef.current); } catch {}
+      }
       await deleteEventOffline(idToDelete, { push: true });
       setDeleteModalVisible(false);
       router.back();
@@ -626,7 +765,7 @@ export default function EventEditorScreen() {
 
   useEffect(() => {
     if (title || description) triggerAutoSave();
-  }, [title, description, location, date, endDate, startTime, endTime, reminderMinutes, triggerAutoSave]);
+  }, [title, description, location, date, endDate, startTime, endTime, reminderMinutes, recurrenceFreq, recurrenceDays, recurrenceUntil, triggerAutoSave]);
 
   const filteredImportEvents = importSearch.trim()
     ? importEvents.filter((e) => e.title.toLowerCase().includes(importSearch.trim().toLowerCase()))
@@ -982,6 +1121,128 @@ export default function EventEditorScreen() {
             </TouchableOpacity>
           </Modal>
 
+          {/* Repeat */}
+          <Text style={s.label}>Repeat</Text>
+          <TouchableOpacity testID="recurrence-picker-btn" style={s.pickerBtn} onPress={() => setShowRecurrencePicker(true)}>
+            <MaterialIcons name="event-repeat" size={24} color={C.secondary} />
+            <Text style={s.pickerBtnText}>{RECURRENCE_OPTIONS.find(o => o.value === recurrenceFreq)?.label || 'Does not repeat'}</Text>
+            <MaterialIcons name="arrow-drop-down" size={28} color={C.borderSub} />
+          </TouchableOpacity>
+
+          {recurrenceFreq === 'weekly' && (
+            <View style={s.dayChipsRow}>
+              {DAY_NAMES.map((label, idx) => {
+                const selected = recurrenceDays.includes(idx);
+                return (
+                  <TouchableOpacity
+                    key={label}
+                    testID={`recurrence-day-${idx}`}
+                    style={[s.dayChip, selected && s.dayChipSelected]}
+                    onPress={() => setRecurrenceDays((prev) =>
+                      prev.includes(idx) ? prev.filter((d) => d !== idx) : [...prev, idx].sort((a, b) => a - b)
+                    )}
+                  >
+                    <Text style={[s.dayChipText, selected && s.dayChipTextSelected]}>{label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
+
+          {recurrenceFreq !== 'none' && (
+            <>
+              <Text style={s.label}>Ends</Text>
+              <View style={s.endsRow}>
+                <View style={{ flex: 1 }}>
+                  {isWeb && (
+                    <NativeDateInput
+                      testID="recurrence-until-input"
+                      value={recurrenceUntil || new Date()}
+                      onChange={(d) => setRecurrenceUntil(d)}
+                    />
+                  )}
+                  {!isWeb && (
+                    <TouchableOpacity testID="recurrence-until-btn" style={s.pickerBtn} onPress={() => setShowRecurrenceUntilPicker(true)}>
+                      <MaterialIcons name="event-busy" size={24} color={C.secondary} />
+                      <Text style={s.pickerBtnText}>{recurrenceUntil ? formatDisplayDate(recurrenceUntil) : 'No end date'}</Text>
+                      <MaterialIcons name="arrow-drop-down" size={28} color={C.borderSub} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+                {recurrenceUntil && (
+                  <TouchableOpacity
+                    testID="recurrence-until-clear-btn"
+                    style={s.endsClearBtn}
+                    onPress={() => setRecurrenceUntil(null)}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <MaterialIcons name="close" size={22} color={C.textSec} />
+                  </TouchableOpacity>
+                )}
+              </View>
+              {isIOS && DateTimePicker && showRecurrenceUntilPicker && (
+                <Modal transparent animationType="slide">
+                  <View style={s.pickerModalOverlay}>
+                    <View style={s.pickerModalContent}>
+                      <View style={s.pickerModalHeader}>
+                        <Text style={s.pickerModalTitle}>Select End Date</Text>
+                        <TouchableOpacity onPress={() => setShowRecurrenceUntilPicker(false)}>
+                          <Text style={s.pickerModalDone}>Done</Text>
+                        </TouchableOpacity>
+                      </View>
+                      <DateTimePicker
+                        testID="recurrence-until-picker"
+                        value={recurrenceUntil || new Date()}
+                        mode="date"
+                        display="spinner"
+                        onChange={(_e: any, d?: Date) => d && setRecurrenceUntil(d)}
+                        style={{ height: 200 }}
+                        textColor={C.text}
+                      />
+                    </View>
+                  </View>
+                </Modal>
+              )}
+              {isAndroid && DateTimePicker && showRecurrenceUntilPicker && (
+                <DateTimePicker
+                  testID="recurrence-until-picker-android"
+                  value={recurrenceUntil || new Date()}
+                  mode="date"
+                  display="default"
+                  onChange={(_e: any, d?: Date) => { setShowRecurrenceUntilPicker(false); if (d) setRecurrenceUntil(d); }}
+                />
+              )}
+            </>
+          )}
+
+          <Modal testID="recurrence-modal" visible={showRecurrencePicker} transparent animationType="fade" onRequestClose={() => setShowRecurrencePicker(false)}>
+            <TouchableOpacity style={s.modalOverlay} activeOpacity={1} onPress={() => setShowRecurrencePicker(false)}>
+              <View style={s.reminderModal}>
+                <Text style={s.reminderModalTitle}>Repeat</Text>
+                {RECURRENCE_OPTIONS.map((option) => (
+                  <TouchableOpacity
+                    key={option.value}
+                    style={[s.reminderOption, recurrenceFreq === option.value && s.reminderOptionSelected]}
+                    onPress={() => {
+                      setRecurrenceFreq(option.value);
+                      // Nicer default than an empty day-chip row: preselect the event's own
+                      // start-date weekday, matching the fallback `recurrence.ts`/the backend
+                      // already apply for an empty `byweekday` (repeats on start_time's weekday).
+                      if (option.value === 'weekly' && recurrenceDaysRef.current.length === 0) {
+                        setRecurrenceDays([dateRef.current.getDay()]);
+                      }
+                      setShowRecurrencePicker(false);
+                    }}
+                  >
+                    <MaterialIcons name={option.value === 'none' ? 'event-busy' : 'event-repeat'} size={22} color={recurrenceFreq === option.value ? C.primaryFg : C.textSec} />
+                    <Text style={[s.reminderOptionText, recurrenceFreq === option.value && s.reminderOptionTextSelected]}>{option.label}</Text>
+                    {recurrenceFreq === option.value && <MaterialIcons name="check" size={22} color={C.primaryFg} />}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </TouchableOpacity>
+          </Modal>
+
           {/* Calendar Picker Modal */}
           <Modal testID="calendar-modal" visible={showCalendarPicker} transparent animationType="fade" onRequestClose={() => setShowCalendarPicker(false)}>
             <TouchableOpacity style={s.modalOverlay} activeOpacity={1} onPress={() => setShowCalendarPicker(false)}>
@@ -1173,6 +1434,13 @@ const s = StyleSheet.create({
   reminderOptionSelected: { backgroundColor: C.primary },
   reminderOptionText: { flex: 1, fontSize: 16, color: C.text, marginLeft: 12, fontWeight: '400' },
   reminderOptionTextSelected: { color: C.primaryFg, fontWeight: '400' },
+  dayChipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
+  dayChip: { paddingVertical: 10, paddingHorizontal: 14, borderRadius: radius.pill, borderWidth: borderWidth.regular, borderColor: C.border, backgroundColor: C.surface },
+  dayChipSelected: { backgroundColor: C.primary, borderColor: C.primary },
+  dayChipText: { fontSize: 15, fontWeight: '600', color: C.textSec },
+  dayChipTextSelected: { color: C.primaryFg },
+  endsRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  endsClearBtn: { padding: 8 },
   pickerModalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0, 0, 0, 0.3)' },
   pickerModalContent: { backgroundColor: C.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingBottom: 30 },
   pickerModalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: C.borderSub + '40' },

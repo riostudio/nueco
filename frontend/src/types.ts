@@ -19,7 +19,8 @@ export interface Note {
   content: string;
   tags: Tag[];
   is_pinned: boolean;
-  linked_event_id: string | null;
+  linked_event_id: string | null; // Deprecated: use linked_event_ids. Kept for old clients.
+  linked_event_ids: string[];
   attachments?: Attachment[];
   has_attachments?: boolean;
   created_at: string;
@@ -28,6 +29,14 @@ export interface Note {
 
 // Reminder options in minutes before event
 export type ReminderMinutes = 5 | 15 | 30 | 60 | 1440; // 1440 = 1 day
+
+export type RecurrenceFreq = 'daily' | 'weekly';
+
+export interface Recurrence {
+  freq: RecurrenceFreq;
+  byweekday: number[] | null; // 0=Sun..6=Sat (matches JS Date.getDay())
+  until: string | null; // ISO date string, inclusive
+}
 
 export interface CalendarEvent {
   id: string;
@@ -40,4 +49,6 @@ export interface CalendarEvent {
   reminder_minutes: ReminderMinutes | null;
   device_calendar_event_id: string | null;
   created_at: string;
+  recurrence: Recurrence | null;
+  timezone: string | null;
 }

@@ -47,6 +47,20 @@ function formatTime(dateStr: string): string {
   return d.toLocaleDateString();
 }
 
+// Distinguishes "never edited since creation" from "edited later" in the card's compact
+// relative-time footer, without changing formatTime's core relative-time logic. A small
+// epsilon absorbs clock/serialization precision noise (e.g. created_at/updated_at differing
+// by a few ms/seconds from how the backend or offline queue stamps them) rather than
+// requiring an exact string match.
+const CREATED_VS_EDITED_EPSILON_MS = 5000;
+
+function formatNoteTimeLabel(createdAt: string, updatedAt: string): string {
+  const created = new Date(createdAt).getTime();
+  const updated = new Date(updatedAt).getTime();
+  const neverEdited = Number.isNaN(created) || Number.isNaN(updated) || Math.abs(updated - created) <= CREATED_VS_EDITED_EPSILON_MS;
+  return neverEdited ? `Created ${formatTime(createdAt)}` : `Edited ${formatTime(updatedAt)}`;
+}
+
 function stripMd(text: string): string {
   // Notes store rich HTML (+ a shared-post marker); render a clean plain-text preview.
   return plainTextFromContent(text);
@@ -413,7 +427,7 @@ export default function NotesScreen() {
               </View>
             ))}
           </View>
-          <Text style={s.timeText}>{formatTime(note.updated_at)}</Text>
+          <Text style={s.timeText}>{formatNoteTimeLabel(note.created_at, note.updated_at)}</Text>
         </View>
       </CardTag>
     );

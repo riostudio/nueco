@@ -11,6 +11,7 @@ import { hasAnalyticsDecision } from '../../src/analytics';
 import { registerForPushNotifications, unregisterPushNotifications } from '../../src/notifications';
 import { runCalendarSync } from '../../src/calendarSync';
 import { registerCalendarSyncTaskAsync } from '../../src/calendarSyncTask';
+import { refreshRecurringDeviceCalendarEntries } from '../../src/deviceCalendarSync';
 
 const C = {
   primary: '#D84315',
@@ -61,6 +62,10 @@ export default function TabLayout() {
   useEffect(() => {
     runCalendarSync().catch(() => {});
     registerCalendarSyncTaskAsync().catch(() => {});
+    // Rolls each recurring event's device-calendar entry forward to its current next
+    // occurrence - the periodic-refresh half of the reliability-backup device calendar
+    // write (event-editor.tsx's writeToDeviceCalendar handles the create/edit-time half).
+    refreshRecurringDeviceCalendarEntries().catch(() => {});
   }, []);
 
   const handleLogout = () => {

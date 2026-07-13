@@ -16,6 +16,8 @@ from pymongo import ReturnDocument
 from collections import defaultdict
 import time
 from openai import AsyncOpenAI
+from dateutil.rrule import rrule, DAILY, WEEKLY
+from zoneinfo import ZoneInfo
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -132,7 +134,8 @@ class NoteCreate(BaseModel):
     content: str = ""
     tags: List[Tag] = []
     is_pinned: bool = False
-    linked_event_id: Optional[str] = None
+    linked_event_id: Optional[str] = None  # Deprecated: use linked_event_ids. Kept for old clients.
+    linked_event_ids: List[str] = []
     images: List[str] = []  # Base64 encoded images
     attachments: List[Attachment] = []
     # E2EE: when set, title/content/tags are client-side ciphertext (AES-256-GCM).
@@ -144,7 +147,8 @@ class NoteUpdate(BaseModel):
     content: Optional[str] = None
     tags: Optional[List[Tag]] = None
     is_pinned: Optional[bool] = None
-    linked_event_id: Optional[str] = None
+    linked_event_id: Optional[str] = None  # Deprecated: use linked_event_ids. Kept for old clients.
+    linked_event_ids: Optional[List[str]] = None
     images: Optional[List[str]] = None  # Base64 encoded images
     attachments: Optional[List[Attachment]] = None
     enc_version: Optional[int] = None
@@ -155,7 +159,8 @@ class NoteResponse(BaseModel):
     content: str
     tags: List[Tag]
     is_pinned: bool
-    linked_event_id: Optional[str] = None
+    linked_event_id: Optional[str] = None  # Deprecated: use linked_event_ids. Kept for old clients.
+    linked_event_ids: List[str] = []
     images: List[str] = []  # Base64 encoded images
     attachments: List[Attachment] = []
     has_attachments: bool = False
@@ -163,6 +168,11 @@ class NoteResponse(BaseModel):
     enc_version: Optional[int] = None
     created_at: str
     updated_at: str
+
+class Recurrence(BaseModel):
+    freq: str  # "daily" | "weekly"
+    byweekday: Optional[List[int]] = None  # 0=Sunday..6=Saturday (matches JS Date.getDay())
+    until: Optional[str] = None  # ISO date string, inclusive
 
 class EventCreate(BaseModel):
     title: str
@@ -174,6 +184,8 @@ class EventCreate(BaseModel):
     reminder_minutes: Optional[int] = None  # Minutes before event to remind
     device_calendar_event_id: Optional[str] = None  # ID from device calendar
     enc_version: Optional[int] = None  # E2EE: when set, title/description/location are client-side ciphertext (AES-256-GCM). None/absent means legacy plaintext.
+    recurrence: Optional[Recurrence] = None
+    timezone: Optional[str] = None  # IANA name (e.g. "Australia/Sydney"); anchors recurrence math to wall-clock time across DST
 
 class EventUpdate(BaseModel):
     title: Optional[str] = None
@@ -185,6 +197,8 @@ class EventUpdate(BaseModel):
     reminder_minutes: Optional[int] = None
     device_calendar_event_id: Optional[str] = None
     enc_version: Optional[int] = None
+    recurrence: Optional[Recurrence] = None
+    timezone: Optional[str] = None
 
 class EventResponse(BaseModel):
     id: str
@@ -199,6 +213,8 @@ class EventResponse(BaseModel):
     user_id: Optional[str] = None
     enc_version: Optional[int] = None
     created_at: str
+    recurrence: Optional[Recurrence] = None
+    timezone: Optional[str] = None
 
 # Paginated response models
 class PaginatedNotesResponse(BaseModel):
@@ -253,18 +269,35 @@ def _validate_note_payload(title=None, content=None, images=None):
             raise HTTPException(status_code=413, detail=f"Images too large (max {MAX_NOTE_IMAGES_BYTES // (1024 * 1024)}MB total)")
 
 
+def _normalize_linked_event_ids(doc: dict) -> dict:
+    """Dual read-side normalizer: a Note can now link multiple events (`linked_event_ids`),
+    but old rows (and old app builds still writing only the singular field) only have
+    `linked_event_id`. Fill `linked_event_ids` from the legacy field when absent/empty so
+    every NoteResponse presents a consistent array, with no Mongo migration required."""
+    ids = doc.get("linked_event_ids")
+    if not ids and doc.get("linked_event_id"):
+        ids = [doc["linked_event_id"]]
+    doc["linked_event_ids"] = ids or []
+    return doc
+
+
 @api_router.post("/notes", response_model=NoteResponse)
 async def create_note(note: NoteCreate, current_user: dict = Depends(get_current_user)):
     _validate_note_payload(note.title, note.content, note.images)
     now = datetime.now(timezone.utc).isoformat()
     user_id = current_user.get("id") or str(current_user.get("_id", ""))
+    # linked_event_ids (new, plural) is authoritative when provided; dual-write
+    # linked_event_id (deprecated, singular) so an old app build reading only the
+    # legacy field still sees a link rather than it silently vanishing.
+    linked_event_ids = note.linked_event_ids or ([note.linked_event_id] if note.linked_event_id else [])
     doc = {
         "id": str(uuid.uuid4()),
         "title": note.title,
         "content": note.content,
         "tags": [t.model_dump() for t in note.tags],
         "is_pinned": note.is_pinned,
-        "linked_event_id": note.linked_event_id,
+        "linked_event_id": linked_event_ids[0] if linked_event_ids else None,
+        "linked_event_ids": linked_event_ids,
         "images": note.images,
         "attachments": [a.model_dump() for a in note.attachments],
         "has_attachments": len(note.attachments) > 0,
@@ -302,8 +335,9 @@ async def get_notes(
         "title": 1, 
         "content": 1, 
         "tags": 1, 
-        "is_pinned": 1, 
+        "is_pinned": 1,
         "linked_event_id": 1,
+        "linked_event_ids": 1,
         "images": 1,
         "attachments": 1,
         "has_attachments": 1,
@@ -314,8 +348,8 @@ async def get_notes(
     }).sort(
         [("is_pinned", -1), ("updated_at", -1)]
     ).skip(skip).limit(page_size).to_list(page_size)
-    
-    return [NoteResponse(**n) for n in notes]
+
+    return [NoteResponse(**_normalize_linked_event_ids(n)) for n in notes]
 
 
 @api_router.get("/notes/{note_id}", response_model=NoteResponse)
@@ -324,7 +358,7 @@ async def get_note(note_id: str, current_user: dict = Depends(get_current_user))
     note = await db.notes.find_one({"id": note_id, "user_id": user_id}, {"_id": 0})
     if not note:
         raise HTTPException(status_code=404, detail="Note not found")
-    return NoteResponse(**note)
+    return NoteResponse(**_normalize_linked_event_ids(note))
 
 
 @api_router.put("/notes/{note_id}", response_model=NoteResponse)
@@ -334,12 +368,20 @@ async def update_note(note_id: str, update: NoteUpdate, current_user: dict = Dep
     updates = {}
     for k, v in update.model_dump(exclude_unset=True).items():
         if v is None:
-            # Only allow explicitly clearing linked_event_id (unlinking an event).
+            # Only allow explicitly clearing linked_event_id/linked_event_ids (unlinking).
             if k == "linked_event_id":
                 updates[k] = None
+            elif k == "linked_event_ids":
+                updates[k] = []
+                updates["linked_event_id"] = None
             continue
         if k == "tags":
             updates[k] = [t if isinstance(t, dict) else t for t in v]
+        elif k == "linked_event_ids":
+            updates[k] = v
+            # Dual-write the deprecated singular field so an old app build still reading
+            # only linked_event_id doesn't see a link silently vanish.
+            updates["linked_event_id"] = v[0] if v else None
         else:
             updates[k] = v
     # Keep the denormalized flag in sync whenever attachments are part of the update.
@@ -350,7 +392,7 @@ async def update_note(note_id: str, update: NoteUpdate, current_user: dict = Dep
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Note not found")
     note = await db.notes.find_one({"id": note_id, "user_id": user_id}, {"_id": 0})
-    return NoteResponse(**note)
+    return NoteResponse(**_normalize_linked_event_ids(note))
 
 
 @api_router.delete("/notes/{note_id}")
@@ -592,6 +634,74 @@ def compute_reminder_fields(start_time_iso: Optional[str], reminder_minutes: Opt
     return {"reminder_fire_at": fire_at.isoformat(), "reminder_status": status, "reminder_claimed_at": None}
 
 
+# recurrence.freq -> dateutil.rrule frequency constant.
+_RRULE_FREQ = {"daily": DAILY, "weekly": WEEKLY}
+
+# Our `byweekday` contract is 0=Sunday..6=Saturday (matches JS `Date.getDay()`, see the
+# `Recurrence` model). dateutil's rrule uses 0=Monday..6=Sunday. Map explicitly rather
+# than via modular arithmetic to keep the off-by-one risk visible and testable.
+_JS_WEEKDAY_TO_DATEUTIL = {0: 6, 1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5}
+
+# Cap generated occurrences so a no-`until` daily/weekly rule can't loop unbounded.
+_RRULE_MAX_COUNT = 3650
+
+
+def next_occurrence_on_or_after(
+    start_time_iso: str,
+    recurrence: Recurrence,
+    timezone_name: Optional[str],
+    after_dt: datetime,
+) -> Optional[datetime]:
+    """Return the next recurrence occurrence (as a UTC-aware datetime) at or after `after_dt`.
+
+    Timezone-correct by construction: `start_time` is converted into the event's local
+    `zoneinfo` wall-clock time, `dateutil.rrule` is stepped entirely in that naive local
+    frame (so `byweekday`/`until` reasoning matches how a human reads "every Monday 9am"),
+    and only the final result is converted back to a UTC instant. This means a DST
+    transition shifts the UTC instant returned but never the local wall-clock hour.
+
+    `until` is inclusive of that local calendar date. Falls back to UTC if `timezone_name`
+    is missing or not a recognized IANA zone (defensive; a recurring event always gets a
+    timezone at create time, so this path is not expected in normal operation).
+    """
+    try:
+        st = datetime.fromisoformat(start_time_iso.replace("Z", "+00:00"))
+        if st.tzinfo is None:
+            st = st.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+    freq = _RRULE_FREQ.get(recurrence.freq)
+    if freq is None:
+        return None
+
+    try:
+        tz = ZoneInfo(timezone_name) if timezone_name else timezone.utc
+    except Exception:
+        tz = timezone.utc
+
+    local_start = st.astimezone(tz).replace(tzinfo=None)
+    local_after = after_dt.astimezone(tz).replace(tzinfo=None)
+
+    kwargs = {"dtstart": local_start, "count": _RRULE_MAX_COUNT}
+    if recurrence.freq == "weekly" and recurrence.byweekday:
+        kwargs["byweekday"] = [_JS_WEEKDAY_TO_DATEUTIL[d] for d in recurrence.byweekday if d in _JS_WEEKDAY_TO_DATEUTIL]
+
+    candidate = rrule(freq, **kwargs).after(local_after, inc=True)
+    if candidate is None:
+        return None
+
+    if recurrence.until:
+        try:
+            until_date = datetime.fromisoformat(recurrence.until.replace("Z", "+00:00")).date()
+        except Exception:
+            until_date = None
+        if until_date is not None and candidate.date() > until_date:
+            return None
+
+    return candidate.replace(tzinfo=tz).astimezone(timezone.utc)
+
+
 # Same rationale as _CIPHERTEXT_HEADROOM above: event fields may arrive as E2EE
 # ciphertext (Stage 5), so the wire caps carry the same 5x headroom over the intended
 # plaintext limits.
@@ -629,6 +739,8 @@ async def create_event(event: EventCreate, current_user: dict = Depends(get_curr
         "user_id": user_id,
         "enc_version": event.enc_version,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "recurrence": event.recurrence.model_dump() if event.recurrence else None,
+        "timezone": event.timezone,
         **compute_reminder_fields(event.start_time, event.reminder_minutes),
     }
     await db.events.insert_one(doc)
@@ -665,7 +777,9 @@ async def get_events(
         "device_calendar_event_id": 1,
         "user_id": 1,
         "enc_version": 1,
-        "created_at": 1
+        "created_at": 1,
+        "recurrence": 1,
+        "timezone": 1
     }).sort("start_time", 1).to_list(100)  # Reduced limit
     return [EventResponse(**e) for e in events]
 
@@ -711,11 +825,21 @@ async def update_event(event_id: str, update: EventUpdate, current_user: dict = 
         raise HTTPException(status_code=404, detail="Event not found")
     updates = {}
     for k, v in update.model_dump(exclude_unset=True).items():
-        if v is not None:
-            updates[k] = v
-    # Recompute the reminder scheduler fields when the timing changed. Only reset the send state
-    # when the fire time actually moves (so unrelated edits don't re-fire an already-sent reminder).
-    if "start_time" in updates or "reminder_minutes" in updates:
+        if v is None:
+            # Only allow explicitly clearing these fields ("No reminder" / "turn off
+            # recurrence"). Without this, an explicit null on an autosaved full-object
+            # PUT is silently dropped instead of clearing the field - see the bug this
+            # fixes: turning off an existing event's reminder/recurrence via edit was
+            # previously a no-op.
+            if k in ("reminder_minutes", "recurrence"):
+                updates[k] = None
+            continue
+        updates[k] = v
+    # Recompute the reminder scheduler fields when the timing (or recurrence, which the
+    # future recurrence-aware tick job keys off of) changed. Only reset the send state
+    # when the fire time actually moves (so unrelated edits don't re-fire an already-sent
+    # reminder).
+    if "start_time" in updates or "reminder_minutes" in updates or "recurrence" in updates:
         new_start = updates.get("start_time", existing.get("start_time"))
         new_minutes = updates.get("reminder_minutes", existing.get("reminder_minutes"))
         fields = compute_reminder_fields(new_start, new_minutes)
@@ -846,7 +970,9 @@ async def unregister_push_token(body: PushTokenBody, current_user: dict = Depend
 @api_router.post("/internal/push/tick")
 async def push_tick(request: Request):
     """Cron-driven (once/minute). Claims due reminders atomically, sends them via Expo in batches,
-    handles per-item results, and records tickets for later receipt resolution."""
+    handles per-item results, and records tickets for later receipt resolution. Recurring events
+    (see `recurrence`/`timezone`) are additionally rolled forward to their next occurrence at the
+    end - see step 5 below for why that step is restricted to this tick's own claimed batch."""
     _require_tick_secret(request)
     now = datetime.now(timezone.utc)
     now_iso = now.isoformat()
@@ -924,6 +1050,46 @@ async def push_tick(request: Request):
     if processed_event_ids:
         await db.events.update_many({"id": {"$in": list(processed_event_ids)}},
                                     {"$set": {"reminder_status": "sent"}})
+
+    # 5) Advance recurring reminders to their next occurrence.
+    #
+    # Operates ONLY on `claimed` - the exact in-memory list of event documents this
+    # tick invocation atomically owned via the find_one_and_update loop in step 2
+    # above. Deliberately NOT a fresh DB query (e.g. `find({"reminder_status": "sent"})`)
+    # to find "the recurring ones to advance": every event in `claimed` is already
+    # 'sent' by this point (either directly, in the no-active-tokens branch in step 3,
+    # or via the bulk update just above), so re-querying by status would let a second,
+    # overlapping tick match those same just-marked-sent events and race to advance
+    # them too - a possible double-advance (skipping an occurrence) or write race.
+    # The atomic claim in step 2 guarantees no two tick invocations ever claim the
+    # same event id, so restricting this step to `claimed` makes that race
+    # structurally impossible rather than merely unlikely. Each event is wrapped in
+    # its own try/except so one bad/corrupt recurrence rule can only strand that one
+    # event on terminal 'sent' (the same failure mode a non-recurring event already
+    # has today) instead of aborting the rest of the batch.
+    for ev in claimed:
+        if not ev.get("recurrence"):
+            continue  # non-recurring: already 'sent' above, byte-identical to pre-recurrence behavior
+        try:
+            recurrence = Recurrence(**ev["recurrence"])
+            # +1s so we don't re-match the instant that just fired.
+            next_dt = next_occurrence_on_or_after(
+                ev.get("start_time"), recurrence, ev.get("timezone"), now + timedelta(seconds=1),
+            )
+            if next_dt is None:
+                continue  # series ended (`until` passed, inclusive) - stays terminal 'sent'
+            new_fire_at = next_dt - timedelta(minutes=ev["reminder_minutes"])
+            await db.events.update_one(
+                {"id": ev["id"]},
+                {"$set": {
+                    "reminder_status": "pending",
+                    "reminder_fire_at": new_fire_at.isoformat(),
+                    "reminder_claimed_at": None,
+                }},
+            )
+        except Exception as e:
+            logger.error(f"push_tick: failed to advance recurring event {ev.get('id')}: {e}")
+
     if receipts:
         await db.push_receipts.insert_many(receipts)
     return {"claimed": len(claimed), "sent": len(processed_event_ids), "tickets": len(receipts)}

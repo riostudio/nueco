@@ -17,6 +17,7 @@ import { notesApi, eventsApi } from './api';
 import { encryptNoteForServer, decryptNoteFromServer, decryptNotesFromServer } from './crypto/noteCrypto';
 import { encryptEventForServer, decryptEventsFromServer } from './crypto/eventCrypto';
 import { incrementNoteCreatedCount } from './feedbackToast';
+import type { Recurrence } from './types';
 
 // ---- Types ----
 
@@ -39,7 +40,8 @@ export interface LocalNote {
   content: string;
   tags: any[];
   is_pinned: boolean;
-  linked_event_id?: string | null;
+  linked_event_id?: string | null; // Deprecated: use linked_event_ids. Kept for old clients/caches.
+  linked_event_ids?: string[];
   images: string[];
   attachments?: any[];      // blob-storage attachment metadata (Attachment[])
   user_id?: string;
@@ -59,6 +61,14 @@ export interface LocalEvent {
   linked_note_ids: string[];
   reminder_minutes?: number | null;
   device_calendar_event_id?: string | null;
+  recurrence?: Recurrence | null;
+  timezone?: string | null;
+  // Local-only: the id returned by `Notifications.scheduleNotificationAsync` for this
+  // event's reminder. Meaningful only on the device that scheduled it - never sent to or
+  // read from the server (see `event-editor.tsx`'s `scheduleReminder`/`cancelLocalNotification`,
+  // and the `fullSync` merge below, which re-attaches it after a server refresh would
+  // otherwise silently drop it since the server never stores/returns this field).
+  local_notification_id?: string | null;
   user_id?: string;
   created_at: string;
   _isLocal?: boolean;
@@ -312,6 +322,18 @@ export async function deleteLocalEvent(id: string): Promise<void> {
   await saveLocalEvents(events.filter(e => e.id !== id));
 }
 
+// Local-only patch: merges `local_notification_id` into the stored event without
+// enqueueing a sync-queue entry or touching the network - this field is never sent to
+// the server (see LocalEvent's comment above). Used by `event-editor.tsx` right after a
+// create/update completes, once the event's real (server or temp) id is known.
+export async function setLocalEventNotificationId(id: string, notificationId: string | null): Promise<void> {
+  const events = await getLocalEvents();
+  const idx = events.findIndex(e => e.id === id);
+  if (idx < 0) return;
+  events[idx] = { ...events[idx], local_notification_id: notificationId };
+  await saveLocalEvents(events);
+}
+
 // Offline-first event create/update/delete - same shape as the note operations above (local
 // write first, then enqueue, then push now if online), so events get the same durable retry
 // queue notes already had. `writeToDeviceCalendar()` in event-editor.tsx still runs before these
@@ -561,7 +583,16 @@ export async function fullSync(): Promise<void> {
     if (eventsResult.status === 'fulfilled') {
       const decryptedEvents = await decryptEventsFromServer(eventsResult.value);
       const localEvents = await getLocalEvents();
-      const mergedEvents: LocalEvent[] = [...decryptedEvents.map((e: any) => ({ ...e, _isLocal: false }))];
+      const localEventsById = new Map(localEvents.map((e) => [e.id, e]));
+      const mergedEvents: LocalEvent[] = decryptedEvents.map((e: any) => ({
+        ...e,
+        _isLocal: false,
+        // `local_notification_id` is device-local-only and never round-trips through the
+        // server - without carrying it over from the previous local copy, this fullSync
+        // would silently wipe it and orphan the still-scheduled OS notification (nothing
+        // would be able to find its id to cancel/reschedule it again).
+        local_notification_id: localEventsById.get(e.id)?.local_notification_id ?? null,
+      }));
 
       // Same preservation as the notes merge above - without this, an event created/edited
       // offline (still queued, not yet on the server) would get silently wiped the next time

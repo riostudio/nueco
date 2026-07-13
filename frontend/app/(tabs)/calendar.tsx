@@ -10,6 +10,7 @@ import { decryptEventsFromServer } from '../../src/crypto/eventCrypto';
 import { CalendarEvent } from '../../src/types';
 import { MONTH_NAMES, DAY_NAMES, C, radius, borderWidth } from '../../src/theme';
 import { UserAvatar } from '../../src/auth';
+import { occursOnDay } from '../../src/recurrence';
 
 function formatEventTime(iso: string): string {
   const d = new Date(iso);
@@ -75,8 +76,15 @@ export default function CalendarScreen() {
     return new Date(e.start_time) <= dayEnd && new Date(e.end_time) >= dayStart;
   };
 
+  // Recurring events use the display-only occursOnDay helper (day-granularity, not the
+  // source of truth for reminder firing) instead of the plain start/end range check -
+  // eventCoversDay is left untouched for non-recurring events so their day-matching
+  // behavior stays byte-identical to before.
+  const eventOccursOnDay = (e: CalendarEvent, y: number, m: number, d: number) =>
+    e.recurrence ? occursOnDay(e, y, m, d) : eventCoversDay(e, y, m, d);
+
   const hasEvents = (day: number) =>
-    events.some((e) => eventCoversDay(e, year, month, day));
+    events.some((e) => eventOccursOnDay(e, year, month, day));
 
   const today = new Date();
   const isToday = (day: number) =>
@@ -89,7 +97,7 @@ export default function CalendarScreen() {
   const selectDay = (day: number) => setSelectedDate(new Date(year, month, day));
 
   const selectedDayEvents = events
-    .filter((e) => eventCoversDay(e, selYear, selMonth, selDay))
+    .filter((e) => eventOccursOnDay(e, selYear, selMonth, selDay))
     .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
 
   const rows: (number | null)[][] = [];
@@ -229,21 +237,26 @@ const s = StyleSheet.create({
   headerTitle: { fontSize: 34, fontWeight: '700', color: C.text },
   monthNav: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 24, paddingVertical: 8,
+    paddingHorizontal: 24, paddingVertical: 4,
   },
   navBtn: { width: 56, height: 56, justifyContent: 'center', alignItems: 'center' },
   monthText: { fontSize: 24, fontWeight: '600', color: C.text },
-  dayNamesRow: { flexDirection: 'row', paddingHorizontal: 12, marginBottom: 4 },
+  dayNamesRow: { flexDirection: 'row', paddingHorizontal: 12, marginBottom: 2 },
   dayName: {
     flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '600',
-    color: C.textSec, paddingVertical: 4,
+    color: C.textSec, paddingVertical: 2,
   },
   loadingGrid: { height: 240, justifyContent: 'center', alignItems: 'center' },
   grid: { paddingHorizontal: 12 },
   gridRow: { flexDirection: 'row' },
   dayCell: {
-    flex: 1, aspectRatio: 1, justifyContent: 'center', alignItems: 'center',
-    margin: 2, borderRadius: 12,
+    // Slightly shorter-than-square (was aspectRatio: 1) and a tighter margin (was 2) -
+    // the month grid now sits above a full per-day event list rather than just a count,
+    // so trimming ~18% off each cell's height plus half the inter-cell gap across 6 rows
+    // meaningfully increases how much of that list fits on screen without scrolling,
+    // while cells stay comfortably tappable (44pt+ touch target on typical phone widths).
+    flex: 1, aspectRatio: 0.82, justifyContent: 'center', alignItems: 'center',
+    margin: 1, borderRadius: 12,
   },
   selectedDay: { backgroundColor: C.primary },
   todayDay: { backgroundColor: C.surfaceHi, borderWidth: borderWidth.thick, borderColor: C.primary },
@@ -253,7 +266,7 @@ const s = StyleSheet.create({
   dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.primary, marginTop: 2 },
   dotSelected: { backgroundColor: C.primaryFg },
   scrollContent: { paddingBottom: 100 },
-  selectedDateHeader: { marginHorizontal: 24, marginTop: 20, marginBottom: 10 },
+  selectedDateHeader: { marginHorizontal: 24, marginTop: 12, marginBottom: 6 },
   selectedDate: { fontSize: 22, fontWeight: '600', color: C.text },
   eventCard: {
     flexDirection: 'row', alignItems: 'center',

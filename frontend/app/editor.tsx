@@ -15,7 +15,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as WebBrowser from 'expo-web-browser';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { notesApi, eventsApi, transcribeApi, textProcessApi, attachmentsApi, uploadAttachmentWithProgress, type UploadFile } from '../src/api';
-import { decryptEventFromServer, decryptEventsFromServer } from '../src/crypto/eventCrypto';
+import { decryptEventsFromServer } from '../src/crypto/eventCrypto';
 import { RadialProgress, SharedPostCard, Button } from '../src/components';
 import { decryptNoteFromServer } from '../src/crypto/noteCrypto';
 import { createNoteOffline, updateNoteOffline, getLocalNotes, processSyncQueue } from '../src/offlineSync';
@@ -26,6 +26,7 @@ import { plainTextFromContent } from '../src/textContent';
 import { RichText, useEditorBridge, useEditorContent, useBridgeState } from '@10play/tentap-editor';
 import { Tag, CalendarEvent, Attachment } from '../src/types';
 import { TAG_COLORS, C, radius } from '../src/theme';
+import { formatRecurrenceSummary } from '../src/recurrence';
 import { setNewNoteId } from '../src/newNoteSignal';
 import { 
   authStorage, 
@@ -194,8 +195,8 @@ export default function EditorScreen() {
   const [title, setTitle] = useState('');
   const [tags, setTags] = useState<Tag[]>([]);
   const [isPinned, setIsPinned] = useState(false);
-  const [linkedEventId, setLinkedEventId] = useState<string | null>(null);
-  const [linkedEvent, setLinkedEvent] = useState<CalendarEvent | null>(null);
+  const [linkedEventIds, setLinkedEventIds] = useState<string[]>([]);
+  const [linkedEvents, setLinkedEvents] = useState<CalendarEvent[]>([]);
   const [showEventPicker, setShowEventPicker] = useState(false);
   const [pickerEvents, setPickerEvents] = useState<CalendarEvent[]>([]);
   const [loadingPickerEvents, setLoadingPickerEvents] = useState(false);
@@ -270,7 +271,7 @@ export default function EditorScreen() {
   const contentRef = useRef('');
   const tagsRef = useRef(tags);
   const isPinnedRef = useRef(isPinned);
-  const linkedEventIdRef = useRef<string | null>(linkedEventId);
+  const linkedEventIdsRef = useRef<string[]>(linkedEventIds);
   const imagesRef = useRef<string[]>(images);
   const attachmentsRef = useRef<Attachment[]>(attachments);
   const sourcePostRef = useRef<SourcePost | null>(sourcePost);
@@ -292,7 +293,7 @@ export default function EditorScreen() {
   useEffect(() => { titleRef.current = title; }, [title]);
   useEffect(() => { tagsRef.current = tags; }, [tags]);
   useEffect(() => { isPinnedRef.current = isPinned; }, [isPinned]);
-  useEffect(() => { linkedEventIdRef.current = linkedEventId; }, [linkedEventId]);
+  useEffect(() => { linkedEventIdsRef.current = linkedEventIds; }, [linkedEventIds]);
   useEffect(() => { imagesRef.current = images; }, [images]);
   useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
   useEffect(() => { sourcePostRef.current = sourcePost; }, [sourcePost]);
@@ -492,20 +493,26 @@ export default function EditorScreen() {
       }
       setTags(note.tags);
       setIsPinned(note.is_pinned);
-      setLinkedEventId(note.linked_event_id);
+      // Defensive fallback: prefer the plural field, but fall back to the deprecated singular one
+      // in case a transitional/cached copy only has that populated (the server already normalizes
+      // and dual-writes both, so this is belt-and-suspenders, not the expected path).
+      const ids: string[] = note.linked_event_ids?.length
+        ? note.linked_event_ids
+        : (note.linked_event_id ? [note.linked_event_id] : []);
+      setLinkedEventIds(ids);
       setImages(note.images || []);
       setAttachments(note.attachments || []);
       noteIdRef.current = note.id;
       isCreatedRef.current = true;
       setNoteExists(true);
-      
-      // Fetch linked event details if exists
-      if (note.linked_event_id) {
+
+      // Fetch linked event details if any, in a single batch request.
+      if (ids.length > 0) {
         try {
-          const event = await decryptEventFromServer(await eventsApi.get(note.linked_event_id));
-          setLinkedEvent(event);
+          const events = await decryptEventsFromServer<CalendarEvent>(await eventsApi.getBatch(ids));
+          setLinkedEvents(events);
         } catch (e) {
-          console.error('Failed to load linked event:', e);
+          console.error('Failed to load linked events:', e);
         }
       }
     } catch (e) {
@@ -515,17 +522,30 @@ export default function EditorScreen() {
     }
   };
 
-  // Fetch event when linkedEventId changes (e.g., after creating event)
+  // Fetch any linked events not yet resolved (e.g. right after linkedEventIds changes but before
+  // the setter that pairs it with linkedEvents has run) and drop any resolved events no longer
+  // linked. A defensive backstop - every path that changes linkedEventIds also sets/merges
+  // linkedEvents itself, but this keeps the two arrays from drifting out of sync.
   useEffect(() => {
-    if (linkedEventId && !linkedEvent) {
-      eventsApi.get(linkedEventId)
-        .then(decryptEventFromServer)
-        .then(event => setLinkedEvent(event))
-        .catch(e => console.error('Failed to load event:', e));
-    } else if (!linkedEventId) {
-      setLinkedEvent(null);
+    if (linkedEventIds.length === 0) {
+      setLinkedEvents(prev => (prev.length ? [] : prev));
+      return;
     }
-  }, [linkedEventId]);
+    setLinkedEvents(prev => {
+      const stale = prev.some(ev => !linkedEventIds.includes(ev.id));
+      return stale ? prev.filter(ev => linkedEventIds.includes(ev.id)) : prev;
+    });
+    const missingIds = linkedEventIds.filter(id => !linkedEvents.some(ev => ev.id === id));
+    if (missingIds.length === 0) return;
+    eventsApi.getBatch(missingIds)
+      .then(decryptEventsFromServer<CalendarEvent>)
+      .then(fetched => setLinkedEvents(prev => [...prev.filter(ev => linkedEventIds.includes(ev.id)), ...fetched]))
+      .catch(e => console.error('Failed to load event:', e));
+    // `linkedEvents` intentionally excluded from deps below: this effect only needs to react to
+    // `linkedEventIds` changing, and reads the current `linkedEvents` value each run via closure -
+    // adding it as a dep would re-run on every fetch this effect itself triggers.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkedEventIds]);
 
   // Refresh note and linked event data when screen comes back into focus
   // This ensures event details are shown after creating/editing an event
@@ -539,43 +559,50 @@ export default function EditorScreen() {
             // Clear it immediately
             await AsyncStorage.removeItem('pendingLinkedEventId');
             // Track event scheduling if this is a new linked event
-            if (!linkedEventIdRef.current) {
+            if (!linkedEventIdsRef.current.includes(pendingEventId)) {
               trackNoteEventScheduled();
             }
-            // Set the linked event ID
-            setLinkedEventId(pendingEventId);
-            // Fetch the event details
-            const event = await decryptEventFromServer(await eventsApi.get(pendingEventId));
-            setLinkedEvent(event);
+            // Append the newly scheduled event id (never replace - a note can carry many).
+            const nextIds = Array.from(new Set([...linkedEventIdsRef.current, pendingEventId]));
+            setLinkedEventIds(nextIds);
+            // Fetch all linked events' details in one batch.
+            const events = await decryptEventsFromServer<CalendarEvent>(await eventsApi.getBatch(nextIds));
+            setLinkedEvents(events);
             return;
           }
         } catch (e) {
           console.error('Error checking pending event:', e);
         }
-        
-        // If we have a synced note, reload it to get the latest linked_event_id.
+
+        // If we have a synced note, reload it to get the latest linked_event_ids.
         // Skip for not-yet-synced local notes (no server row yet → would 404).
         if (noteIdRef.current && isCreatedRef.current && !noteIdRef.current.startsWith('local_')) {
           try {
             const note = await notesApi.get(noteIdRef.current);
-            if (note.linked_event_id) {
-              // Track event scheduling if this is a new linked event
-              if (!linkedEventIdRef.current && note.linked_event_id) {
+            const ids: string[] = note.linked_event_ids?.length
+              ? note.linked_event_ids
+              : (note.linked_event_id ? [note.linked_event_id] : []);
+            if (ids.length > 0) {
+              // Track event scheduling if any new linked event id showed up
+              if (ids.some((id: string) => !linkedEventIdsRef.current.includes(id))) {
                 trackNoteEventScheduled();
               }
-              setLinkedEventId(note.linked_event_id);
-              // Fetch the event details
-              const event = await decryptEventFromServer(await eventsApi.get(note.linked_event_id));
-              setLinkedEvent(event);
+              setLinkedEventIds(ids);
+              // Fetch all linked events' details in one batch.
+              const events = await decryptEventsFromServer<CalendarEvent>(await eventsApi.getBatch(ids));
+              setLinkedEvents(events);
+            } else if (linkedEventIdsRef.current.length > 0) {
+              setLinkedEventIds([]);
+              setLinkedEvents([]);
             }
           } catch (e) {
             console.error('Failed to refresh note data:', e);
           }
-        } else if (linkedEventId) {
-          // Just refresh event if we already have a linkedEventId
+        } else if (linkedEventIdsRef.current.length > 0) {
+          // Just refresh events if we already have linkedEventIds
           try {
-            const event = await decryptEventFromServer(await eventsApi.get(linkedEventId));
-            setLinkedEvent(event);
+            const events = await decryptEventsFromServer<CalendarEvent>(await eventsApi.getBatch(linkedEventIdsRef.current));
+            setLinkedEvents(events);
           } catch (e) {
             console.error('Failed to refresh event:', e);
           }
@@ -583,7 +610,10 @@ export default function EditorScreen() {
       };
       
       refreshData();
-    }, [linkedEventId])
+      // linkedEventIds isn't read directly in the body above (linkedEventIdsRef.current is,
+      // which is always fresh) - deps intentionally empty so this doesn't re-register every time
+      // the array changes.
+    }, [])
   );
 
   // Pull the newest HTML straight from the editor bridge. The reactive contentRef lags by the
@@ -618,7 +648,10 @@ export default function EditorScreen() {
       content: contentRef.current + serializeSourcePost(sourcePostRef.current, thumbInImages0Ref.current),
       tags: tagsRef.current,
       is_pinned: isPinnedRef.current,
-      linked_event_id: linkedEventIdRef.current,
+      // linked_event_ids is authoritative; linked_event_id (deprecated, singular) rides along
+      // dual-written for any not-yet-updated client/cache that only reads the old field.
+      linked_event_id: linkedEventIdsRef.current[0] ?? null,
+      linked_event_ids: linkedEventIdsRef.current,
       images: imagesRef.current,
       attachments: attachmentsRef.current,
     };
@@ -629,7 +662,7 @@ export default function EditorScreen() {
       setNoteExists(true);
       setNewNoteId(created.id); // let the notes list play a one-time "newly created" glow on this card
       trackNoteCreated({
-        has_scheduled_event: !!linkedEventIdRef.current,
+        has_scheduled_event: linkedEventIdsRef.current.length > 0,
         has_image_attached: imagesRef.current.length > 0,
         is_shared: isSharedRef.current,
       });
@@ -661,7 +694,7 @@ export default function EditorScreen() {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     await syncLatestContent(); // capture the very last keystrokes before persisting
     try {
-      const hasContent = !!(titleRef.current || contentRef.current || linkedEventIdRef.current || imagesRef.current.length > 0 || attachmentsRef.current.length > 0 || sourcePostRef.current);
+      const hasContent = !!(titleRef.current || contentRef.current || linkedEventIdsRef.current.length > 0 || imagesRef.current.length > 0 || attachmentsRef.current.length > 0 || sourcePostRef.current);
       // Persist locally; only create a brand-new note if it actually has content.
       if (isCreatedRef.current ? !!noteIdRef.current : hasContent) {
         await persistLocal({ push: true });
@@ -718,7 +751,7 @@ export default function EditorScreen() {
 
   const handleShare = async () => {
     const plainContent = plainTextFromContent(contentRef.current);
-    if (!title && !plainContent && !linkedEvent) {
+    if (!title && !plainContent && linkedEvents.length === 0) {
       Alert.alert('Nothing to Share', 'Please add a title or content to your note first.');
       return;
     }
@@ -751,22 +784,27 @@ export default function EditorScreen() {
       shareText += `${sourcePost.url}\n`;
     }
 
-    // Add linked event details with Event header
-    if (linkedEvent) {
-      shareText += '\n📅 Event\n\n';
-      shareText += `Title: ${linkedEvent.title}\n`;
-      shareText += `Start: ${formatEventDateTime(linkedEvent.start_time)}\n`;
-      shareText += `End: ${formatEventDateTime(linkedEvent.end_time)}\n`;
-      if (linkedEvent.location) {
-        shareText += `Location: ${linkedEvent.location}\n`;
+    // Add linked event details with an Event header - one block per linked event (numbered
+    // when there's more than one, so multiple reminders don't blur together in the share text).
+    linkedEvents.forEach((ev, i) => {
+      shareText += `\n📅 Event${linkedEvents.length > 1 ? ` ${i + 1}` : ''}\n\n`;
+      shareText += `Title: ${ev.title}\n`;
+      shareText += `Start: ${formatEventDateTime(ev.start_time)}\n`;
+      shareText += `End: ${formatEventDateTime(ev.end_time)}\n`;
+      if (ev.location) {
+        shareText += `Location: ${ev.location}\n`;
       }
-      if (linkedEvent.reminder_minutes) {
-        shareText += `Reminder: ${formatReminderMinutes(linkedEvent.reminder_minutes)}\n`;
+      if (ev.reminder_minutes) {
+        shareText += `Reminder: ${formatReminderMinutes(ev.reminder_minutes)}\n`;
       }
-      if (linkedEvent.description) {
-        shareText += `Description: ${linkedEvent.description}\n`;
+      const recurrenceSummary = formatRecurrenceSummary(ev.recurrence);
+      if (recurrenceSummary) {
+        shareText += `${recurrenceSummary}\n`;
       }
-    }
+      if (ev.description) {
+        shareText += `Description: ${ev.description}\n`;
+      }
+    });
 
     // Append secure download links for attachments (valid ~7 days)
     if (attachments.length > 0) {
@@ -1105,18 +1143,22 @@ export default function EditorScreen() {
     attachmentsApi.remove(att.key).catch(() => {});
   };
 
-  // Tap the linked-event card's delete control -> choose to unlink or fully delete.
-  const handleRemoveLinkedEvent = () => {
-    if (!linkedEvent) return;
-    const event = linkedEvent;
+  // Tap a linked-event card's delete control -> choose to unlink or fully delete just that event.
+  const handleRemoveLinkedEvent = (eventId: string) => {
+    const event = linkedEvents.find(ev => ev.id === eventId);
+    if (!event) return;
+    const remainingIds = linkedEventIds.filter(id => id !== eventId);
 
     // Persist the cleared link to the server BEFORE updating local state. The
-    // focus refresh re-reads the note on every focus/linkedEventId change, so
+    // focus refresh re-reads the note on every focus/linkedEventIds change, so
     // relying on the debounced autosave would race it and re-link the event
     // from the still-stale server value.
     const clearLinkOnServer = async () => {
       if (noteIdRef.current && isCreatedRef.current) {
-        await updateNoteOffline(noteIdRef.current, { linked_event_id: null });
+        await updateNoteOffline(noteIdRef.current, {
+          linked_event_ids: remainingIds,
+          linked_event_id: remainingIds[0] ?? null,
+        });
       }
     };
 
@@ -1135,8 +1177,8 @@ export default function EditorScreen() {
               Alert.alert('Error', 'Could not unlink the event. Please try again.');
               return;
             }
-            setLinkedEventId(null);
-            setLinkedEvent(null);
+            setLinkedEventIds(remainingIds);
+            setLinkedEvents(prev => prev.filter(ev => ev.id !== eventId));
             // Best-effort: drop this note from the event's linked_note_ids
             try {
               const remaining = (event.linked_note_ids || []).filter(id => id !== noteIdRef.current);
@@ -1156,21 +1198,22 @@ export default function EditorScreen() {
               Alert.alert('Error', 'Could not delete the event. Please try again.');
               return;
             }
-            setLinkedEventId(null);
-            setLinkedEvent(null);
+            setLinkedEventIds(remainingIds);
+            setLinkedEvents(prev => prev.filter(ev => ev.id !== eventId));
           },
         },
       ],
     );
   };
 
-  // Open a picker of existing events to link to this note.
+  // Open a picker of existing events to link to this note. Already-linked events are excluded -
+  // linking is additive now, but the same event still shouldn't be linkable twice.
   const openEventPicker = async () => {
     setShowEventPicker(true);
     setLoadingPickerEvents(true);
     try {
       const events = await decryptEventsFromServer<CalendarEvent>(await eventsApi.getAll());
-      setPickerEvents(events);
+      setPickerEvents(events.filter(ev => !linkedEventIds.includes(ev.id)));
     } catch (e) {
       console.error('Load events for picker failed:', e);
       setPickerEvents([]);
@@ -1179,10 +1222,11 @@ export default function EditorScreen() {
     }
   };
 
+  // Append (never replace) a linked event picked from the existing-events list.
   const linkExistingEvent = async (event: CalendarEvent) => {
     setShowEventPicker(false);
-    setLinkedEventId(event.id);
-    setLinkedEvent(event);
+    setLinkedEventIds(prev => (prev.includes(event.id) ? prev : [...prev, event.id]));
+    setLinkedEvents(prev => (prev.some(ev => ev.id === event.id) ? prev : [...prev, event]));
     triggerAutoSave();
     // Best-effort: add this note to the event's linked_note_ids (only if the note exists)
     try {
@@ -1225,7 +1269,7 @@ export default function EditorScreen() {
     await syncLatestContent(); // capture the very last keystrokes before the empty-check + save
     // Nothing to save? (also save if there's a linked event, images, or attachments -
     // e.g. a photo/audio/video share with no typed title/body)
-    if (!title.trim() && !plainTextFromContent(contentRef.current) && !linkedEventIdRef.current
+    if (!title.trim() && !plainTextFromContent(contentRef.current) && linkedEventIdsRef.current.length === 0
         && imagesRef.current.length === 0 && attachmentsRef.current.length === 0
         && !sourcePostRef.current) {
       router.replace('/(tabs)');
@@ -1521,16 +1565,18 @@ export default function EditorScreen() {
             </View>
           )}
 
-          {/* Calendar Link / Event Details */}
-          {linkedEvent ? (
+          {/* Calendar Links / Event Details - a note can carry any number of linked events now,
+              each rendered as its own card (was capped at one). */}
+          {linkedEvents.map((ev) => (
             <TouchableOpacity
-              testID="linked-event-card"
+              key={ev.id}
+              testID={`linked-event-card-${ev.id}`}
               style={s.eventCard}
               onPress={() =>
                 router.push({
                   pathname: '/event-editor',
                   params: {
-                    eventId: linkedEvent.id,
+                    eventId: ev.id,
                     noteId: noteIdRef.current || 'new',
                   },
                 })
@@ -1540,8 +1586,8 @@ export default function EditorScreen() {
                 <MaterialIcons name="event" size={24} color={C.secondary} />
                 <Text style={s.eventHeaderText}>Linked Event</Text>
                 <TouchableOpacity
-                  testID="remove-linked-event-btn"
-                  onPress={handleRemoveLinkedEvent}
+                  testID={`remove-linked-event-btn-${ev.id}`}
+                  onPress={() => handleRemoveLinkedEvent(ev.id)}
                   hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                   style={{ paddingHorizontal: 4 }}
                 >
@@ -1550,72 +1596,82 @@ export default function EditorScreen() {
                 <MaterialIcons name="chevron-right" size={24} color={C.borderSub} />
               </View>
               <View style={s.eventDetails}>
-                <Text style={s.eventTitle}>{linkedEvent.title}</Text>
+                <Text style={s.eventTitle}>{ev.title}</Text>
                 <View style={s.eventTimeRow}>
                   <MaterialIcons name="schedule" size={18} color={C.textSec} />
                   <Text style={s.eventTimeText}>
-                    {formatEventDateTime(linkedEvent.start_time)}
+                    {formatEventDateTime(ev.start_time)}
                   </Text>
                 </View>
                 <View style={s.eventTimeRow}>
                   <MaterialIcons name="schedule" size={18} color={C.textSec} />
                   <Text style={s.eventTimeText}>
-                    to {formatEventDateTime(linkedEvent.end_time)}
+                    to {formatEventDateTime(ev.end_time)}
                   </Text>
                 </View>
-                {linkedEvent.location ? (
+                {ev.location ? (
                   <View style={s.eventTimeRow}>
                     <MaterialIcons name="place" size={18} color={C.textSec} />
                     <Text style={s.eventTimeText} numberOfLines={1}>
-                      {linkedEvent.location}
+                      {ev.location}
                     </Text>
                   </View>
                 ) : null}
-                {linkedEvent.reminder_minutes ? (
+                {ev.reminder_minutes ? (
                   <View style={s.eventTimeRow}>
                     <MaterialIcons name="notifications" size={18} color={C.primary} />
                     <Text style={s.eventReminderText}>
-                      Reminder: {formatReminderMinutes(linkedEvent.reminder_minutes)}
+                      Reminder: {formatReminderMinutes(ev.reminder_minutes)}
                     </Text>
                   </View>
                 ) : null}
-                {linkedEvent.description ? (
+                {formatRecurrenceSummary(ev.recurrence) ? (
+                  <View style={s.eventTimeRow}>
+                    <MaterialIcons name="repeat" size={18} color={C.primary} />
+                    <Text style={s.eventReminderText}>
+                      {formatRecurrenceSummary(ev.recurrence)}
+                    </Text>
+                  </View>
+                ) : null}
+                {ev.description ? (
                   <Text style={s.eventDescription} numberOfLines={2}>
-                    {linkedEvent.description}
+                    {ev.description}
                   </Text>
                 ) : null}
               </View>
             </TouchableOpacity>
-          ) : (
-            <View style={s.calBtnRow}>
-              <Button
-                testID="schedule-event-btn"
-                variant="box"
-                layout="row"
-                icon="calendar-today"
-                label="Schedule"
-                onPress={() =>
-                  router.push({
-                    pathname: '/event-editor',
-                    params: {
-                      noteId: noteIdRef.current || 'new',
-                      noteTitle: title,
-                    },
-                  })
-                }
-                style={s.calBtnBox}
-              />
-              <Button
-                testID="link-event-btn"
-                variant="box"
-                layout="row"
-                icon="link"
-                label="Link an event"
-                onPress={openEventPicker}
-                style={s.calBtnBox}
-              />
-            </View>
-          )}
+          ))}
+
+          {/* Schedule/Link row - always visible now (was hidden once one event was linked), so
+              adding more reminders to the same note is always available. */}
+          <View style={s.calBtnRow}>
+            <Button
+              testID="schedule-event-btn"
+              variant="box"
+              layout="row"
+              icon="calendar-today"
+              label={linkedEvents.length > 0 ? 'Add Reminder' : 'Schedule'}
+              onPress={() =>
+                router.push({
+                  pathname: '/event-editor',
+                  params: {
+                    noteId: noteIdRef.current || 'new',
+                    noteTitle: title,
+                  },
+                })
+              }
+              style={s.calBtnBox}
+            />
+            <Button
+              testID="link-event-btn"
+              variant="box"
+              layout="row"
+              icon="link"
+              label="Link an event"
+              onPress={openEventPicker}
+              style={s.calBtnBox}
+            />
+          </View>
 
           <View style={{ height: 120 }} />
         </ScrollView>
