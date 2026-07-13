@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView, useWindowDimensions,
+  View, Text, StyleSheet, TouchableOpacity, ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -23,11 +23,6 @@ function formatEventTime(iso: string): string {
 
 export default function CalendarScreen() {
   const router = useRouter();
-  const { height: windowHeight } = useWindowDimensions();
-  // Grid gets a guaranteed floor of half the screen height, regardless of how many rows this
-  // month needs (5 vs 6) - rows below stretch to fill it evenly (see gridRow's flex:1), so the
-  // month view stays visually substantial even after the spacing tightening passes.
-  const gridMinHeight = windowHeight * 0.5;
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [events, setEvents] = useState<CalendarEvent[]>([]);
@@ -138,7 +133,7 @@ export default function CalendarScreen() {
 
         {/* Calendar Grid - always rendered instantly (the grid is derived from the date); event
             day-markers fill in when events load, instead of replacing the whole grid with a spinner. */}
-        <View style={[s.grid, { minHeight: gridMinHeight }]}>
+        <View style={s.grid}>
           {rows.map((row, ri) => (
             <View key={ri} style={s.gridRow}>
               {row.map((day, ci) => (
@@ -236,33 +231,29 @@ const s = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 24,
-    paddingTop: 8,
-    paddingBottom: 8
+    paddingTop: 12,
+    paddingBottom: 12
   },
   headerTitle: { fontSize: 34, fontWeight: '700', color: C.text },
   monthNav: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 24, paddingVertical: 2,
+    paddingHorizontal: 24, paddingVertical: 8,
   },
-  navBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
+  navBtn: { width: 56, height: 56, justifyContent: 'center', alignItems: 'center' },
   monthText: { fontSize: 24, fontWeight: '600', color: C.text },
-  dayNamesRow: { flexDirection: 'row', paddingHorizontal: 12, marginBottom: 2 },
+  dayNamesRow: { flexDirection: 'row', paddingHorizontal: 12, marginBottom: 4 },
   dayName: {
     flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '600',
-    color: C.textSec, paddingVertical: 1,
+    color: C.textSec, paddingVertical: 4,
   },
   loadingGrid: { height: 240, justifyContent: 'center', alignItems: 'center' },
-  // paddingHorizontal only - vertical size now comes from `gridMinHeight` (inline style, 50% of
-  // screen height) via flexDirection: 'column', with each row (flex:1 below) stretching to fill
-  // it evenly regardless of whether the month has 5 or 6 rows.
-  grid: { paddingHorizontal: 12, flexDirection: 'column' },
-  gridRow: { flex: 1, flexDirection: 'row' },
+  grid: { paddingHorizontal: 12 },
+  gridRow: { flexDirection: 'row' },
   dayCell: {
-    // Height comes from the row's flex share of `gridMinHeight`, not aspectRatio - the grid's
-    // total height is now a floor (50% of screen), so a fixed ratio would fight that instead of
-    // filling it. Cells stay a comfortable touch target on typical phone widths regardless.
-    flex: 1, justifyContent: 'center', alignItems: 'center',
-    margin: 1, borderRadius: 12,
+    // Original was aspectRatio: 1 (square). 1 / 0.75 = 1.33 makes each cell 25% shorter for the
+    // same width - the one deliberate, precisely-sized change from the original layout.
+    flex: 1, aspectRatio: 1.33, justifyContent: 'center', alignItems: 'center',
+    margin: 2, borderRadius: 12,
   },
   selectedDay: { backgroundColor: C.primary },
   todayDay: { backgroundColor: C.surfaceHi, borderWidth: borderWidth.thick, borderColor: C.primary },
@@ -272,14 +263,14 @@ const s = StyleSheet.create({
   dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.primary, marginTop: 2 },
   dotSelected: { backgroundColor: C.primaryFg },
   scrollContent: { paddingBottom: 100 },
-  selectedDateHeader: { marginHorizontal: 24, marginTop: 8, marginBottom: 4 },
+  selectedDateHeader: { marginHorizontal: 24, marginTop: 20, marginBottom: 10 },
   selectedDate: { fontSize: 22, fontWeight: '600', color: C.text },
   eventCard: {
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: C.surface, borderRadius: radius.md,
-    paddingVertical: 10, paddingHorizontal: 16,
+    paddingVertical: 12, paddingHorizontal: 16,
     borderWidth: borderWidth.regular, borderColor: C.border,
-    marginHorizontal: 24, marginBottom: 8,
+    marginHorizontal: 24, marginBottom: 10,
   },
   eventTimeCol: { marginRight: 14, alignItems: 'flex-start', minWidth: 64 },
   timeStart: { fontSize: 15, fontWeight: '700', color: C.secondary },
