@@ -328,7 +328,7 @@ export default function NotesScreen() {
     const isGlow = note.id === glowNoteId;
     const CardTag: any = isGlow ? AnimatedTouchable : TouchableOpacity;
     const glowStyle = isGlow
-      ? { borderColor: glowAnim.interpolate({ inputRange: [0, 1], outputRange: [note.is_pinned ? C.primary : C.borderSub, C.success] }) }
+      ? { borderColor: glowAnim.interpolate({ inputRange: [0, 1], outputRange: [note.is_pinned ? C.primary : C.border, C.success] }) }
       : null;
 
     return (
@@ -595,7 +595,7 @@ const s = StyleSheet.create({
   section: { fontSize: 18, fontWeight: '600', color: C.textSec, marginBottom: 8, marginTop: 4 },
   card: {
     backgroundColor: C.surface, borderRadius: radius.md, padding: 12,
-    borderWidth: borderWidth.regular, borderColor: C.borderSub, marginBottom: 10,
+    borderWidth: borderWidth.regular, borderColor: C.border, marginBottom: 10,
   },
   pinnedCard: { borderColor: C.primary, backgroundColor: C.surfaceHi },
   cardHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
