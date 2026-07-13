@@ -226,36 +226,34 @@ export default function CalendarScreen() {
 
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: C.bg },
-  header: { 
-    flexDirection: 'row', 
-    justifyContent: 'space-between', 
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 24, 
-    paddingTop: 12, 
-    paddingBottom: 12 
+    paddingHorizontal: 24,
+    paddingTop: 8,
+    paddingBottom: 8
   },
   headerTitle: { fontSize: 34, fontWeight: '700', color: C.text },
   monthNav: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 24, paddingVertical: 4,
+    paddingHorizontal: 24, paddingVertical: 2,
   },
-  navBtn: { width: 56, height: 56, justifyContent: 'center', alignItems: 'center' },
+  navBtn: { width: 44, height: 44, justifyContent: 'center', alignItems: 'center' },
   monthText: { fontSize: 24, fontWeight: '600', color: C.text },
   dayNamesRow: { flexDirection: 'row', paddingHorizontal: 12, marginBottom: 2 },
   dayName: {
     flex: 1, textAlign: 'center', fontSize: 16, fontWeight: '600',
-    color: C.textSec, paddingVertical: 2,
+    color: C.textSec, paddingVertical: 1,
   },
   loadingGrid: { height: 240, justifyContent: 'center', alignItems: 'center' },
   grid: { paddingHorizontal: 12 },
   gridRow: { flexDirection: 'row' },
   dayCell: {
-    // Slightly shorter-than-square (was aspectRatio: 1) and a tighter margin (was 2) -
-    // the month grid now sits above a full per-day event list rather than just a count,
-    // so trimming ~18% off each cell's height plus half the inter-cell gap across 6 rows
-    // meaningfully increases how much of that list fits on screen without scrolling,
-    // while cells stay comfortably tappable (44pt+ touch target on typical phone widths).
-    flex: 1, aspectRatio: 0.82, justifyContent: 'center', alignItems: 'center',
+    // Second tightening pass (was aspectRatio 0.82, navBtn 56, paddingVertical 12/4) - still
+    // felt too tall against the day's event list below it. Cells stay a comfortable 44pt+
+    // touch target on typical phone widths even at this ratio.
+    flex: 1, aspectRatio: 0.68, justifyContent: 'center', alignItems: 'center',
     margin: 1, borderRadius: 12,
   },
   selectedDay: { backgroundColor: C.primary },
@@ -266,14 +264,14 @@ const s = StyleSheet.create({
   dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.primary, marginTop: 2 },
   dotSelected: { backgroundColor: C.primaryFg },
   scrollContent: { paddingBottom: 100 },
-  selectedDateHeader: { marginHorizontal: 24, marginTop: 12, marginBottom: 6 },
+  selectedDateHeader: { marginHorizontal: 24, marginTop: 8, marginBottom: 4 },
   selectedDate: { fontSize: 22, fontWeight: '600', color: C.text },
   eventCard: {
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: C.surface, borderRadius: radius.md,
-    paddingVertical: 12, paddingHorizontal: 16,
+    paddingVertical: 10, paddingHorizontal: 16,
     borderWidth: borderWidth.regular, borderColor: C.border,
-    marginHorizontal: 24, marginBottom: 10,
+    marginHorizontal: 24, marginBottom: 8,
   },
   eventTimeCol: { marginRight: 14, alignItems: 'flex-start', minWidth: 64 },
   timeStart: { fontSize: 15, fontWeight: '700', color: C.secondary },

@@ -23,7 +23,7 @@ import { takePendingShareDraft, peekPendingShareDraft } from '../src/share/pendi
 import { parseSourcePost, serializeSourcePost, type SourcePost } from '../src/share/socialSource';
 import { unfurl, needsUnfurl } from '../src/share/unfurl';
 import { plainTextFromContent } from '../src/textContent';
-import { RichText, useEditorBridge, useEditorContent, useBridgeState } from '@10play/tentap-editor';
+import { RichText, useEditorBridge, useEditorContent, useBridgeState, TenTapStartKit, PlaceholderBridge } from '@10play/tentap-editor';
 import { Tag, CalendarEvent, Attachment } from '../src/types';
 import { TAG_COLORS, C, radius } from '../src/theme';
 import { formatRecurrenceSummary } from '../src/recurrence';
@@ -98,6 +98,12 @@ function animateSheet(backdrop: Animated.Value, translateY: Animated.Value, open
   ]).start();
 }
 
+// Same default extension set TenTap ships (bold/lists/links/etc.), with the placeholder text
+// configured - the default kit includes PlaceholderBridge already, just unconfigured (blank).
+const noteBridgeExtensions = TenTapStartKit.map((ext) =>
+  ext === PlaceholderBridge ? ext.configureExtension({ placeholder: 'What do you have in mind?' }) : ext
+);
+
 const NoteBodyEditor = forwardRef<EditorApi, {
   initialContent: string;
   onChange: (html: string) => void;
@@ -105,7 +111,7 @@ const NoteBodyEditor = forwardRef<EditorApi, {
 }>(function NoteBodyEditor({ initialContent, onChange, onStateChange }, ref) {
   // No dynamicHeight: it overshoots to a huge height then snaps down while the webview boots, which
   // reads as a glitchy open. A fixed-height box (styles below) + internal scroll stays stable.
-  const editor = useEditorBridge({ autofocus: false, avoidIosKeyboard: true, initialContent });
+  const editor = useEditorBridge({ autofocus: false, avoidIosKeyboard: true, initialContent, bridgeExtensions: noteBridgeExtensions });
   const state = useBridgeState(editor);
   const html = useEditorContent(editor, { type: 'html', debounceInterval: 400 });
 
@@ -1392,7 +1398,7 @@ export default function EditorScreen() {
             <TextInput
               testID="note-title-input"
               style={[s.titleInput, s.titleInputFlex]}
-              placeholder="What do you have in mind?"
+              placeholder="Note title..."
               placeholderTextColor={C.borderSub}
               value={title}
               onChangeText={handleTitleChange}
