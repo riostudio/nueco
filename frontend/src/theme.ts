@@ -11,6 +11,9 @@ export const C = {
   // Pale fill for a selected/active state (e.g. a segmented control), paired with `secondary` as
   // the text/icon color on top of it - distinct from `primary`'s solid-fill CTA treatment.
   secondaryTint: '#DCEAFB',
+  // Lighter accent for a border/outline on top of `secondaryTint` - visible against the pale fill
+  // without the harder contrast of full-strength `secondary`.
+  secondaryLight: '#64B5F6',
   bg: '#FDFBF7',
   surface: '#FFFFFF',
   surfaceHi: '#FFF8E1',

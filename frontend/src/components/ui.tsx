@@ -279,7 +279,7 @@ const s = StyleSheet.create({
     borderRadius: radius.md,
     backgroundColor: C.surface,
   },
-  segmentSelected: { backgroundColor: C.secondaryTint, borderColor: C.secondary },
+  segmentSelected: { backgroundColor: C.secondaryTint, borderColor: C.secondaryLight },
   segmentLabel: { fontSize: 14, fontWeight: '600', color: C.text },
   segmentLabelSelected: { color: C.secondary },
 
