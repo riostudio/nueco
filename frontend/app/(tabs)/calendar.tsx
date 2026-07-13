@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ActivityIndicator,
+  View, Text, StyleSheet, TouchableOpacity, ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -10,6 +10,15 @@ import { decryptEventsFromServer } from '../../src/crypto/eventCrypto';
 import { CalendarEvent } from '../../src/types';
 import { MONTH_NAMES, DAY_NAMES, C, radius, borderWidth } from '../../src/theme';
 import { UserAvatar } from '../../src/auth';
+
+function formatEventTime(iso: string): string {
+  const d = new Date(iso);
+  const h = d.getHours();
+  const m = d.getMinutes();
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const hour = h % 12 || 12;
+  return `${hour}:${m.toString().padStart(2, '0')} ${ampm}`;
+}
 
 export default function CalendarScreen() {
   const router = useRouter();
@@ -79,10 +88,9 @@ export default function CalendarScreen() {
   const nextMonth = () => setCurrentDate(new Date(year, month + 1, 1));
   const selectDay = (day: number) => setSelectedDate(new Date(year, month, day));
 
-  // Count events for selected day
-  const selectedDayEvents = events.filter((e) => {
-    return eventCoversDay(e, selYear, selMonth, selDay);
-  });
+  const selectedDayEvents = events
+    .filter((e) => eventCoversDay(e, selYear, selMonth, selDay))
+    .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
 
   const rows: (number | null)[][] = [];
   for (let i = 0; i < days.length; i += 7) {
@@ -107,16 +115,16 @@ export default function CalendarScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Day Names */}
-      <View style={s.dayNamesRow}>
-        {DAY_NAMES.map((d, i) => (
-          <Text key={i} style={s.dayName}>{d}</Text>
-        ))}
-      </View>
+      <ScrollView contentContainerStyle={s.scrollContent} showsVerticalScrollIndicator={false}>
+        {/* Day Names */}
+        <View style={s.dayNamesRow}>
+          {DAY_NAMES.map((d, i) => (
+            <Text key={i} style={s.dayName}>{d}</Text>
+          ))}
+        </View>
 
-      {/* Calendar Grid - always rendered instantly (the grid is derived from the date); event
-          day-markers fill in when events load, instead of replacing the whole grid with a spinner. */}
-      {(
+        {/* Calendar Grid - always rendered instantly (the grid is derived from the date); event
+            day-markers fill in when events load, instead of replacing the whole grid with a spinner. */}
         <View style={s.grid}>
           {rows.map((row, ri) => (
             <View key={ri} style={s.gridRow}>
@@ -154,29 +162,40 @@ export default function CalendarScreen() {
             </View>
           ))}
         </View>
-      )}
 
-      {/* Selected Day Info - only show when events exist */}
-      {selectedDayEvents.length > 0 && (
-        <>
-          <TouchableOpacity
-            testID="view-events-btn"
-            style={s.selectedInfo}
-            onPress={() => router.navigate('/(tabs)/events')}
-            activeOpacity={0.7}
-          >
-            <Text style={s.selectedDate}>
-              {MONTH_NAMES[selMonth]} {selDay}, {selYear}
-            </Text>
-            <View style={s.selectedBadge}>
-              <MaterialIcons name="event" size={18} color={C.primaryFg} />
-              <Text style={s.badgeText}>
-                {selectedDayEvents.length} {selectedDayEvents.length === 1 ? 'event' : 'events'}
-              </Text>
-            </View>
-          </TouchableOpacity>
-        </>
-      )}
+        {/* Selected Day - date header plus the actual events on it, not just a count. */}
+        <View style={s.selectedDateHeader}>
+          <Text style={s.selectedDate}>
+            {MONTH_NAMES[selMonth]} {selDay}, {selYear}
+          </Text>
+        </View>
+
+        {selectedDayEvents.length > 0 ? (
+          selectedDayEvents.map((event) => (
+            <TouchableOpacity
+              key={event.id}
+              testID={`cal-selected-event-${event.id}`}
+              style={s.eventCard}
+              activeOpacity={0.7}
+              onPress={() => router.push({ pathname: '/event-editor', params: { eventId: event.id } })}
+            >
+              <View style={s.eventTimeCol}>
+                <Text style={s.timeStart}>{formatEventTime(event.start_time)}</Text>
+                <Text style={s.timeEnd}>{formatEventTime(event.end_time)}</Text>
+              </View>
+              <View style={s.eventBody}>
+                <Text style={s.eventTitle} numberOfLines={1}>{event.title}</Text>
+                {event.location ? (
+                  <Text style={s.eventDesc} numberOfLines={1}>{event.location}</Text>
+                ) : null}
+              </View>
+              <MaterialIcons name="chevron-right" size={22} color={C.textSec} />
+            </TouchableOpacity>
+          ))
+        ) : (
+          <Text style={s.emptyHint}>No events on this day</Text>
+        )}
+      </ScrollView>
 
       {/* FAB */}
       <TouchableOpacity
@@ -233,22 +252,24 @@ const s = StyleSheet.create({
   todayText: { color: C.primary, fontWeight: '700' },
   dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: C.primary, marginTop: 2 },
   dotSelected: { backgroundColor: C.primaryFg },
-  selectedInfo: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    marginHorizontal: 24, marginTop: 20,
-    backgroundColor: C.surface, borderRadius: radius.md,
-    borderWidth: borderWidth.regular, borderColor: C.border, padding: 16,
-  },
+  scrollContent: { paddingBottom: 100 },
+  selectedDateHeader: { marginHorizontal: 24, marginTop: 20, marginBottom: 10 },
   selectedDate: { fontSize: 22, fontWeight: '600', color: C.text },
-  selectedBadge: {
+  eventCard: {
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: C.primary, borderRadius: 20,
-    paddingHorizontal: 14, paddingVertical: 6,
+    backgroundColor: C.surface, borderRadius: radius.md,
+    paddingVertical: 12, paddingHorizontal: 16,
+    borderWidth: borderWidth.regular, borderColor: C.border,
+    marginHorizontal: 24, marginBottom: 10,
   },
-  badgeText: { fontSize: 16, fontWeight: '600', color: C.primaryFg, marginLeft: 6 },
-  hint: {
-    fontSize: 16, color: C.primary, textAlign: 'center',
-    marginTop: 12, fontWeight: '500', textDecorationLine: 'underline',
+  eventTimeCol: { marginRight: 14, alignItems: 'flex-start', minWidth: 64 },
+  timeStart: { fontSize: 15, fontWeight: '700', color: C.secondary },
+  timeEnd: { fontSize: 13, fontWeight: '500', color: C.borderSub, marginTop: 1 },
+  eventBody: { flex: 1 },
+  eventTitle: { fontSize: 16, fontWeight: '600', color: C.text },
+  eventDesc: { fontSize: 13, color: C.textSec, marginTop: 2 },
+  emptyHint: {
+    fontSize: 15, color: C.textSec, textAlign: 'center', marginTop: 8, marginHorizontal: 24,
   },
   fab: {
     position: 'absolute', bottom: 24, right: 24,
