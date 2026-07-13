@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView,
+  View, Text, StyleSheet, TouchableOpacity, ScrollView, useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -23,6 +23,11 @@ function formatEventTime(iso: string): string {
 
 export default function CalendarScreen() {
   const router = useRouter();
+  const { height: windowHeight } = useWindowDimensions();
+  // Grid gets a guaranteed floor of half the screen height, regardless of how many rows this
+  // month needs (5 vs 6) - rows below stretch to fill it evenly (see gridRow's flex:1), so the
+  // month view stays visually substantial even after the spacing tightening passes.
+  const gridMinHeight = windowHeight * 0.5;
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [events, setEvents] = useState<CalendarEvent[]>([]);
@@ -133,7 +138,7 @@ export default function CalendarScreen() {
 
         {/* Calendar Grid - always rendered instantly (the grid is derived from the date); event
             day-markers fill in when events load, instead of replacing the whole grid with a spinner. */}
-        <View style={s.grid}>
+        <View style={[s.grid, { minHeight: gridMinHeight }]}>
           {rows.map((row, ri) => (
             <View key={ri} style={s.gridRow}>
               {row.map((day, ci) => (
@@ -247,13 +252,16 @@ const s = StyleSheet.create({
     color: C.textSec, paddingVertical: 1,
   },
   loadingGrid: { height: 240, justifyContent: 'center', alignItems: 'center' },
-  grid: { paddingHorizontal: 12 },
-  gridRow: { flexDirection: 'row' },
+  // paddingHorizontal only - vertical size now comes from `gridMinHeight` (inline style, 50% of
+  // screen height) via flexDirection: 'column', with each row (flex:1 below) stretching to fill
+  // it evenly regardless of whether the month has 5 or 6 rows.
+  grid: { paddingHorizontal: 12, flexDirection: 'column' },
+  gridRow: { flex: 1, flexDirection: 'row' },
   dayCell: {
-    // Second tightening pass (was aspectRatio 0.82, navBtn 56, paddingVertical 12/4) - still
-    // felt too tall against the day's event list below it. Cells stay a comfortable 44pt+
-    // touch target on typical phone widths even at this ratio.
-    flex: 1, aspectRatio: 0.68, justifyContent: 'center', alignItems: 'center',
+    // Height comes from the row's flex share of `gridMinHeight`, not aspectRatio - the grid's
+    // total height is now a floor (50% of screen), so a fixed ratio would fight that instead of
+    // filling it. Cells stay a comfortable touch target on typical phone widths regardless.
+    flex: 1, justifyContent: 'center', alignItems: 'center',
     margin: 1, borderRadius: 12,
   },
   selectedDay: { backgroundColor: C.primary },
