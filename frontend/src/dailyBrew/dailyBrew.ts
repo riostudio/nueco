@@ -13,6 +13,17 @@ if (Platform.OS !== 'web') {
 
 const CACHE_PREFIX = 'dailybrew:cache:';
 const DISMISSED_PREFIX = 'dailybrew:dismissed:';
+const PERSIST_KEY = 'dailybrew:persist_pinned';
+
+/** Whether the user's chosen to keep the Daily Brew card pinned at the top permanently,
+ * instead of the default "Done for today" dismiss-until-tomorrow behavior. Settings screen. */
+export async function isPersistPinned(): Promise<boolean> {
+  return (await AsyncStorage.getItem(PERSIST_KEY)) === '1';
+}
+
+export async function setPersistPinned(enabled: boolean): Promise<void> {
+  await AsyncStorage.setItem(PERSIST_KEY, enabled ? '1' : '0');
+}
 
 export function getTodayKey(d: Date = new Date()): string {
   const year = d.getFullYear();
@@ -68,7 +79,11 @@ export async function pruneOldKeys(): Promise<void> {
   try {
     const todayKey = getTodayKey();
     const allKeys = await AsyncStorage.getAllKeys();
-    const staleKeys = allKeys.filter((k) => k.startsWith('dailybrew:') && !k.endsWith(todayKey));
+    // PERSIST_KEY isn't a per-day key (it's a standing preference) - exclude it or every
+    // prune cycle would delete it the moment it's set.
+    const staleKeys = allKeys.filter(
+      (k) => k.startsWith('dailybrew:') && k !== PERSIST_KEY && !k.endsWith(todayKey)
+    );
     if (staleKeys.length > 0) await AsyncStorage.multiRemove(staleKeys);
   } catch (e) {
     console.error('Failed to prune old Daily Brew keys:', e);

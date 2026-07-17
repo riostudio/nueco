@@ -8,7 +8,8 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { UserAvatar, useAuth } from '../../src/auth';
 import { accountApi } from '../../src/api';
-import { isAnalyticsEnabled, setAnalyticsEnabled } from '../../src/analytics';
+import { isAnalyticsEnabled, setAnalyticsEnabled, isDailyBrewEnabled } from '../../src/analytics';
+import { isPersistPinned, setPersistPinned } from '../../src/dailyBrew/dailyBrew';
 import { clearLocalData } from '../../src/offlineSync';
 import { exportMyData } from '../../src/dataExport';
 import { BACKEND_BASE_URL } from '../../src/backendBaseUrl';
@@ -24,6 +25,8 @@ export default function PrivacyDataScreen() {
   const router = useRouter();
   const { logout, user, updateUserName } = useAuth();
   const [analyticsOn, setAnalyticsOn] = useState(false);
+  const [dailyBrewFeatureOn, setDailyBrewFeatureOn] = useState(false);
+  const [dailyBrewPinned, setDailyBrewPinned] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [showDelete, setShowDelete] = useState(false);
   const [password, setPassword] = useState('');
@@ -35,6 +38,8 @@ export default function PrivacyDataScreen() {
   const [nameError, setNameError] = useState('');
 
   useEffect(() => { isAnalyticsEnabled().then(setAnalyticsOn); }, []);
+  useEffect(() => { isDailyBrewEnabled().then(setDailyBrewFeatureOn); }, []);
+  useEffect(() => { isPersistPinned().then(setDailyBrewPinned); }, []);
 
   const confirmEditName = useCallback(async () => {
     const trimmed = nameInput.trim();
@@ -65,6 +70,11 @@ export default function PrivacyDataScreen() {
   const toggleAnalytics = useCallback(async (value: boolean) => {
     setAnalyticsOn(value);
     await setAnalyticsEnabled(value);
+  }, []);
+
+  const toggleDailyBrewPinned = useCallback(async (value: boolean) => {
+    setDailyBrewPinned(value);
+    await setPersistPinned(value);
   }, []);
 
   const confirmDelete = useCallback(async () => {
@@ -142,6 +152,29 @@ export default function PrivacyDataScreen() {
           </View>
 
           <View style={s.divider} />
+
+          {dailyBrewFeatureOn && (
+            <>
+              <View style={s.row}>
+                <MaterialIcons name="push-pin" size={24} color={C.textSec} />
+                <View style={{ flex: 1, marginLeft: 16 }}>
+                  <Text style={s.rowLabelPlain}>Keep Daily Brew pinned</Text>
+                  <Text style={s.rowSub}>
+                    Always show the card at the top of My Notes, instead of hiding it for the day
+                    when you tap "Done for today".
+                  </Text>
+                </View>
+                <Switch
+                  value={dailyBrewPinned}
+                  onValueChange={toggleDailyBrewPinned}
+                  trackColor={{ false: C.borderSub, true: C.primary + '80' }}
+                  thumbColor={dailyBrewPinned ? C.primary : '#f4f3f4'}
+                />
+              </View>
+
+              <View style={s.divider} />
+            </>
+          )}
 
           <TouchableOpacity testID="export-data-btn" style={s.row} onPress={handleExport} disabled={exporting}>
             <MaterialIcons name="download" size={24} color={C.textSec} />

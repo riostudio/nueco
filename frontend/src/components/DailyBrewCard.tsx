@@ -12,9 +12,15 @@
  * from layout until it resolves (from cache instantly, or from the background fetch a moment
  * later) rather than showing a spinner in its place - this card is read once at a glance, not a
  * form someone's waiting on, so a placeholder that visibly "loads" is more distracting than useful.
+ *
+ * `preview`: onboarding shows this card before the user has granted location or picked news
+ * sources, so it can't fetch anything real yet - static sample content instead, to demonstrate
+ * the concept rather than an empty/half-loaded real card. Same entrance animation either way.
  */
-import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { View, Text, Image, StyleSheet, TouchableOpacity, Animated, Linking } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  View, Text, Image, StyleSheet, TouchableOpacity, Animated, Linking, LayoutAnimation, Platform, UIManager,
+} from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect, type Href } from 'expo-router';
 import { C, radius, borderWidth, DAY_NAMES, MONTH_NAMES } from '../theme';
@@ -22,11 +28,26 @@ import { useAuth } from '../auth';
 import { isDailyBrewEnabled } from '../analytics';
 import { getVerseForDate } from '../dailyBrew/verses';
 import {
-  isDismissedToday, markDismissedToday, getCachedBrew, setCachedBrew, pruneOldKeys,
+  isDismissedToday, markDismissedToday, isPersistPinned, getCachedBrew, setCachedBrew, pruneOldKeys,
   fetchEventsToday, fetchWeather, fetchNewsHeadlines, BrewEvent, NewsItem,
 } from '../dailyBrew/dailyBrew';
 
+// Old Android bridge needs this opt-in for LayoutAnimation; no-op on iOS/New Architecture.
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+
 const NEWS_SHOWN = 3;
+
+const PREVIEW_WEATHER: { tempC: number; condition: string; icon: string; color: string; place: string } = {
+  tempC: 22, condition: 'Sunny', icon: 'wb-sunny', color: '#F2B23C', place: 'San Francisco',
+};
+const PREVIEW_EVENTS: BrewEvent[] = [
+  { id: '', title: 'Team standup', startTime: new Date(new Date().setHours(9, 0, 0, 0)).toISOString() },
+];
+const PREVIEW_NEWS: NewsItem[] = [
+  { headline: 'News from your chosen sources shows up here', link: '', sourceName: 'Example News', publishedAt: null, logoUrl: null },
+];
 
 type IconName = React.ComponentProps<typeof MaterialIcons>['name'];
 type EventsState = BrewEvent[] | 'loading';
@@ -61,20 +82,41 @@ function formatRelativeTime(dateStr: string | null): string {
   return d.toLocaleDateString();
 }
 
-export default function DailyBrewCard() {
+type Props = { preview?: boolean };
+
+export default function DailyBrewCard({ preview = false }: Props) {
   const router = useRouter();
   const { user } = useAuth();
-  const [flagEnabled, setFlagEnabled] = useState<boolean | null>(null);
-  const [dismissed, setDismissed] = useState<boolean | null>(null);
-  const [events, setEvents] = useState<EventsState>('loading');
-  const [weather, setWeather] = useState<WeatherState>('loading');
-  const [news, setNews] = useState<NewsState>('loading');
+  const [flagEnabled, setFlagEnabled] = useState<boolean | null>(preview ? true : null);
+  const [dismissed, setDismissed] = useState<boolean | null>(preview ? false : null);
+  const [pinned, setPinned] = useState(false);
+  const [events, setEvents] = useState<EventsState>(preview ? PREVIEW_EVENTS : 'loading');
+  const [weather, setWeather] = useState<WeatherState>(preview ? PREVIEW_WEATHER : 'loading');
+  const [news, setNews] = useState<NewsState>(preview ? PREVIEW_NEWS : 'loading');
 
-  const cardOpacity = useRef(new Animated.Value(1)).current;
-  const cardScale = useRef(new Animated.Value(1)).current;
+  const cardOpacity = useRef(new Animated.Value(preview ? 0 : 1)).current;
+  const cardScale = useRef(new Animated.Value(preview ? 0.96 : 1)).current;
+  const cardTranslateY = useRef(new Animated.Value(preview ? 12 : 0)).current;
+  // Guards the entrance animation to the card's first real appearance per mount, rather than
+  // replaying every time useFocusEffect re-fires (e.g. switching tabs back and forth).
+  const hasAnimatedIn = useRef(false);
+
+  const playEntrance = useCallback(() => {
+    if (hasAnimatedIn.current) return;
+    hasAnimatedIn.current = true;
+    Animated.parallel([
+      Animated.timing(cardOpacity, { toValue: 1, duration: 280, useNativeDriver: true }),
+      Animated.spring(cardTranslateY, { toValue: 0, useNativeDriver: true, friction: 8 }),
+      Animated.spring(cardScale, { toValue: 1, useNativeDriver: true, friction: 8 }),
+    ]).start();
+  }, [cardOpacity, cardScale, cardTranslateY]);
+
+  // Preview mode has nothing to wait on - play the reveal as soon as it mounts.
+  useEffect(() => { if (preview) playEntrance(); }, [preview, playEntrance]);
 
   useFocusEffect(
     useCallback(() => {
+      if (preview) return;
       let cancelled = false;
 
       (async () => {
@@ -83,13 +125,19 @@ export default function DailyBrewCard() {
         setFlagEnabled(flagOn);
         if (!flagOn) return; // Flag off - skip fetch logic entirely, card renders null below.
 
-        const alreadyDismissed = await isDismissedToday();
+        const persistPinned = await isPersistPinned();
+        if (cancelled) return;
+        setPinned(persistPinned);
+
+        // Pinned mode ignores the daily dismiss entirely - always shown while the flag's on.
+        const alreadyDismissed = persistPinned ? false : await isDismissedToday();
         if (cancelled) return;
         if (alreadyDismissed) {
           setDismissed(true);
           return;
         }
         setDismissed(false);
+        playEntrance();
 
         // Stale-while-revalidate: hydrate instantly from cache before the fresh fetch resolves.
         const cached = await getCachedBrew();
@@ -146,7 +194,12 @@ export default function DailyBrewCard() {
     Animated.parallel([
       Animated.timing(cardOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
       Animated.spring(cardScale, { toValue: 0.85, useNativeDriver: true, friction: 8 }),
-    ]).start(() => setDismissed(true));
+    ]).start(() => {
+      // The card's own fade/shrink is done - now animate the layout reflow as it leaves,
+      // so the notes list below eases back up into the vacated space instead of snapping.
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setDismissed(true);
+    });
   };
 
   if (!flagEnabled || dismissed === null || dismissed === true) return null;
@@ -157,7 +210,12 @@ export default function DailyBrewCard() {
   const eventsList = events === 'loading' ? [] : events;
 
   return (
-    <Animated.View style={[s.card, { opacity: cardOpacity, transform: [{ scale: cardScale }] }]}>
+    <Animated.View
+      style={[
+        s.card,
+        { opacity: cardOpacity, transform: [{ translateY: cardTranslateY }, { scale: cardScale }] },
+      ]}
+    >
       <Text style={s.dateHeading}>{dateHeading}</Text>
 
       {weather === 'denied' || weather === 'error' ? (
@@ -235,10 +293,12 @@ export default function DailyBrewCard() {
         )
       )}
 
-      <TouchableOpacity style={s.doneBtn} onPress={handleDone} activeOpacity={0.7}>
-        <MaterialIcons name="done" size={16} color={C.primary} />
-        <Text style={s.doneText}>Done for today</Text>
-      </TouchableOpacity>
+      {!preview && !pinned && (
+        <TouchableOpacity style={s.doneBtn} onPress={handleDone} activeOpacity={0.7}>
+          <MaterialIcons name="done" size={16} color={C.primary} />
+          <Text style={s.doneText}>Done for today</Text>
+        </TouchableOpacity>
+      )}
     </Animated.View>
   );
 }
