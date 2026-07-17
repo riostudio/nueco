@@ -2,6 +2,8 @@ import * as LegacyFileSystem from 'expo-file-system/legacy';
 import { authStorage } from './auth/storage/authStorage';
 import { BACKEND_API_BASE_URL, BACKEND_BASE_URL } from './backendBaseUrl';
 import { decryptAccountFromServer } from './crypto/accountCrypto';
+import { decryptEventsFromServer } from './crypto/eventCrypto';
+import type { CalendarEvent } from './types';
 import type { NewsItem } from './dailyBrew/dailyBrew';
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
@@ -108,18 +110,52 @@ export const notesApi = {
     fetchApi(`/notes/${id}/toggle-pin`, { method: 'POST' }),
 };
 
+// In-memory cache of *decrypted* month event lists, shared across every caller (the Daily Brew
+// card and the Calendar tab both load "the current month's events" independently, which used to
+// mean two separate fetch-and-decrypt passes over the same data every time the user switched
+// between them). TTL is short - long enough to dedupe loads that happen moments apart, short
+// enough that any staleness is barely noticeable - and create/update/delete below clear it
+// outright, so an edit is never masked by a stale cached read.
+const MONTH_EVENTS_CACHE_TTL_MS = 20000;
+const monthEventsCache = new Map<string, { data: CalendarEvent[]; fetchedAt: number }>();
+
+function monthEventsCacheKey(month: number, year: number): string {
+  return `${year}-${month}`;
+}
+
 export const eventsApi = {
   getAll: (month?: number, year?: number) =>
     fetchApi(
       month && year ? `/events?month=${month}&year=${year}` : '/events'
     ),
+  // Decrypted + cached (see monthEventsCache above) - prefer this over getAll+decryptEventsFromServer
+  // wherever "this month's events" is all that's needed.
+  getAllCached: async (month: number, year: number): Promise<CalendarEvent[]> => {
+    const key = monthEventsCacheKey(month, year);
+    const cached = monthEventsCache.get(key);
+    if (cached && Date.now() - cached.fetchedAt < MONTH_EVENTS_CACHE_TTL_MS) {
+      return cached.data;
+    }
+    const data = await decryptEventsFromServer<CalendarEvent>(await eventsApi.getAll(month, year));
+    monthEventsCache.set(key, { data, fetchedAt: Date.now() });
+    return data;
+  },
   get: (id: string) => fetchApi(`/events/${id}`),
-  create: (data: any) =>
-    fetchApi('/events', { method: 'POST', body: JSON.stringify(data) }),
-  update: (id: string, data: any) =>
-    fetchApi(`/events/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
-  delete: (id: string) =>
-    fetchApi(`/events/${id}`, { method: 'DELETE' }),
+  create: async (data: any) => {
+    const result = await fetchApi('/events', { method: 'POST', body: JSON.stringify(data) });
+    monthEventsCache.clear();
+    return result;
+  },
+  update: async (id: string, data: any) => {
+    const result = await fetchApi(`/events/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+    monthEventsCache.clear();
+    return result;
+  },
+  delete: async (id: string) => {
+    const result = await fetchApi(`/events/${id}`, { method: 'DELETE' });
+    monthEventsCache.clear();
+    return result;
+  },
   // Batch fetch to fix N+1 query issue
   getBatch: (eventIds: string[]) =>
     fetchApi('/events/batch', { method: 'POST', body: JSON.stringify({ event_ids: eventIds }) }),
@@ -378,6 +414,11 @@ export const dailyBrewApi = {
     fetchApi(`/dailybrew/news-sources?country=${encodeURIComponent(countryCode)}`),
   searchFeeds: async (query: string): Promise<OutletInfo[]> => {
     const res = await fetchApi(`/dailybrew/search-feeds?q=${encodeURIComponent(query)}`);
+    return res.outlets ?? [];
+  },
+  getOutletsByIds: async (ids: string[]): Promise<OutletInfo[]> => {
+    if (ids.length === 0) return [];
+    const res = await fetchApi(`/dailybrew/outlets?ids=${encodeURIComponent(ids.join(','))}`);
     return res.outlets ?? [];
   },
   updateNewsPreferences: (country: string, outletIds: string[], showVerse: boolean) =>

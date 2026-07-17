@@ -37,6 +37,20 @@ async def search_feeds(
     )
 
 
+@router.get("/outlets", response_model=SearchFeedsResponse)
+async def outlets_by_ids(
+    ids: str = Query(..., description="Comma-separated outlet ids"),
+    current_user: dict = Depends(get_current_user),
+):
+    """Resolve specific outlet ids to display info - used to show what's already
+    selected/followed (including topic-pool feeds) without needing a search query."""
+    id_list = [i.strip() for i in ids.split(",") if i.strip()]
+    outlets = service.find_outlets(id_list)
+    return SearchFeedsResponse(
+        outlets=[OutletInfo(id=o.id, name=o.name, description=o.description, topics=o.topics) for o in outlets],
+    )
+
+
 @router.get("/news", response_model=NewsHeadlinesResponse)
 async def news(
     current_user: dict = Depends(get_current_user),

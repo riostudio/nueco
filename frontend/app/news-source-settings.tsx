@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams, type Href } from 'expo-router';
 import { dailyBrewApi } from '../src/api';
+import { useAuth } from '../src/auth';
 import { getVerseForDate } from '../src/dailyBrew/verses';
 import { C, radius, TAG_COLORS } from '../src/theme';
 
@@ -37,15 +38,23 @@ function hashIndex(str: string): number {
 
 export default function NewsSourceSettingsScreen() {
   const router = useRouter();
+  const { user } = useAuth();
   const params = useLocalSearchParams<{ onboarding?: string }>();
   const isOnboarding = params.onboarding === '1';
+  // Editing already-saved preferences (reached via the avatar menu, not onboarding) - drives
+  // whether we hydrate from `user` instead of GPS-detecting a country and defaulting picks.
+  const hasExistingPrefs = Boolean(user?.news_outlet_ids?.length);
 
-  const [verseEnabled, setVerseEnabled] = useState(false);
+  const [verseEnabled, setVerseEnabled] = useState(user?.daily_brew_show_verse === true);
   const [locationState, setLocationState] = useState<LocationState>('loading');
   const [detectedPlace, setDetectedPlace] = useState<{ city?: string; country?: string } | null>(null);
-  const [countryCode, setCountryCode] = useState<string | null>(null);
+  const [countryCode, setCountryCode] = useState<string | null>(user?.news_country ?? null);
   const [outlets, setOutlets] = useState<Outlet[]>([]);
-  const [selectedOutletIds, setSelectedOutletIds] = useState<string[]>([]);
+  const [selectedOutletIds, setSelectedOutletIds] = useState<string[]>(user?.news_outlet_ids ?? []);
+  // Every outlet we've ever seen full details for this screen-visit (country list, search
+  // results, or the by-id lookup below) - keyed by id, so "Following" can show a name for a
+  // selection that's no longer part of the current search results or country list.
+  const [outletDetails, setOutletDetails] = useState<Record<string, Outlet>>({});
   const [loadingOutlets, setLoadingOutlets] = useState(false);
   const [showCountryPicker, setShowCountryPicker] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -54,6 +63,15 @@ export default function NewsSourceSettingsScreen() {
   const [searching, setSearching] = useState(false);
 
   const todayVerse = useMemo(() => getVerseForDate(new Date()), []);
+
+  const rememberOutlets = useCallback((list: Outlet[]) => {
+    if (list.length === 0) return;
+    setOutletDetails((prev) => {
+      const next = { ...prev };
+      for (const o of list) next[o.id] = o;
+      return next;
+    });
+  }, []);
 
   const detectLocation = useCallback(async () => {
     setLocationState('loading');
@@ -85,7 +103,24 @@ export default function NewsSourceSettingsScreen() {
     }
   }, []);
 
-  useEffect(() => { detectLocation(); }, [detectLocation]);
+  // Already have a saved country? Skip GPS detection entirely rather than let it race with
+  // (and potentially overwrite) the preference the user already chose.
+  useEffect(() => {
+    if (user?.news_country) { setLocationState('granted'); return; }
+    detectLocation();
+  }, [detectLocation, user?.news_country]);
+
+  // Hydrate full display details for any already-selected ids that aren't covered by the
+  // country list or a search - otherwise "Following" would have ids with no name to show for
+  // topic-pool feeds followed in a previous session.
+  useEffect(() => {
+    const ids = user?.news_outlet_ids ?? [];
+    if (ids.length === 0) return;
+    dailyBrewApi.getOutletsByIds(ids).then(rememberOutlets).catch((e) => {
+      console.error('Failed to load details for saved news outlets:', e);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!countryCode) return;
@@ -95,15 +130,18 @@ export default function NewsSourceSettingsScreen() {
         const res = await dailyBrewApi.getNewsSources(countryCode);
         const list: Outlet[] = res?.outlets ?? [];
         setOutlets(list);
-        setSelectedOutletIds(list.slice(0, 2).map((o) => o.id));
+        rememberOutlets(list);
+        // "Default to the first 2" is a first-run convenience - never apply it once the user
+        // has (or already had) real selections, or it'll silently wipe them out.
+        setSelectedOutletIds((prev) => (prev.length === 0 && !hasExistingPrefs ? list.slice(0, 2).map((o) => o.id) : prev));
       } catch (e) {
         console.error('Failed to load news sources:', e);
         setOutlets([]);
-        setSelectedOutletIds([]);
       } finally {
         setLoadingOutlets(false);
       }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [countryCode]);
 
   const toggleOutlet = useCallback((id: string) => {
@@ -124,6 +162,7 @@ export default function NewsSourceSettingsScreen() {
       try {
         const results = await dailyBrewApi.searchFeeds(q);
         setSearchResults(results ?? []);
+        rememberOutlets(results ?? []);
       } catch (e) {
         console.error('Failed to search news feeds:', e);
         setSearchResults([]);
@@ -205,6 +244,39 @@ export default function NewsSourceSettingsScreen() {
             </View>
           )}
         </View>
+
+        {/* Always-visible summary of every current selection, regardless of country/search state -
+            a topic followed via search would otherwise disappear from view the moment the search
+            query changes, with no other way to see (or unfollow) it. */}
+        {selectedOutletIds.length > 0 && (
+          <View style={[s.card, { marginTop: 20 }]}>
+            <Text style={s.sectionLabel}>Following</Text>
+            {selectedOutletIds.map((id) => {
+              const outlet = outletDetails[id];
+              const avatarColor = TAG_COLORS[hashIndex(id) % TAG_COLORS.length].value;
+              return (
+                <View key={id} testID={`news-following-${id}`} style={s.row}>
+                  <View style={[s.outletAvatar, { backgroundColor: avatarColor }]}>
+                    <Text style={s.outletAvatarLetter}>{(outlet?.name ?? '?').charAt(0).toUpperCase()}</Text>
+                  </View>
+                  <View style={{ flex: 1, marginLeft: 12 }}>
+                    <Text style={s.rowLabelPlain}>{outlet?.name ?? id}</Text>
+                    {!!outlet?.description && (
+                      <Text style={s.rowSub} numberOfLines={1}>{outlet.description}</Text>
+                    )}
+                  </View>
+                  <TouchableOpacity
+                    testID={`news-unfollow-${id}`}
+                    onPress={() => toggleOutlet(id)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <MaterialIcons name="close" size={22} color={C.borderSub} />
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
+          </View>
+        )}
 
         <View style={[s.card, { marginTop: 20 }]}>
           <Text style={s.sectionLabel}>News sources</Text>

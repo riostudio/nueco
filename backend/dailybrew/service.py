@@ -204,6 +204,18 @@ def get_country_catalog(country: str) -> list[Outlet]:
     return catalog.OUTLET_CATALOG.get(country.upper(), [])
 
 
+def find_outlets(ids: list[str]) -> list[Outlet]:
+    """Resolve specific outlet ids to their full display info - lets the client show what's
+    already selected/followed (including a topic-pool feed followed via search, which won't be
+    in the current country list or the current search results) without a live search query."""
+    found = []
+    for oid in ids:
+        outlet = catalog.find_outlet(oid)
+        if outlet:
+            found.append(outlet)
+    return found
+
+
 def _words(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+", text.lower())
 

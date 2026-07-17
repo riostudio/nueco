@@ -93,9 +93,9 @@ export async function pruneOldKeys(): Promise<void> {
 export async function fetchEventsToday(): Promise<BrewEvent[]> {
   try {
     const now = new Date();
-    const events = await decryptEventsFromServer<CalendarEvent>(
-      await eventsApi.getAll(now.getMonth() + 1, now.getFullYear())
-    );
+    // Cached: the Calendar tab loads this same month independently, so whichever screen the
+    // user hits second gets an instant read instead of a redundant fetch+decrypt.
+    const events = await eventsApi.getAllCached(now.getMonth() + 1, now.getFullYear());
     return events
       .filter((e) => eventOccursOnDay(e, now.getFullYear(), now.getMonth(), now.getDate()))
       .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())
