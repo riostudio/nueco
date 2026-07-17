@@ -6,7 +6,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { UserAvatar, useAuth } from '../../src/auth';
+import { useAuth } from '../../src/auth';
 import { accountApi } from '../../src/api';
 import { isAnalyticsEnabled, setAnalyticsEnabled, isDailyBrewEnabled } from '../../src/analytics';
 import { isPersistPinned, setPersistPinned } from '../../src/dailyBrew/dailyBrew';
@@ -100,8 +100,11 @@ export default function PrivacyDataScreen() {
   return (
     <SafeAreaView style={s.container} edges={['top']}>
       <View style={s.header}>
+        <TouchableOpacity onPress={() => router.back()} style={s.backBtn}>
+          <MaterialIcons name="arrow-back" size={28} color={C.textSec} />
+        </TouchableOpacity>
         <Text style={s.headerTitle}>Data & Privacy</Text>
-        <UserAvatar size={36} />
+        <View style={{ width: 48 }} />
       </View>
 
       <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent}>
@@ -282,11 +285,12 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 24,
+    paddingHorizontal: 8,
     paddingTop: 12,
     paddingBottom: 12,
   },
-  headerTitle: { fontSize: 34, fontWeight: '700', color: C.text },
+  backBtn: { padding: 12 },
+  headerTitle: { fontSize: 18, fontWeight: '700', color: C.text },
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 24, paddingTop: 8 },
   card: {
