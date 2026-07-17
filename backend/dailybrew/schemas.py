@@ -8,6 +8,7 @@ class NewsItem(BaseModel):
     link: str
     source_name: str
     published_at: Optional[datetime] = None
+    logo_url: Optional[str] = None
 
 
 class NewsHeadlinesResponse(BaseModel):

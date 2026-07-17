@@ -1,28 +1,35 @@
 /**
  * DailyBrewCard.tsx
- * Self-contained "Daily Brew" card shown at the top of My Notes: date, weather, today's next
- * event (or a second headline if there's none), an opt-in Bible verse, a news headline, and a
- * "Done for today" dismiss. Own local StyleSheet + Animated, same shape as OfflineBanner.tsx.
+ * Self-contained "Daily Brew" card shown at the top of My Notes: date, weather, today's events,
+ * an opt-in Bible verse, up to 3 news headlines, and a "Done for today" dismiss. Own local
+ * StyleSheet + Animated, same shape as OfflineBanner.tsx.
  *
  * Feature-flag gated (daily-brew-enabled, see src/analytics/posthog.ts): renders null and skips
  * all fetch logic if the flag isn't on, so a user who onboarded while it was on stops seeing the
  * card cleanly once it's flipped off.
+ *
+ * Loading is silent, not spinner-driven: each section (weather/events/news) is simply omitted
+ * from layout until it resolves (from cache instantly, or from the background fetch a moment
+ * later) rather than showing a spinner in its place - this card is read once at a glance, not a
+ * form someone's waiting on, so a placeholder that visibly "loads" is more distracting than useful.
  */
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Animated, Linking } from 'react-native';
+import { View, Text, Image, StyleSheet, TouchableOpacity, Animated, Linking } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect, type Href } from 'expo-router';
-import { C, radius, borderWidth } from '../theme';
+import { C, radius, borderWidth, DAY_NAMES, MONTH_NAMES } from '../theme';
 import { useAuth } from '../auth';
 import { isDailyBrewEnabled } from '../analytics';
 import { getVerseForDate } from '../dailyBrew/verses';
 import {
   isDismissedToday, markDismissedToday, getCachedBrew, setCachedBrew, pruneOldKeys,
-  fetchNextEventToday, fetchWeather, fetchNewsHeadlines, NewsItem,
+  fetchEventsToday, fetchWeather, fetchNewsHeadlines, BrewEvent, NewsItem,
 } from '../dailyBrew/dailyBrew';
 
+const NEWS_SHOWN = 3;
+
 type IconName = React.ComponentProps<typeof MaterialIcons>['name'];
-type EventState = Awaited<ReturnType<typeof fetchNextEventToday>> | 'loading';
+type EventsState = BrewEvent[] | 'loading';
 type WeatherState = Awaited<ReturnType<typeof fetchWeather>> | 'loading';
 type NewsState = NewsItem[] | 'loading';
 
@@ -59,7 +66,7 @@ export default function DailyBrewCard() {
   const { user } = useAuth();
   const [flagEnabled, setFlagEnabled] = useState<boolean | null>(null);
   const [dismissed, setDismissed] = useState<boolean | null>(null);
-  const [event, setEvent] = useState<EventState>('loading');
+  const [events, setEvents] = useState<EventsState>('loading');
   const [weather, setWeather] = useState<WeatherState>('loading');
   const [news, setNews] = useState<NewsState>('loading');
 
@@ -87,24 +94,24 @@ export default function DailyBrewCard() {
         // Stale-while-revalidate: hydrate instantly from cache before the fresh fetch resolves.
         const cached = await getCachedBrew();
         if (cancelled) return;
-        setEvent(cached?.event !== undefined ? cached.event : 'loading');
+        setEvents(cached?.events !== undefined ? cached.events : 'loading');
         setWeather(cached?.weather != null ? cached.weather : 'loading');
         setNews(cached?.news !== undefined ? cached.news : 'loading');
 
         pruneOldKeys();
 
-        const [eventR, weatherR, newsR] = await Promise.allSettled([
-          fetchNextEventToday(),
+        const [eventsR, weatherR, newsR] = await Promise.allSettled([
+          fetchEventsToday(),
           fetchWeather(),
           fetchNewsHeadlines(),
         ]);
         if (cancelled) return;
 
-        if (eventR.status === 'fulfilled') {
-          setEvent(eventR.value);
-          setCachedBrew({ event: eventR.value });
+        if (eventsR.status === 'fulfilled') {
+          setEvents(eventsR.value);
+          setCachedBrew({ events: eventsR.value });
         } else {
-          setEvent(null);
+          setEvents([]);
         }
 
         if (weatherR.status === 'fulfilled') {
@@ -144,63 +151,49 @@ export default function DailyBrewCard() {
 
   if (!flagEnabled || dismissed === null || dismissed === true) return null;
 
-  const dateHeading = new Date().toLocaleDateString(undefined, {
-    weekday: 'long', month: 'long', day: 'numeric',
-  });
-  const newsList = news === 'loading' ? [] : news;
+  const now = new Date();
+  const dateHeading = `${DAY_NAMES[now.getDay()]}, ${MONTH_NAMES[now.getMonth()]} ${now.getDate()}, ${now.getFullYear()}`;
+  const newsList = news === 'loading' ? [] : news.slice(0, NEWS_SHOWN);
+  const eventsList = events === 'loading' ? [] : events;
 
   return (
     <Animated.View style={[s.card, { opacity: cardOpacity, transform: [{ scale: cardScale }] }]}>
       <Text style={s.dateHeading}>{dateHeading}</Text>
 
-      {weather === 'loading' ? (
-        <View style={s.weatherChip}>
-          <ActivityIndicator size="small" color={C.textSec} />
-        </View>
-      ) : weather === 'denied' || weather === 'error' ? (
+      {weather === 'denied' || weather === 'error' ? (
         <View style={s.weatherChip}>
           <MaterialIcons name="location-on" size={16} color={C.borderSub} />
           <Text style={[s.weatherText, { color: C.borderSub }]}>Weather unavailable</Text>
         </View>
-      ) : (
+      ) : weather !== 'loading' ? (
         <View style={s.weatherChip}>
           <MaterialIcons name={weather.icon as IconName} size={16} color={weather.color} />
           <Text style={s.weatherText}>
             {weather.place ? `${weather.place} · ` : ''}{Math.round(weather.tempC)}° {weather.condition}
           </Text>
         </View>
-      )}
+      ) : null}
 
-      {event === 'loading' ? (
-        <View style={s.row}>
-          <MaterialIcons name="event" size={17} color={C.textSec} />
-          <ActivityIndicator size="small" color={C.textSec} style={s.rowSpinner} />
-        </View>
-      ) : event ? (
-        <TouchableOpacity
-          style={s.row}
-          onPress={() => router.push({ pathname: '/event-editor', params: { eventId: event.id } })}
-        >
-          <MaterialIcons name="event" size={17} color={C.textSec} />
-          <Text style={s.rowText} numberOfLines={1}>
-            {event.title} · {formatEventTime(event.startTime)}
-          </Text>
-        </TouchableOpacity>
-      ) : newsList.length >= 2 ? (
-        <TouchableOpacity style={s.row} onPress={() => Linking.openURL(newsList[1].link)}>
-          <MaterialIcons name="event" size={17} color={C.textSec} />
-          <View style={s.rowTextCol}>
-            <Text style={s.rowMeta}>
-              {newsList[1].sourceName}{formatRelativeTime(newsList[1].publishedAt) ? ` · ${formatRelativeTime(newsList[1].publishedAt)}` : ''}
-            </Text>
-            <Text style={s.rowText} numberOfLines={1}>{newsList[1].headline}</Text>
+      {events !== 'loading' && (
+        eventsList.length > 0 ? (
+          eventsList.map((e) => (
+            <TouchableOpacity
+              key={e.id}
+              style={s.row}
+              onPress={() => router.push({ pathname: '/event-editor', params: { eventId: e.id } })}
+            >
+              <MaterialIcons name="event" size={17} color={C.textSec} />
+              <Text style={s.rowText} numberOfLines={1}>
+                {e.title} · {formatEventTime(e.startTime)}
+              </Text>
+            </TouchableOpacity>
+          ))
+        ) : (
+          <View style={s.row}>
+            <MaterialIcons name="newspaper" size={17} color={C.textSec} />
+            <Text style={s.rowTextMuted}>No events today</Text>
           </View>
-        </TouchableOpacity>
-      ) : (
-        <View style={s.row}>
-          <MaterialIcons name="event" size={17} color={C.textSec} />
-          <Text style={s.rowTextMuted}>No events today</Text>
-        </View>
+        )
       )}
 
       {showVerse && (
@@ -212,31 +205,34 @@ export default function DailyBrewCard() {
         </TouchableOpacity>
       )}
 
-      {news === 'loading' ? (
-        <View style={s.row}>
-          <MaterialIcons name="newspaper" size={17} color={C.textSec} />
-          <ActivityIndicator size="small" color={C.textSec} style={s.rowSpinner} />
-        </View>
-      ) : newsList.length > 0 ? (
-        <TouchableOpacity style={s.row} onPress={() => Linking.openURL(newsList[0].link)}>
-          <MaterialIcons name="newspaper" size={17} color={C.textSec} />
-          <View style={s.rowTextCol}>
-            <Text style={s.rowMeta}>
-              {newsList[0].sourceName}{formatRelativeTime(newsList[0].publishedAt) ? ` · ${formatRelativeTime(newsList[0].publishedAt)}` : ''}
-            </Text>
-            <Text style={s.rowText} numberOfLines={1}>{newsList[0].headline}</Text>
+      {news !== 'loading' && (
+        newsList.length > 0 ? (
+          newsList.map((item, i) => (
+            <TouchableOpacity key={`${item.link}-${i}`} style={s.row} onPress={() => Linking.openURL(item.link)}>
+              {item.logoUrl ? (
+                <Image source={{ uri: item.logoUrl }} style={s.newsLogo} />
+              ) : (
+                <MaterialIcons name="newspaper" size={17} color={C.textSec} />
+              )}
+              <View style={s.rowTextCol}>
+                <Text style={s.rowMeta}>
+                  {item.sourceName}{formatRelativeTime(item.publishedAt) ? ` · ${formatRelativeTime(item.publishedAt)}` : ''}
+                </Text>
+                <Text style={s.rowText} numberOfLines={1}>{item.headline}</Text>
+              </View>
+            </TouchableOpacity>
+          ))
+        ) : hasNewsPrefs ? (
+          <View style={s.row}>
+            <MaterialIcons name="newspaper" size={17} color={C.textSec} />
+            <Text style={s.rowTextMuted}>Headline unavailable right now</Text>
           </View>
-        </TouchableOpacity>
-      ) : hasNewsPrefs ? (
-        <View style={s.row}>
-          <MaterialIcons name="newspaper" size={17} color={C.textSec} />
-          <Text style={s.rowTextMuted}>Headline unavailable right now</Text>
-        </View>
-      ) : (
-        <TouchableOpacity style={s.row} onPress={() => router.push('/news-source-settings' as Href)}>
-          <MaterialIcons name="newspaper" size={17} color={C.textSec} />
-          <Text style={s.rowText}>Set up News from home</Text>
-        </TouchableOpacity>
+        ) : (
+          <TouchableOpacity style={s.row} onPress={() => router.push('/news-source-settings' as Href)}>
+            <MaterialIcons name="newspaper" size={17} color={C.textSec} />
+            <Text style={s.rowText}>Set up News from home</Text>
+          </TouchableOpacity>
+        )
       )}
 
       <TouchableOpacity style={s.doneBtn} onPress={handleDone} activeOpacity={0.7}>
@@ -260,7 +256,7 @@ const s = StyleSheet.create({
   },
   weatherText: { fontSize: 13, fontWeight: '500', color: C.text },
   row: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
-  rowSpinner: { marginLeft: 2 },
+  newsLogo: { width: 17, height: 17, borderRadius: 4 },
   rowText: { flex: 1, fontSize: 14, color: C.text },
   rowTextMuted: { flex: 1, fontSize: 14, color: C.textSec },
   rowTextCol: { flex: 1 },

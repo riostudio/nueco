@@ -2,6 +2,7 @@ from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException, Query, 
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+import asyncio
 import os
 import logging
 from pathlib import Path
@@ -1651,6 +1652,12 @@ async def create_indexes():
         logger.info("Database indexes created successfully")
     except Exception as e:
         logger.warning(f"Could not create indexes (may already exist): {e}")
+
+
+@app.on_event("startup")
+async def start_dailybrew_cache_prewarmer():
+    from dailybrew.service import run_cache_prewarmer
+    asyncio.create_task(run_cache_prewarmer())
 
 
 @app.on_event("shutdown")

@@ -371,6 +371,7 @@ export const dailyBrewApi = {
       link: item.link,
       sourceName: item.source_name,
       publishedAt: item.published_at ?? null,
+      logoUrl: item.logo_url ?? null,
     }));
   },
   getNewsSources: (countryCode: string): Promise<{ country: string; outlets: OutletInfo[] }> =>

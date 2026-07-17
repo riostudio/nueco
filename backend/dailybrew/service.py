@@ -4,6 +4,7 @@ import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Optional
+from urllib.parse import urlparse
 from xml.etree import ElementTree
 
 import httpx
@@ -114,6 +115,13 @@ def _parse_feed(xml_text: str, source_name: str) -> list[dict]:
     return []
 
 
+def _logo_url_for(outlet: Outlet) -> str:
+    """A favicon-as-logo, derived from the feed's own domain rather than hand-curated per
+    outlet - one fewer thing to keep in sync as outlets are added/changed in catalog.py."""
+    domain = urlparse(outlet.feed_url).netloc
+    return f"https://www.google.com/s2/favicons?sz=64&domain={domain}"
+
+
 async def _fetch_outlet(outlet: Outlet) -> list[dict]:
     """Returns this outlet's items, from cache if fresh, else fetched fresh and cached.
     Best-effort: any network/parse failure falls back to the last-known-good cache (or an
@@ -139,6 +147,9 @@ async def _fetch_outlet(outlet: Outlet) -> list[dict]:
                 )
             resp.raise_for_status()
             items = _parse_feed(resp.text, outlet.name)
+            logo_url = _logo_url_for(outlet)
+            for item in items:
+                item["logo_url"] = logo_url
             _outlet_cache[outlet.id] = {"items": items, "fetched_at": time.time()}
             return items
         except Exception as e:
@@ -146,6 +157,24 @@ async def _fetch_outlet(outlet: Outlet) -> list[dict]:
             if cached:
                 return cached["items"]
             return []
+
+
+async def prewarm_all_outlets() -> None:
+    await asyncio.gather(*(_fetch_outlet(o) for o in catalog.all_outlets()), return_exceptions=True)
+
+
+async def run_cache_prewarmer() -> None:
+    """Keeps every curated outlet's cache warm in the background so a user-facing /dailybrew/news
+    request only ever reads from cache instead of paying the cold multi-second RSS-fetch cost.
+    Runs more often than CACHE_TTL_SECONDS so the cache never actually goes stale between cycles.
+    Started once from server.py's startup event; intentionally never awaited/joined - it's meant
+    to run for the life of the process."""
+    while True:
+        try:
+            await prewarm_all_outlets()
+        except Exception as e:
+            logger.error(f"Daily Brew cache prewarm cycle failed: {e}")
+        await asyncio.sleep(600)
 
 
 async def get_headlines_for_user(

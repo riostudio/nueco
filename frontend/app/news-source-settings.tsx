@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, ActivityIndicator,
-  Alert, Modal, Pressable, Platform, TextInput,
+  Alert, Modal, Pressable, Platform, TextInput, KeyboardAvoidingView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -167,6 +167,7 @@ export default function NewsSourceSettingsScreen() {
 
   return (
     <SafeAreaView style={s.container}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <View style={s.header}>
         {isOnboarding ? (
           <TouchableOpacity testID="news-settings-skip-btn" onPress={handleSkip} style={s.skipBtn}>
@@ -334,6 +335,7 @@ export default function NewsSourceSettingsScreen() {
 
         <View style={{ height: 40 }} />
       </ScrollView>
+      </KeyboardAvoidingView>
 
       <Modal
         visible={showCountryPicker}

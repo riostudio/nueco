@@ -2,7 +2,9 @@
  * daily-brew-intro.tsx
  * First-login-only intro for the Daily Brew feature (gated on the daily-brew-enabled remote flag
  * - see (tabs)/_layout.tsx). Full-screen, modeled on analytics-consent.tsx: self-guards against
- * re-entry, gestureEnabled: false. Shows a live, non-interactive preview of DailyBrewCard playing
+ * re-entry, gestureEnabled: false. Shows a live, non-interactive preview of DailyBrewCard (same
+ * automatic event/weather/news fetch as the real card - see DailyBrewCard.tsx and
+ * dailyBrew.ts's fetchWeather for the GPS-fetch timeout that keeps this from stalling) playing
  * a one-time entrance animation, then "Next" sends the user to the news-source picker.
  */
 import React, { useEffect, useRef } from 'react';

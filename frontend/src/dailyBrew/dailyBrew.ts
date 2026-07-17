@@ -34,10 +34,13 @@ export type NewsItem = {
   link: string;
   sourceName: string;
   publishedAt: string | null;
+  logoUrl: string | null;
 };
 
+export type BrewEvent = { id: string; title: string; startTime: string };
+
 export type CachedBrew = {
-  event?: { id: string; title: string; startTime: string } | null;
+  events?: BrewEvent[];
   weather?: { tempC: number; condition: string; icon: string; color: string; place: string } | null;
   news?: NewsItem[];
   fetchedAt: number;
@@ -72,22 +75,19 @@ export async function pruneOldKeys(): Promise<void> {
   }
 }
 
-export async function fetchNextEventToday(): Promise<{ id: string; title: string; startTime: string } | null> {
+export async function fetchEventsToday(): Promise<BrewEvent[]> {
   try {
     const now = new Date();
     const events = await decryptEventsFromServer<CalendarEvent>(
       await eventsApi.getAll(now.getMonth() + 1, now.getFullYear())
     );
-    const todays = events
+    return events
       .filter((e) => eventOccursOnDay(e, now.getFullYear(), now.getMonth(), now.getDate()))
-      .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
-    if (todays.length === 0) return null;
-    const upcoming = todays.find((e) => new Date(e.start_time).getTime() >= now.getTime());
-    const chosen = upcoming ?? todays[0];
-    return { id: chosen.id, title: chosen.title, startTime: chosen.start_time };
+      .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())
+      .map((e) => ({ id: e.id, title: e.title, startTime: e.start_time }));
   } catch (e) {
-    console.error('Failed to fetch next event today:', e);
-    return null;
+    console.error('Failed to fetch events today:', e);
+    return [];
   }
 }
 
@@ -115,7 +115,19 @@ export async function fetchWeather(): Promise<
   try {
     const { status } = await ExpoLocation.requestForegroundPermissionsAsync();
     if (status !== 'granted') return 'denied';
-    const pos = await ExpoLocation.getCurrentPositionAsync({ accuracy: ExpoLocation.Accuracy.Balanced });
+    // Try the OS's already-cached fix first - near-instant when available, vs. a fresh GPS fix
+    // which can take several seconds. A weather chip doesn't need meter-level precision, so a
+    // recent-but-not-brand-new position is fine; only fall through to a fresh (lower-accuracy,
+    // for speed) fix if nothing's cached yet.
+    let pos = await ExpoLocation.getLastKnownPositionAsync({ maxAge: 15 * 60 * 1000 }).catch(() => null);
+    if (!pos) {
+      // A cold GPS fix can hang far longer than this card's fields should ever spin - fail to
+      // 'error' instead of leaving the weather chip stuck on its loading spinner indefinitely.
+      pos = await Promise.race([
+        ExpoLocation.getCurrentPositionAsync({ accuracy: ExpoLocation.Accuracy.Low }),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('location timeout')), 8000)),
+      ]);
+    }
     const { latitude, longitude } = pos.coords;
     const [weatherRes, [place]] = await Promise.all([
       fetch(

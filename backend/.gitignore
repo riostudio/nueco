@@ -1,0 +1,15 @@
+# Secrets — never commit. Runtime config comes from Railway env vars.
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pycache/
+*.egg-info/
+.venv/
+venv/
+
+# OS
+.DS_Store
