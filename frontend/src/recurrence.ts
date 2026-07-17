@@ -79,12 +79,17 @@ export function nextOccurrenceOnOrAfter(event: CalendarEvent, from: Date): Date 
   // `byweekday` repeats on `start_time`'s own local weekday (not "every day") - see
   // `next_occurrence_on_or_after` in backend/server.py, which omits the `byweekday`
   // kwarg entirely in that case and lets rrule default to dtstart's weekday.
+  const startDay = localCalendarDay(start, event.timezone);
+
   const weeklyDays =
     recurrence.byweekday && recurrence.byweekday.length > 0
       ? recurrence.byweekday
-      : [localWeekday(localCalendarDay(start, event.timezone))];
+      : [localWeekday(startDay)];
 
-  // Step in whole-day UTC-instant increments starting from `start`, never before it.
+  // Step in whole-day UTC-instant increments starting from `start`, never before it. Monthly/
+  // yearly are matched the same way (day-of-month / month-and-day equal to dtstart's) rather
+  // than jumping by calendar month/year - simpler, and MAX_SEARCH_DAYS (~3 years) comfortably
+  // covers finding the next occurrence of either.
   const stepMs = 24 * 60 * 60 * 1000;
   let candidate = start.getTime() >= from.getTime() ? new Date(start.getTime()) : alignForward(start, from, stepMs);
 
@@ -95,7 +100,11 @@ export function nextOccurrenceOnOrAfter(event: CalendarEvent, from: Date): Date 
       return null; // past the inclusive `until` boundary - no more occurrences
     }
 
-    const matches = recurrence.freq === 'daily' || (recurrence.freq === 'weekly' && weeklyDays.includes(localWeekday(candDay)));
+    const matches =
+      recurrence.freq === 'daily' ||
+      (recurrence.freq === 'weekly' && weeklyDays.includes(localWeekday(candDay))) ||
+      (recurrence.freq === 'monthly' && candDay.day === startDay.day) ||
+      (recurrence.freq === 'yearly' && candDay.day === startDay.day && candDay.month === startDay.month);
 
     if (matches && candidate.getTime() >= from.getTime()) {
       return candidate;
@@ -178,6 +187,12 @@ export function formatRecurrenceSummary(recurrence: Recurrence | null): string {
   let base: string;
   if (recurrence.freq === 'daily') {
     base = 'Repeats daily';
+  } else if (recurrence.freq === 'monthly') {
+    // Like the weekly no-explicit-days case below, this function only receives the
+    // recurrence (not the event/start date), so the specific day-of-month isn't knowable here.
+    base = 'Repeats monthly';
+  } else if (recurrence.freq === 'yearly') {
+    base = 'Repeats yearly';
   } else {
     const days = recurrence.byweekday ?? [];
     if (days.length === 7) {

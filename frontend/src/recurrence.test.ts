@@ -104,6 +104,30 @@ function main() {
     ok('repeats only on start weekday (following Monday), not daily', next !== null && ymd(next.toISOString()) === '2026-07-20', next?.toISOString());
   }
 
+  console.log('nextOccurrenceOnOrAfter - monthly:');
+  {
+    const recurrence: Recurrence = { freq: 'monthly', byweekday: null, until: null };
+    const ev = mkEvent({ start_time: '2026-07-13T09:00:00.000Z', recurrence });
+
+    const before = nextOccurrenceOnOrAfter(ev, new Date('2026-07-01T00:00:00.000Z'));
+    ok('from before start -> returns start', before !== null && before.toISOString() === '2026-07-13T09:00:00.000Z', before?.toISOString());
+
+    const between = nextOccurrenceOnOrAfter(ev, new Date('2026-07-14T00:00:00.000Z'));
+    ok('from after start -> next month, same day-of-month', between !== null && ymd(between.toISOString()) === '2026-08-13', between?.toISOString());
+  }
+
+  console.log('nextOccurrenceOnOrAfter - yearly:');
+  {
+    const recurrence: Recurrence = { freq: 'yearly', byweekday: null, until: null };
+    const ev = mkEvent({ start_time: '2026-07-13T09:00:00.000Z', recurrence });
+
+    const onStart = nextOccurrenceOnOrAfter(ev, new Date('2026-07-13T00:00:00.000Z'));
+    ok('from before start -> returns start', onStart !== null && onStart.toISOString() === '2026-07-13T09:00:00.000Z', onStart?.toISOString());
+
+    const between = nextOccurrenceOnOrAfter(ev, new Date('2026-07-14T00:00:00.000Z'));
+    ok('from after start -> next year, same month/day', between !== null && ymd(between.toISOString()) === '2027-07-13', between?.toISOString());
+  }
+
   console.log('nextOccurrenceOnOrAfter - until boundary (inclusive):');
   {
     const recurrence: Recurrence = { freq: 'daily', byweekday: null, until: '2026-07-15' };
@@ -141,6 +165,10 @@ function main() {
       formatRecurrenceSummary({ freq: 'weekly', byweekday: [5, 1, 3], until: null }));
 
     ok('weekly all 7 days -> daily', formatRecurrenceSummary({ freq: 'weekly', byweekday: [0, 1, 2, 3, 4, 5, 6], until: null }) === 'Repeats daily');
+
+    ok('monthly', formatRecurrenceSummary({ freq: 'monthly', byweekday: null, until: null }) === 'Repeats monthly');
+
+    ok('yearly', formatRecurrenceSummary({ freq: 'yearly', byweekday: null, until: null }) === 'Repeats yearly');
 
     ok('with until -> suffix appended', formatRecurrenceSummary({ freq: 'daily', byweekday: null, until: '2026-12-31' }) === 'Repeats daily until December 31, 2026',
       formatRecurrenceSummary({ freq: 'daily', byweekday: null, until: '2026-12-31' }));

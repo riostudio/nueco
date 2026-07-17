@@ -74,6 +74,8 @@ const RECURRENCE_OPTIONS: { label: string; value: RecurrenceFreqOption }[] = [
   { label: 'Does not repeat', value: 'none' },
   { label: 'Daily', value: 'daily' },
   { label: 'Weekly', value: 'weekly' },
+  { label: 'Monthly', value: 'monthly' },
+  { label: 'Yearly', value: 'yearly' },
 ];
 
 // ---- Utility functions ----

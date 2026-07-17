@@ -30,7 +30,7 @@ export interface Note {
 // Reminder options in minutes before event
 export type ReminderMinutes = 5 | 15 | 30 | 60 | 1440; // 1440 = 1 day
 
-export type RecurrenceFreq = 'daily' | 'weekly';
+export type RecurrenceFreq = 'daily' | 'weekly' | 'monthly' | 'yearly';
 
 export interface Recurrence {
   freq: RecurrenceFreq;

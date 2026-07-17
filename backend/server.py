@@ -17,7 +17,7 @@ from pymongo import ReturnDocument
 from collections import defaultdict
 import time
 from openai import AsyncOpenAI
-from dateutil.rrule import rrule, DAILY, WEEKLY
+from dateutil.rrule import rrule, DAILY, WEEKLY, MONTHLY, YEARLY
 from zoneinfo import ZoneInfo
 
 ROOT_DIR = Path(__file__).parent
@@ -171,8 +171,8 @@ class NoteResponse(BaseModel):
     updated_at: str
 
 class Recurrence(BaseModel):
-    freq: str  # "daily" | "weekly"
-    byweekday: Optional[List[int]] = None  # 0=Sunday..6=Saturday (matches JS Date.getDay())
+    freq: str  # "daily" | "weekly" | "monthly" | "yearly"
+    byweekday: Optional[List[int]] = None  # 0=Sunday..6=Saturday (matches JS Date.getDay()); weekly only
     until: Optional[str] = None  # ISO date string, inclusive
 
 class EventCreate(BaseModel):
@@ -635,15 +635,16 @@ def compute_reminder_fields(start_time_iso: Optional[str], reminder_minutes: Opt
     return {"reminder_fire_at": fire_at.isoformat(), "reminder_status": status, "reminder_claimed_at": None}
 
 
-# recurrence.freq -> dateutil.rrule frequency constant.
-_RRULE_FREQ = {"daily": DAILY, "weekly": WEEKLY}
+# recurrence.freq -> dateutil.rrule frequency constant. Monthly/yearly need no extra kwargs -
+# rrule already recurs on dtstart's own day-of-month / month-and-day by default.
+_RRULE_FREQ = {"daily": DAILY, "weekly": WEEKLY, "monthly": MONTHLY, "yearly": YEARLY}
 
 # Our `byweekday` contract is 0=Sunday..6=Saturday (matches JS `Date.getDay()`, see the
 # `Recurrence` model). dateutil's rrule uses 0=Monday..6=Sunday. Map explicitly rather
 # than via modular arithmetic to keep the off-by-one risk visible and testable.
 _JS_WEEKDAY_TO_DATEUTIL = {0: 6, 1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5}
 
-# Cap generated occurrences so a no-`until` daily/weekly rule can't loop unbounded.
+# Cap generated occurrences so a no-`until` rule can't loop unbounded.
 _RRULE_MAX_COUNT = 3650
 
 
