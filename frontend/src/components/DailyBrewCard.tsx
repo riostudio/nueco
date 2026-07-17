@@ -240,7 +240,7 @@ export default function DailyBrewCard({ preview = false }: Props) {
               style={s.row}
               onPress={() => router.push({ pathname: '/event-editor', params: { eventId: e.id } })}
             >
-              <MaterialIcons name="event" size={17} color={C.textSec} />
+              <MaterialIcons name="event-note" size={17} color={C.textSec} />
               <Text style={s.rowText} numberOfLines={1}>
                 {e.title} · {formatEventTime(e.startTime)}
               </Text>
