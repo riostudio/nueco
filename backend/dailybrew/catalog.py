@@ -150,6 +150,13 @@ TOPIC_FEED_POOL: list[Outlet] = [
         topics=["Sports"],
     ),
     Outlet(
+        id="espn-sports",
+        name="ESPN",
+        description="Sports news and scores.",
+        feed_url="https://www.espn.com/espn/rss/news",
+        topics=["Sports"],
+    ),
+    Outlet(
         id="npr-health",
         name="NPR Health",
         description="Health and medicine coverage from NPR.",
@@ -164,6 +171,27 @@ TOPIC_FEED_POOL: list[Outlet] = [
         topics=["Health"],
     ),
     Outlet(
+        id="healthline",
+        name="Healthline",
+        description="Health and wellness news.",
+        feed_url="https://www.healthline.com/rss/health-news",
+        topics=["Health"],
+    ),
+    Outlet(
+        id="christian-post",
+        name="The Christian Post",
+        description="Christian news and commentary.",
+        feed_url="https://www.christianpost.com/rss/",
+        topics=["Christian", "Faith"],
+    ),
+    Outlet(
+        id="relevant-magazine",
+        name="RELEVANT",
+        description="Faith, culture, and life for Christians.",
+        feed_url="https://relevantmagazine.com/feed/",
+        topics=["Christian", "Faith"],
+    ),
+    Outlet(
         id="variety",
         name="Variety",
         description="Entertainment industry news.",
@@ -171,11 +199,39 @@ TOPIC_FEED_POOL: list[Outlet] = [
         topics=["Entertainment"],
     ),
     Outlet(
+        id="roger-ebert",
+        name="Roger Ebert",
+        description="Film reviews and criticism.",
+        feed_url="https://www.rogerebert.com/feed",
+        topics=["Movies", "Entertainment"],
+    ),
+    Outlet(
         id="billboard",
         name="Billboard",
         description="Music and entertainment news.",
         feed_url="https://www.billboard.com/feed/",
-        topics=["Entertainment"],
+        topics=["Entertainment", "Music"],
+    ),
+    Outlet(
+        id="rolling-stone-music",
+        name="Rolling Stone Music",
+        description="Music news from Rolling Stone.",
+        feed_url="https://www.rollingstone.com/music/music-news/feed/",
+        topics=["Music", "Entertainment"],
+    ),
+    Outlet(
+        id="ign-games",
+        name="IGN",
+        description="Video game news and reviews.",
+        feed_url="https://www.ign.com/rss/articles/feed?tags=games",
+        topics=["Games", "Entertainment"],
+    ),
+    Outlet(
+        id="polygon",
+        name="Polygon",
+        description="Gaming, tech, and pop culture.",
+        feed_url="https://www.polygon.com/feed/",
+        topics=["Games", "Entertainment"],
     ),
     Outlet(
         id="nasa",
@@ -196,7 +252,14 @@ TOPIC_FEED_POOL: list[Outlet] = [
         name="Eater",
         description="Food and dining news and culture.",
         feed_url="https://www.eater.com/rss/index.xml",
-        topics=["Food"],
+        topics=["Food", "Restaurants"],
+    ),
+    Outlet(
+        id="taste-of-home",
+        name="Taste of Home",
+        description="Recipes and home cooking ideas.",
+        feed_url="https://www.tasteofhome.com/feed/",
+        topics=["Recipes", "Food"],
     ),
 ]
 

@@ -104,7 +104,6 @@ export function UserAvatar({ size = 40 }: UserAvatarProps) {
               </View>
               <View style={styles.menuUserInfo}>
                 <Text style={styles.menuUserName}>{user.name}</Text>
-                <Text style={styles.menuUserEmail}>{user.email}</Text>
               </View>
             </View>
             
@@ -112,7 +111,7 @@ export function UserAvatar({ size = 40 }: UserAvatarProps) {
             
             <TouchableOpacity style={styles.menuItem} onPress={handleSettings}>
               <MaterialIcons name="privacy-tip" size={24} color={C.text} />
-              <Text style={styles.menuText}>Privacy & Data</Text>
+              <Text style={styles.menuText}>Data & Privacy</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.menuItem} onPress={handleCalendarSync}>
@@ -198,11 +197,6 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
     color: C.text,
-  },
-  menuUserEmail: {
-    fontSize: 14,
-    color: C.textSec,
-    marginTop: 2,
   },
   menuDivider: {
     height: 1,

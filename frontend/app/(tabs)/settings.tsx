@@ -100,7 +100,7 @@ export default function PrivacyDataScreen() {
   return (
     <SafeAreaView style={s.container} edges={['top']}>
       <View style={s.header}>
-        <Text style={s.headerTitle}>Privacy & Data</Text>
+        <Text style={s.headerTitle}>Data & Privacy</Text>
         <UserAvatar size={36} />
       </View>
 
@@ -118,6 +118,16 @@ export default function PrivacyDataScreen() {
             </View>
             <MaterialIcons name="edit" size={20} color={C.borderSub} />
           </TouchableOpacity>
+
+          <View style={s.divider} />
+
+          <View style={s.row}>
+            <MaterialIcons name="email" size={24} color={C.textSec} />
+            <View style={{ flex: 1, marginLeft: 16 }}>
+              <Text style={s.rowLabelPlain}>Email</Text>
+              <Text style={s.rowSub}>{user?.email || '—'}</Text>
+            </View>
+          </View>
 
           <View style={s.divider} />
 

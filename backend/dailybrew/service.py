@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -203,19 +204,52 @@ def get_country_catalog(country: str) -> list[Outlet]:
     return catalog.OUTLET_CATALOG.get(country.upper(), [])
 
 
+def _words(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", text.lower())
+
+
 def search_feeds(query: str, limit: int = 5) -> list[Outlet]:
-    """Case-insensitive substring match against every known outlet's name, description, and
-    topic tags - searches both the per-country catalog and the topic-focused pool, so e.g.
-    typing "AI" surfaces TechCrunch AI even though it's not tied to a country."""
+    """Case-insensitive match against every known outlet's name, description, and topic tags -
+    searches both the per-country catalog and the topic-focused pool.
+
+    Matches per-word, not just the whole phrase: a real query is usually 2-3 words (the picker's
+    own placeholder suggests "AI news"/"global news"), and requiring the literal phrase to appear
+    somewhere was too strict - "AI news" matched nothing even though "AI" plainly should, since no
+    outlet's text happens to contain that exact two-word string.
+
+    Matching is word-prefix, not raw substring ("movie" matches the word "movies", but a short
+    query like "AI" only matches a whole/prefix word - not embedded mid-word, e.g. inside
+    "entertainment". Plain substring matching was doing exactly that: "ai" is literally the 7th-8th
+    characters of "entertainment", so every outlet tagged "Entertainment" was false-matching "AI").
+
+    Each word is scored by the most specific field it matches (topic tag > name > free-text
+    description), not just counted - otherwise a generic word like "news" matching some unrelated
+    outlet's description would carry the same weight as a real topic-tag match."""
     q = query.strip().lower()
     if not q:
         return []
 
-    matches = []
+    words = [w for w in _words(q) if len(w) >= 2]
+    if not words:
+        return []
+
+    scored: list[tuple[int, Outlet]] = []
     for outlet in catalog.all_outlets():
-        haystack = [outlet.name.lower(), outlet.description.lower()] + [t.lower() for t in outlet.topics]
-        if any(q in field for field in haystack):
-            matches.append(outlet)
-        if len(matches) >= limit:
-            break
-    return matches
+        name_words = _words(outlet.name)
+        desc_words = _words(outlet.description)
+        topic_words = [tw for t in outlet.topics for tw in _words(t)]
+
+        score = 0
+        for w in words:
+            if any(tw.startswith(w) for tw in topic_words):
+                score += 3
+            elif any(nw.startswith(w) for nw in name_words):
+                score += 2
+            elif any(dw.startswith(w) for dw in desc_words):
+                score += 1
+
+        if score > 0:
+            scored.append((score, outlet))
+
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return [outlet for _, outlet in scored[:limit]]
