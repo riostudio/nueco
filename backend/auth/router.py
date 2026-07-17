@@ -11,7 +11,8 @@ from .service import AuthService
 from .schemas import (
     SignUpRequest, LoginRequest, ForgotPasswordRequest, ResetPasswordRequest,
     ChangePasswordRequest, RefreshTokenRequest, ResendVerificationRequest,
-    DeleteUnverifiedRequest, UpdateNameRequest, AuthResponse, MessageResponse, UserResponse, SyncStatusResponse
+    DeleteUnverifiedRequest, UpdateNameRequest, UpdateNewsPreferencesRequest,
+    AuthResponse, MessageResponse, UserResponse, SyncStatusResponse
 )
 
 load_dotenv()
@@ -349,6 +350,22 @@ async def update_me(
     bootstrap has a DEK available, to push the client-encrypted name (Stage 5)."""
     service = AuthService(db)
     success, message, user = await service.update_name(current_user["id"], request.name, request.enc_version)
+    if not success:
+        raise HTTPException(status_code=404, detail=message)
+    return UserResponse(**user)
+
+@router.put("/me/news-preferences", response_model=UserResponse)
+async def update_news_preferences(
+    request: UpdateNewsPreferencesRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Update the Daily Brew "News from home" country/outlet selection and the opt-in
+    Bible verse toggle."""
+    service = AuthService(db)
+    success, message, user = await service.update_news_preferences(
+        current_user["id"], request.country, request.outlet_ids, request.show_verse
+    )
     if not success:
         raise HTTPException(status_code=404, detail=message)
     return UserResponse(**user)

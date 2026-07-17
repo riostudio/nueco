@@ -18,6 +18,7 @@ import { C, radius, borderWidth } from '../../src/theme';
 // GET /privacy route and backend/static/privacy.html. Swap to a memopad.app URL if
 // that domain ever gets a custom-domain mapping to this Railway service.
 const PRIVACY_POLICY_URL = `${BACKEND_BASE_URL}/privacy`;
+const TERMS_OF_USE_URL = `${BACKEND_BASE_URL}/terms`;
 
 export default function PrivacyDataScreen() {
   const router = useRouter();
@@ -113,6 +114,14 @@ export default function PrivacyDataScreen() {
           <TouchableOpacity style={s.row} onPress={() => Linking.openURL(PRIVACY_POLICY_URL)}>
             <MaterialIcons name="privacy-tip" size={24} color={C.textSec} />
             <Text style={s.rowLabel}>Privacy Policy</Text>
+            <MaterialIcons name="open-in-new" size={22} color={C.borderSub} />
+          </TouchableOpacity>
+
+          <View style={s.divider} />
+
+          <TouchableOpacity style={s.row} onPress={() => Linking.openURL(TERMS_OF_USE_URL)}>
+            <MaterialIcons name="gavel" size={24} color={C.textSec} />
+            <Text style={s.rowLabel}>Terms of Use</Text>
             <MaterialIcons name="open-in-new" size={22} color={C.borderSub} />
           </TouchableOpacity>
 

@@ -7,7 +7,8 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useRouter } from 'expo-router';
 import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { hasAnalyticsDecision } from '../../src/analytics';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { hasAnalyticsDecision, isDailyBrewEnabled } from '../../src/analytics';
 import { registerForPushNotifications, unregisterPushNotifications } from '../../src/notifications';
 import { runCalendarSync } from '../../src/calendarSync';
 import { registerCalendarSyncTaskAsync } from '../../src/calendarSyncTask';
@@ -51,9 +52,21 @@ export default function TabLayout() {
   useEffect(() => { registerForPushNotifications(); }, []);
 
   // First-run GDPR opt-in: if the user hasn't answered the analytics prompt yet, show it as a
-  // full screen before they use the app.
+  // full screen before they use the app. Once that's decided, a second first-run gate: if Daily
+  // Brew is flag-enabled and the user hasn't seen its intro yet, show that too. Runs after the
+  // analytics gate resolves, not instead of / racing it.
   useEffect(() => {
-    hasAnalyticsDecision().then((decided) => { if (!decided) router.replace('/analytics-consent' as Href); }).catch(() => {});
+    hasAnalyticsDecision().then(async (decided) => {
+      if (!decided) {
+        router.replace('/analytics-consent' as Href);
+        return;
+      }
+      const [flagOn, onboardingSeen] = await Promise.all([
+        isDailyBrewEnabled(),
+        AsyncStorage.getItem('daily_brew_onboarding_seen'),
+      ]);
+      if (flagOn && !onboardingSeen) router.replace('/daily-brew-intro' as Href);
+    }).catch(() => {});
   }, []);
 
   // Calendar sync: the reliable trigger is "whenever the app is opened" (throttled inside

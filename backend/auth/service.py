@@ -87,7 +87,10 @@ class AuthService:
             name=user["name"],
             enc_version=user.get("enc_version"),
             email_verified=user.get("email_verified", False),
-            created_at=user.get("created_at", datetime.utcnow())
+            created_at=user.get("created_at", datetime.utcnow()),
+            news_country=user.get("news_country"),
+            news_outlet_ids=user.get("news_outlet_ids", []),
+            daily_brew_show_verse=user.get("daily_brew_show_verse", False)
         )
 
     async def signup(self, name: str, email: str, password: str) -> Tuple[bool, str, Optional[dict]]:
@@ -392,6 +395,27 @@ class AuthService:
         )
         updated = await self.users.find_one({"id": user_id})
         return True, "Name updated", self._user_to_response(updated).model_dump()
+
+    async def update_news_preferences(
+        self, user_id: str, country: str, outlet_ids: list, show_verse: bool
+    ) -> Tuple[bool, str, Optional[dict]]:
+        """Update the Daily Brew "News from home" selection (country + chosen outlet ids)
+        and the opt-in Bible verse toggle, mirroring update_name's shape."""
+        user = await self.users.find_one({"id": user_id})
+        if not user:
+            return False, "User not found", None
+
+        await self.users.update_one(
+            {"id": user_id},
+            {"$set": {
+                "news_country": country,
+                "news_outlet_ids": outlet_ids,
+                "daily_brew_show_verse": show_verse,
+                "updated_at": datetime.utcnow(),
+            }}
+        )
+        updated = await self.users.find_one({"id": user_id})
+        return True, "News preferences updated", self._user_to_response(updated).model_dump()
 
     async def refresh_access_token(self, refresh_token: str) -> Tuple[bool, str, Optional[dict]]:
         token_hash = self._hash_token(refresh_token)

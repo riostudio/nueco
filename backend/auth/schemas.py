@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr
-from typing import Optional
+from typing import List, Optional
 from datetime import datetime
 
 # Request schemas
@@ -41,6 +41,11 @@ class UpdateNameRequest(BaseModel):
     name: str
     enc_version: Optional[int] = None
 
+class UpdateNewsPreferencesRequest(BaseModel):
+    country: str
+    outlet_ids: List[str] = []
+    show_verse: bool = False
+
 # Response schemas
 class UserResponse(BaseModel):
     id: str
@@ -49,6 +54,9 @@ class UserResponse(BaseModel):
     enc_version: Optional[int] = None
     email_verified: bool
     created_at: datetime
+    news_country: Optional[str] = None
+    news_outlet_ids: List[str] = []
+    daily_brew_show_verse: bool = False
 
 class AuthResponse(BaseModel):
     user: UserResponse

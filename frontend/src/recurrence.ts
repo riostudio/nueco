@@ -145,6 +145,22 @@ export function occursOnDay(event: CalendarEvent, year: number, month: number, d
   return next.getTime() <= dayEnd.getTime();
 }
 
+// Matches any day the event spans, not just its start day - multi-day events (event-editor's
+// End Date field) would otherwise vanish from every day but the first.
+export function eventCoversDay(e: CalendarEvent, y: number, m: number, d: number): boolean {
+  const dayStart = new Date(y, m, d, 0, 0, 0, 0);
+  const dayEnd = new Date(y, m, d, 23, 59, 59, 999);
+  return new Date(e.start_time) <= dayEnd && new Date(e.end_time) >= dayStart;
+}
+
+// Recurring events use the display-only occursOnDay helper (day-granularity, not the
+// source of truth for reminder firing) instead of the plain start/end range check -
+// eventCoversDay is left untouched for non-recurring events so their day-matching
+// behavior stays byte-identical to before.
+export function eventOccursOnDay(e: CalendarEvent, y: number, m: number, d: number): boolean {
+  return e.recurrence ? occursOnDay(e, y, m, d) : eventCoversDay(e, y, m, d);
+}
+
 /** "Month Day, Year" - matches the date format already used across events.tsx/calendar.tsx (MONTH_NAMES-based). */
 function formatMonthDayYear(cal: { year: number; month: number; day: number }): string {
   return `${MONTH_NAMES[cal.month]} ${cal.day}, ${cal.year}`;

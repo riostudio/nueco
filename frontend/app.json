@@ -106,7 +106,7 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "Use your current location to fill in an event's location field"
+          "locationWhenInUsePermission": "Use your current location for event details, local weather, and news from home"
         }
       ]
     ],

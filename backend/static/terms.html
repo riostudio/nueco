@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noai, noimageai, noindex">
+<title>MemoPad Terms of Use</title>
+<style>
+  :root {
+    --bg: #FDFBF7;
+    --surface: #FFFFFF;
+    --surface-sunken: #F5F0E8;
+    --text: #14110D;
+    --text-sec: #4A4038;
+    --text-tertiary: #8A7F72;
+    --border: #E4DACB;
+    --border-strong: #D8CBB4;
+    --accent: #C1431F;
+    --accent-fg: #FFFFFF;
+    --accent-tint: #F3E2DA;
+    --warn-bg: #FBF0DE;
+    --warn-border: #E3C583;
+    --warn-text: #6B4E12;
+    --code-bg: #F1E9DC;
+    --shadow: 0 1px 2px rgba(20, 17, 13, 0.04), 0 8px 24px rgba(20, 17, 13, 0.05);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17140F;
+      --surface: #1E1A14;
+      --surface-sunken: #24201A;
+      --text: #F3ECDF;
+      --text-sec: #C8BCA9;
+      --text-tertiary: #8E8272;
+      --border: #362F25;
+      --border-strong: #453C2F;
+      --accent: #E8703F;
+      --accent-fg: #17140F;
+      --accent-tint: #372218;
+      --warn-bg: #322A16;
+      --warn-border: #6B5827;
+      --warn-text: #E9CE8B;
+      --code-bg: #26211A;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 56px 24px 96px;
+  }
+
+  .mast {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 40px;
+  }
+  .wordmark {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 700;
+    font-size: 15px;
+    letter-spacing: 0.01em;
+    color: var(--text);
+    text-decoration: none;
+  }
+  .wordmark-mark {
+    width: 26px;
+    height: 26px;
+    border-radius: 7px;
+    background: var(--accent);
+    color: var(--accent-fg);
+    display: grid;
+    place-items: center;
+    font-size: 13px;
+    font-weight: 800;
+    flex-shrink: 0;
+  }
+  .mast-meta {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .draft-flag {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-border);
+    color: var(--warn-text);
+    border-radius: 10px;
+    padding: 14px 16px;
+    font-size: 13.5px;
+    line-height: 1.55;
+    margin-bottom: 40px;
+  }
+  .draft-flag svg { flex-shrink: 0; margin-top: 2px; }
+  .draft-flag strong { font-weight: 700; }
+
+  h1 {
+    font-size: 34px;
+    line-height: 1.15;
+    letter-spacing: -0.015em;
+    margin: 0 0 10px;
+    text-wrap: balance;
+    font-weight: 800;
+  }
+  .subhead {
+    font-size: 16.5px;
+    color: var(--text-sec);
+    line-height: 1.6;
+    margin: 0 0 32px;
+    max-width: 60ch;
+  }
+
+  .summary-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 22px 24px 24px;
+    margin-bottom: 44px;
+    box-shadow: var(--shadow);
+  }
+  .summary-box h2 {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+    font-weight: 700;
+    margin: 0 0 14px;
+  }
+  .summary-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px 20px;
+  }
+  @media (max-width: 560px) {
+    .summary-grid { grid-template-columns: 1fr; }
+  }
+  .summary-item {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    font-size: 14.5px;
+    line-height: 1.5;
+    color: var(--text);
+  }
+  .summary-item .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    margin-top: 7px;
+    flex-shrink: 0;
+  }
+  .summary-item b { font-weight: 600; }
+
+  nav.toc {
+    margin-bottom: 48px;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    padding: 18px 0;
+  }
+  nav.toc ol {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 24px;
+    counter-reset: toc;
+  }
+  @media (max-width: 560px) {
+    nav.toc ol { grid-template-columns: 1fr; }
+  }
+  nav.toc li { counter-increment: toc; }
+  nav.toc a {
+    display: flex;
+    gap: 10px;
+    font-size: 13.5px;
+    color: var(--text-sec);
+    text-decoration: none;
+    padding: 3px 0;
+  }
+  nav.toc a:hover { color: var(--accent); }
+  nav.toc a::before {
+    content: counter(toc, decimal-leading-zero);
+    font-variant-numeric: tabular-nums;
+    color: var(--text-tertiary);
+    font-size: 12px;
+    padding-top: 1px;
+  }
+
+  section {
+    margin-bottom: 40px;
+    scroll-margin-top: 24px;
+  }
+  section h2 {
+    font-size: 20px;
+    letter-spacing: -0.005em;
+    margin: 0 0 14px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+    font-weight: 750;
+  }
+  section h3 {
+    font-size: 15px;
+    margin: 22px 0 8px;
+    font-weight: 700;
+    color: var(--text);
+  }
+  section p {
+    font-size: 15px;
+    line-height: 1.7;
+    color: var(--text-sec);
+    margin: 0 0 14px;
+    max-width: 66ch;
+  }
+  section ul {
+    margin: 0 0 14px;
+    padding-left: 20px;
+  }
+  section li {
+    font-size: 15px;
+    line-height: 1.7;
+    color: var(--text-sec);
+    margin-bottom: 6px;
+    max-width: 62ch;
+  }
+  section li b, section p b { color: var(--text); font-weight: 600; }
+  section a { color: var(--accent); }
+
+  .highlight-box {
+    background: var(--accent-tint);
+    border: 1px solid var(--border-strong);
+    border-radius: 12px;
+    padding: 18px 20px;
+    margin: 0 0 14px;
+  }
+  .highlight-box p { margin: 0 0 8px; color: var(--text); }
+  .highlight-box p:last-child { margin-bottom: 0; }
+
+  footer {
+    margin-top: 56px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    font-size: 13px;
+    color: var(--text-tertiary);
+  }
+  footer a { color: var(--text-sec); }
+
+  a:focus-visible, button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="mast">
+    <span class="wordmark">
+      <span class="wordmark-mark">M</span>
+      MemoPad
+    </span>
+    <span class="mast-meta">Draft, updated July 15, 2026</span>
+  </div>
+
+  <div class="draft-flag">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 9V13M12 17H12.01M10.29 3.86L1.82 18A2 2 0 0 0 3.55 21H20.45A2 2 0 0 0 22.18 18L13.71 3.86A2 2 0 0 0 10.29 3.86Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span><strong>This is a working draft, not a published policy.</strong> It was generated from a read of MemoPad's actual codebase and product behavior so the factual claims below match the current build. It has not been reviewed by a lawyer and should get one, particularly &sect;7 (Acceptable Use / no scraping or AI training) and &sect;10 (Limitation of Liability), before this is treated as final or relied on for enforcement in any jurisdiction. Written against Australian Consumer Law's non-excludable guarantees and general commercial ToS practice; governing law is set to Victoria, Australia to match the operator's registered address, which is a placeholder for legal confirmation, not a considered jurisdictional choice.</span>
+  </div>
+
+  <h1>Terms of Use</h1>
+  <p class="subhead">These terms govern your use of the MemoPad app and the backend services it talks to. By creating an account or using MemoPad, you agree to them.</p>
+
+  <div class="summary-box">
+    <h2>In short</h2>
+    <div class="summary-grid">
+      <div class="summary-item"><span class="dot"></span><span><b>MemoPad is currently free to use.</b> No paid plans or subscriptions exist today; if that changes, this page will be updated first.</span></div>
+      <div class="summary-item"><span class="dot"></span><span><b>Your content is yours.</b> We don't claim ownership of your notes or events &mdash; we just need a limited license to store, sync, and display them back to you.</span></div>
+      <div class="summary-item"><span class="dot"></span><span><b>No scraping, and no using MemoPad to train AI models.</b> Automated crawling of the app or its backend, and any use of MemoPad's design, content, or functionality to train or fine-tune an AI system, is prohibited. See &sect;7.</span></div>
+      <div class="summary-item"><span class="dot"></span><span><b>You're responsible for your account.</b> Keep your password safe; we can't recover encrypted note/event content if you lose both your password and recovery code.</span></div>
+      <div class="summary-item"><span class="dot"></span><span><b>The app is provided "as is."</b> Standard disclaimer of warranties, with a liability cap, subject to any consumer guarantees that can't legally be excluded.</span></div>
+      <div class="summary-item"><span class="dot"></span><span><b>You can leave any time.</b> Delete your account from Settings whenever you want; see MemoPad's <a href="/privacy">Privacy Policy</a> for what that erases.</span></div>
+    </div>
+  </div>
+
+  <nav class="toc" aria-label="Table of contents">
+    <ol>
+      <li><a href="#acceptance">Acceptance of these terms</a></li>
+      <li><a href="#service">The service</a></li>
+      <li><a href="#accounts">Your account</a></li>
+      <li><a href="#content">Your content</a></li>
+      <li><a href="#ip">Our intellectual property</a></li>
+      <li><a href="#conduct">Acceptable use</a></li>
+      <li><a href="#scraping">No scraping or AI training</a></li>
+      <li><a href="#thirdparty">Third-party services</a></li>
+      <li><a href="#termination">Suspension and termination</a></li>
+      <li><a href="#disclaimer">Disclaimer of warranties</a></li>
+      <li><a href="#liability">Limitation of liability</a></li>
+      <li><a href="#law">Governing law</a></li>
+      <li><a href="#changes">Changes to these terms</a></li>
+      <li><a href="#contact">Contact</a></li>
+    </ol>
+  </nav>
+
+  <section id="acceptance">
+    <h2>1. Acceptance of these terms</h2>
+    <p>By creating a MemoPad account or otherwise using the app, you agree to these Terms of Use and to MemoPad's <a href="/privacy">Privacy Policy</a>, which is incorporated into these terms by reference. If you don't agree, don't use MemoPad.</p>
+  </section>
+
+  <section id="service">
+    <h2>2. The service</h2>
+    <p>MemoPad is a note-taking and calendar app operated by <b>Riostudio</b>, based at Unit 2, 2 Wendover Court, Mount Waverley VIC 3149, Australia. MemoPad is currently provided free of charge, with no paid tiers or subscriptions. We may introduce paid features in the future; if we do, this page and the app itself will clearly disclose pricing and terms before anything is charged, and using the free features you already have won't require agreeing to a new paid plan.</p>
+  </section>
+
+  <section id="accounts">
+    <h2>3. Your account</h2>
+    <ul>
+      <li>You need an account (email and password) to use MemoPad. You're responsible for keeping your login credentials confidential and for all activity under your account.</li>
+      <li>You must provide accurate information when creating your account and keep it up to date.</li>
+      <li>Notes and calendar event content are end-to-end encrypted using a key derived from your password or recovery code. We cannot recover this content if you lose both &mdash; there is no "forgot password" path that restores encrypted content, only a fresh start. See the <a href="/privacy">Privacy Policy</a> for the full technical detail.</li>
+      <li>You must be capable of forming a binding contract to use MemoPad; see the Privacy Policy's Children section for our position on users under 13.</li>
+    </ul>
+  </section>
+
+  <section id="content">
+    <h2>4. Your content</h2>
+    <p>You own the notes, events, attachments, and other content you create in MemoPad ("Your Content"). We don't claim ownership of it. By using MemoPad, you grant us a limited license to store, process, transmit, and display Your Content solely as necessary to provide the app to you &mdash; for example, syncing it across your devices, sending reminders, or (for the specific features that use it) passing voice recordings or feedback text to a third-party processor as described in the Privacy Policy. This license ends when you delete the relevant content or your account.</p>
+    <p>You're responsible for Your Content and for having the right to store and share anything you put into MemoPad. Don't upload anything you don't have the rights to, or anything unlawful.</p>
+  </section>
+
+  <section id="ip">
+    <h2>5. Our intellectual property</h2>
+    <p>MemoPad's app, design, user interface, source code, trademarks, and branding (excluding Your Content) are owned by Riostudio or its licensors and protected by copyright and other intellectual property laws. Using MemoPad doesn't give you any ownership or license to these beyond what's needed to use the app for its intended purpose on your own devices. You may not copy, modify, reverse-engineer, or create derivative works of the app itself except to the extent applicable law gives you a non-waivable right to do so.</p>
+  </section>
+
+  <section id="conduct">
+    <h2>6. Acceptable use</h2>
+    <p>You agree not to:</p>
+    <ul>
+      <li>Use MemoPad for any unlawful purpose, or to store or transmit content that infringes someone else's rights, is defamatory, or is otherwise unlawful;</li>
+      <li>Attempt to gain unauthorized access to MemoPad's systems, other users' accounts or content, or interfere with the service's normal operation (including denial-of-service attempts, or attempts to bypass rate limits or authentication);</li>
+      <li>Use MemoPad to send spam or unsolicited communications;</li>
+      <li>Misrepresent your identity or affiliation in connection with your use of MemoPad.</li>
+    </ul>
+  </section>
+
+  <section id="scraping">
+    <h2>7. No scraping or AI training</h2>
+    <div class="highlight-box">
+      <p><b>You may not use any automated means &mdash; including bots, crawlers, scrapers, or AI agents &mdash; to access, index, or extract data, design, or functionality from MemoPad's app or backend services, except for the ordinary, interactive use of the app by a human through its intended client.</b></p>
+      <p><b>You may not use MemoPad's app, design, user interface, source code, content, or functionality (in whole or in part) to train, fine-tune, evaluate, or otherwise develop any artificial intelligence or machine learning model, regardless of who operates it or its size.</b> This applies equally to Apple, Google, Anthropic, OpenAI, Meta, and any other organization, of any size, anywhere in the world.</p>
+    </div>
+    <p>This restriction is contractual and applies to anyone bound by these terms. It does not, and cannot, control what happens to content Apple or Google host on your behalf as part of app store distribution (for example, screenshots or descriptions submitted to the App Store or Play Store), which are governed by those platforms' own terms, not this one. MemoPad also publishes a <code>robots.txt</code> and sends anti-training signals (<code>X-Robots-Tag: noai</code>) from its backend as an additional, industry-standard technical signal to compliant automated crawlers &mdash; see the Privacy Policy's hosting section for the providers involved. Neither that technical signal nor this clause can compel a non-compliant third party to obey it; this clause is what gives Riostudio a basis to act (including a legal claim) if one doesn't.</p>
+  </section>
+
+  <section id="thirdparty">
+    <h2>8. Third-party services</h2>
+    <p>MemoPad relies on third-party providers (OpenAI, PostHog, MongoDB Atlas, Railway, Open-Meteo, and, if you use MemoPad's news feature, the specific news outlets you select) to provide parts of the service. See the <a href="/privacy">Privacy Policy</a> for what each receives. We aren't responsible for the availability or content of third-party services we link to or rely on, including news articles you open from MemoPad, which are that publisher's content, not ours.</p>
+  </section>
+
+  <section id="termination">
+    <h2>9. Suspension and termination</h2>
+    <p>You may stop using MemoPad and delete your account at any time from Settings &gt; Privacy &amp; Data &gt; Delete account. We may suspend or terminate your access if you materially breach these terms (including &sect;6 or &sect;7), or if we reasonably believe your account poses a security risk to MemoPad or other users. Where practical, we'll try to notify you first. Sections of these terms that by their nature should survive termination (including &sect;5, &sect;7, &sect;10, and &sect;11) continue to apply after your account is closed.</p>
+  </section>
+
+  <section id="disclaimer">
+    <h2>10. Disclaimer of warranties</h2>
+    <p>MemoPad is provided "as is" and "as available," without warranties of any kind, whether express, implied, or statutory, to the fullest extent permitted by law. We don't warrant that the app will be uninterrupted, error-free, or completely secure. Nothing in this section excludes, restricts, or modifies any consumer guarantee, right, or remedy under the Australian Consumer Law or any other law that cannot lawfully be excluded.</p>
+  </section>
+
+  <section id="liability">
+    <h2>11. Limitation of liability</h2>
+    <p>To the fullest extent permitted by law, Riostudio will not be liable for any indirect, incidental, special, consequential, or punitive damages, or any loss of data, arising from or related to your use of MemoPad. Because encrypted content cannot be recovered by us if you lose your password and recovery code (see &sect;3), you're solely responsible for keeping a record of your recovery code; we recommend storing it somewhere safe outside the app. Where liability cannot be excluded by law, it is limited to the minimum extent that law allows.</p>
+  </section>
+
+  <section id="law">
+    <h2>12. Governing law</h2>
+    <p>These terms are governed by the laws of Victoria, Australia, without regard to conflict-of-law principles, and any dispute will be subject to the non-exclusive jurisdiction of the courts of Victoria, Australia. <em>(Placeholder: confirm this is the intended jurisdiction, and whether an arbitration or other dispute-resolution clause should be added, as part of legal review.)</em></p>
+  </section>
+
+  <section id="changes">
+    <h2>13. Changes to these terms</h2>
+    <p>If we make a material change to these terms, we'll give at least 14 days' notice in the app before it takes effect, so you have time to review it and, if you choose, export your data or delete your account before it applies to you &mdash; the same notice commitment as the Privacy Policy. Continuing to use MemoPad after a change takes effect means you accept the updated terms.</p>
+  </section>
+
+  <section id="contact">
+    <h2>14. Contact</h2>
+    <p>Questions about these terms can be sent to <code>riostudiodesign@gmail.com</code>.</p>
+  </section>
+
+  <footer>
+    <span>MemoPad Terms of Use, draft</span>
+    <span>Updated from a codebase review, July 15, 2026</span>
+  </footer>
+
+</div>
+</body>
+</html>

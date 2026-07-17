@@ -45,11 +45,14 @@ function AppWithAnalytics() {
         <Stack.Screen name="reset-password" options={{ headerShown: false, animation: 'slide_from_right' }} />
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="analytics-consent" options={{ headerShown: false, gestureEnabled: false, animation: 'fade' }} />
+        <Stack.Screen name="daily-brew-intro" options={{ headerShown: false, gestureEnabled: false, animation: 'fade' }} />
         <Stack.Screen name="editor" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="share-target" options={{ presentation: 'modal' }} />
         <Stack.Screen name="event-editor" options={{ presentation: 'modal' }} />
+        <Stack.Screen name="daily-verse" options={{ presentation: 'modal' }} />
         <Stack.Screen name="change-password" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="calendar-sync-settings" options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="news-source-settings" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="canva-settings" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="recovery-code" options={{ headerShown: false, gestureEnabled: false }} />
         <Stack.Screen name="recover-key" options={{ headerShown: false, gestureEnabled: false }} />

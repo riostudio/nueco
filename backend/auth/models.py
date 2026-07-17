@@ -22,6 +22,9 @@ def create_user_doc(
         "reset_token_expiry": None,
         "failed_login_attempts": 0,
         "locked_until": None,
+        "news_country": None,
+        "news_outlet_ids": [],
+        "daily_brew_show_verse": False,
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow()
     }

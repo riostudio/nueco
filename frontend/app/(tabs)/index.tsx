@@ -17,6 +17,7 @@ import { trackNoteSearched, trackNoteDeleted, trackEvent } from '../../src/analy
 import { useOfflineNotes } from '../../src/useOfflineNotes';
 import OfflineBanner from '../../src/components/OfflineBanner';
 import FeedbackToast from '../../src/components/FeedbackToast';
+import DailyBrewCard from '../../src/components/DailyBrewCard';
 import FeedbackCommentModal from '../../src/components/FeedbackCommentModal';
 import { getSyncQueue, getLocalNotes, LocalNote } from '../../src/offlineSync';
 import { parseSourcePost } from '../../src/share/socialSource';
@@ -500,13 +501,16 @@ export default function NotesScreen() {
           </View>
         }
         ListHeaderComponent={
-          pinnedNotes.length > 0 ? (
-            <View>
-              <Text style={s.section}>Pinned</Text>
-              {pinnedNotes.map(renderCard)}
-              {otherNotes.length > 0 && <Text style={s.section}>All Notes</Text>}
-            </View>
-          ) : null
+          <View>
+            <DailyBrewCard />
+            {pinnedNotes.length > 0 && (
+              <>
+                <Text style={s.section}>Pinned</Text>
+                {pinnedNotes.map(renderCard)}
+                {otherNotes.length > 0 && <Text style={s.section}>All Notes</Text>}
+              </>
+            )}
+          </View>
         }
         renderItem={({ item }) => {
           // Skip pinned notes as they're rendered in header

@@ -10,7 +10,7 @@ import { decryptEventsFromServer } from '../../src/crypto/eventCrypto';
 import { CalendarEvent } from '../../src/types';
 import { MONTH_NAMES, DAY_NAMES, C, radius, borderWidth } from '../../src/theme';
 import { UserAvatar } from '../../src/auth';
-import { occursOnDay } from '../../src/recurrence';
+import { eventOccursOnDay } from '../../src/recurrence';
 
 function formatEventTime(iso: string): string {
   const d = new Date(iso);
@@ -67,21 +67,6 @@ export default function CalendarScreen() {
   const selDay = selectedDate.getDate();
   const selMonth = selectedDate.getMonth();
   const selYear = selectedDate.getFullYear();
-
-  // Matches any day the event spans, not just its start day - multi-day events (event-editor's
-  // End Date field) would otherwise vanish from every day but the first.
-  const eventCoversDay = (e: CalendarEvent, y: number, m: number, d: number) => {
-    const dayStart = new Date(y, m, d, 0, 0, 0, 0);
-    const dayEnd = new Date(y, m, d, 23, 59, 59, 999);
-    return new Date(e.start_time) <= dayEnd && new Date(e.end_time) >= dayStart;
-  };
-
-  // Recurring events use the display-only occursOnDay helper (day-granularity, not the
-  // source of truth for reminder firing) instead of the plain start/end range check -
-  // eventCoversDay is left untouched for non-recurring events so their day-matching
-  // behavior stays byte-identical to before.
-  const eventOccursOnDay = (e: CalendarEvent, y: number, m: number, d: number) =>
-    e.recurrence ? occursOnDay(e, y, m, d) : eventCoversDay(e, y, m, d);
 
   const hasEvents = (day: number) =>
     events.some((e) => eventOccursOnDay(e, year, month, day));

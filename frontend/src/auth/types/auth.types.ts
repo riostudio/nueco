@@ -8,6 +8,11 @@ export interface User {
   enc_version?: number | null;
   email_verified: boolean;
   created_at: string;
+  // Daily Brew preferences (backend/auth chunk lands these separately - optional here so
+  // DailyBrewCard degrades to "not set" until the fields actually come back from /auth/me).
+  news_country?: string | null;
+  news_outlet_ids?: string[];
+  daily_brew_show_verse?: boolean;
 }
 
 export interface AuthResponse {

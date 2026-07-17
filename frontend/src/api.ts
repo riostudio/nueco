@@ -2,6 +2,7 @@ import * as LegacyFileSystem from 'expo-file-system/legacy';
 import { authStorage } from './auth/storage/authStorage';
 import { BACKEND_API_BASE_URL, BACKEND_BASE_URL } from './backendBaseUrl';
 import { decryptAccountFromServer } from './crypto/accountCrypto';
+import type { NewsItem } from './dailyBrew/dailyBrew';
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const accessToken = await authStorage.getAccessToken();
@@ -357,4 +358,30 @@ export const canvaApi = {
     fetchApi(`/canva/designs/${designId}/export`, { method: 'POST' }),
   exportStatus: (jobId: string): Promise<{ status: string; download_url?: string | null }> =>
     fetchApi(`/canva/exports/${jobId}`),
+};
+
+export type OutletInfo = { id: string; name: string; description: string; topics: string[] };
+
+// News is fetched server-side (RSS parsing + per-outlet caching) - see backend/dailybrew/service.py.
+export const dailyBrewApi = {
+  getHeadlines: async (): Promise<NewsItem[]> => {
+    const res = await fetchApi('/dailybrew/news');
+    return (res.items ?? []).map((item: any) => ({
+      headline: item.headline,
+      link: item.link,
+      sourceName: item.source_name,
+      publishedAt: item.published_at ?? null,
+    }));
+  },
+  getNewsSources: (countryCode: string): Promise<{ country: string; outlets: OutletInfo[] }> =>
+    fetchApi(`/dailybrew/news-sources?country=${encodeURIComponent(countryCode)}`),
+  searchFeeds: async (query: string): Promise<OutletInfo[]> => {
+    const res = await fetchApi(`/dailybrew/search-feeds?q=${encodeURIComponent(query)}`);
+    return res.outlets ?? [];
+  },
+  updateNewsPreferences: (country: string, outletIds: string[], showVerse: boolean) =>
+    fetchApi('/auth/me/news-preferences', {
+      method: 'PUT',
+      body: JSON.stringify({ country, outlet_ids: outletIds, show_verse: showVerse }),
+    }),
 };

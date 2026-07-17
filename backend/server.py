@@ -1476,6 +1476,10 @@ app.include_router(reset_password_router)
 from canva.router import router as canva_router
 api_router.include_router(canva_router)
 
+# Include Daily Brew router (news headlines - see backend/dailybrew/)
+from dailybrew.router import router as dailybrew_router
+api_router.include_router(dailybrew_router)
+
 app.include_router(api_router)
 
 
@@ -1484,7 +1488,7 @@ app.include_router(api_router)
 # talks to share one origin/port (e.g. http://192.168.20.32:8765). The path is
 # configurable via APK_DOWNLOAD_PATH; if the file is absent (e.g. on Railway) the
 # routes 404, so this is harmless in deployments that don't ship the APK.
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 
 APK_DOWNLOAD_PATH = os.getenv(
     "APK_DOWNLOAD_PATH", str(ROOT_DIR.parent / "frontend" / "memopad-staging.apk")
@@ -1532,6 +1536,54 @@ async def privacy_policy_page():
         raise HTTPException(status_code=404, detail="Privacy policy not available")
     with open(PRIVACY_POLICY_PATH, "r", encoding="utf-8") as f:
         return f.read()
+
+
+# ---- Terms of use ----
+# Same pattern as the privacy policy above: served from this backend, draft-flagged in the
+# HTML itself pending legal review (see backend/static/terms.html's banner).
+TERMS_OF_USE_PATH = str(ROOT_DIR / "static" / "terms.html")
+
+
+@app.get("/terms", response_class=HTMLResponse)
+async def terms_of_use_page():
+    if not os.path.isfile(TERMS_OF_USE_PATH):
+        raise HTTPException(status_code=404, detail="Terms of use not available")
+    with open(TERMS_OF_USE_PATH, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+# ---- robots.txt ----
+ROBOTS_TXT_PATH = str(ROOT_DIR / "static" / "robots.txt")
+
+
+@app.get("/robots.txt", response_class=PlainTextResponse)
+async def robots_txt():
+    if not os.path.isfile(ROBOTS_TXT_PATH):
+        raise HTTPException(status_code=404, detail="robots.txt not available")
+    with open(ROBOTS_TXT_PATH, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+# ---- Anti-AI-training / anti-scraping posture ----
+# Best-effort signals only - a non-compliant crawler can ignore robots.txt and spoof its
+# User-Agent, so this deters well-behaved bots (which currently includes GPTBot, Google-Extended,
+# ClaudeBot, CCBot, etc.) rather than guaranteeing anything. See plan doc's addendum for the
+# full honesty check on what this can't do (App Store listings, APK decompilation).
+AI_CRAWLER_USER_AGENTS = [
+    "gptbot", "chatgpt-user", "ccbot", "google-extended", "applebot-extended",
+    "claudebot", "anthropic-ai", "claude-web", "bytespider", "perplexitybot",
+    "diffbot", "amazonbot", "cohere-ai", "omgili", "youbot",
+]
+
+
+@app.middleware("http")
+async def block_ai_crawlers_and_tag_responses(request: Request, call_next):
+    ua = request.headers.get("user-agent", "").lower()
+    if any(bot in ua for bot in AI_CRAWLER_USER_AGENTS):
+        return PlainTextResponse("Not available to automated crawlers.", status_code=403)
+    response = await call_next(request)
+    response.headers["X-Robots-Tag"] = "noai, noimageai, noindex"
+    return response
 
 
 # ---- CORS Configuration ----
