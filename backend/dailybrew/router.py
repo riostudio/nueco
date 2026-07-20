@@ -1,10 +1,12 @@
-from fastapi import APIRouter, Depends, Query
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException, Query
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from auth.router import get_current_user, get_db
 from . import service
 from .schemas import (
-    NewsHeadlinesResponse, NewsSourceResponse, OutletInfo, SearchFeedsResponse,
+    AddCustomFeedRequest, NewsHeadlinesResponse, NewsSourceResponse, OutletInfo, SearchFeedsResponse,
 )
 
 router = APIRouter(prefix="/dailybrew", tags=["dailybrew"])
@@ -41,14 +43,49 @@ async def search_feeds(
 async def outlets_by_ids(
     ids: str = Query(..., description="Comma-separated outlet ids"),
     current_user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Resolve specific outlet ids to display info - used to show what's already
-    selected/followed (including topic-pool feeds) without needing a search query."""
+    selected/followed (including topic-pool feeds and this user's own custom feeds)
+    without needing a search query."""
     id_list = [i.strip() for i in ids.split(",") if i.strip()]
-    outlets = service.find_outlets(id_list)
+    user = await db.users.find_one({"id": current_user["id"]})
+    custom_feeds = user.get("custom_news_feeds", []) if user else []
+    outlets = service.find_outlets(id_list, custom_feeds=custom_feeds)
     return SearchFeedsResponse(
         outlets=[OutletInfo(id=o.id, name=o.name, description=o.description, topics=o.topics) for o in outlets],
     )
+
+
+@router.post("/custom-feed", response_model=OutletInfo)
+async def add_custom_feed(
+    body: AddCustomFeedRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
+    """Lets a user follow any website's own RSS/Atom feed, not just the curated catalog -
+    validated with a live fetch (and its <title> used as the display name) before being saved,
+    so a broken or non-feed URL never silently makes it into the picker."""
+    feed_url = body.feed_url.strip()
+    user = await db.users.find_one({"id": current_user["id"]})
+    existing = user.get("custom_news_feeds", []) if user else []
+
+    # Already added (possibly at a different, pre-redirect URL) - reuse it instead of duplicating.
+    for cf in existing:
+        if cf["feed_url"] == feed_url:
+            return OutletInfo(id=cf["id"], name=cf["name"], description="Custom feed", topics=[])
+
+    try:
+        name, resolved_url = await service.fetch_custom_feed_name(feed_url)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    new_feed = {"id": f"custom:{uuid.uuid4()}", "name": name, "feed_url": resolved_url}
+    await db.users.update_one(
+        {"id": current_user["id"]},
+        {"$push": {"custom_news_feeds": new_feed}},
+    )
+    return OutletInfo(id=new_feed["id"], name=new_feed["name"], description="Custom feed", topics=[])
 
 
 @router.get("/news", response_model=NewsHeadlinesResponse)
@@ -59,5 +96,6 @@ async def news(
     user = await db.users.find_one({"id": current_user["id"]})
     news_country = user.get("news_country") if user else None
     news_outlet_ids = user.get("news_outlet_ids", []) if user else []
-    items = await service.get_headlines_for_user(news_country, news_outlet_ids)
+    custom_feeds = user.get("custom_news_feeds", []) if user else []
+    items = await service.get_headlines_for_user(news_country, news_outlet_ids, custom_feeds=custom_feeds)
     return NewsHeadlinesResponse(items=items)

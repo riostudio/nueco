@@ -34,3 +34,7 @@ class SearchFeedsResponse(BaseModel):
 class UpdateNewsPreferencesRequest(BaseModel):
     country: str
     outlet_ids: List[str]
+
+
+class AddCustomFeedRequest(BaseModel):
+    feed_url: str

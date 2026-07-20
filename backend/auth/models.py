@@ -24,6 +24,7 @@ def create_user_doc(
         "locked_until": None,
         "news_country": None,
         "news_outlet_ids": [],
+        "custom_news_feeds": [],  # user-added [{id: "custom:<uuid>", name, feed_url}, ...]
         "daily_brew_show_verse": False,
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow()

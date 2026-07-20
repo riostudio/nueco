@@ -116,6 +116,48 @@ def _parse_feed(xml_text: str, source_name: str) -> list[dict]:
     return []
 
 
+def _feed_title(xml_text: str) -> Optional[str]:
+    try:
+        root = ElementTree.fromstring(xml_text)
+    except ElementTree.ParseError:
+        return None
+    if root.tag == "rss":
+        channel = root.find("channel")
+        return channel.findtext("title") if channel is not None else None
+    if root.tag.endswith("feed"):
+        ns = root.tag[: root.tag.index("}") + 1] if "}" in root.tag else ""
+        return root.findtext(f"{ns}title")
+    return None
+
+
+async def fetch_custom_feed_name(feed_url: str) -> tuple[str, str]:
+    """Validates a user-submitted feed URL with a live fetch and returns (name, resolved_url) -
+    the channel/feed's own <title>, and the final URL after following any redirects (so the
+    periodic re-fetch in _fetch_outlet, which deliberately does NOT follow redirects like the
+    curated catalog's pre-resolved URLs, still works on subsequent fetches). Raises ValueError
+    with a user-facing message on any failure - bad scheme, unreachable, not parseable RSS/Atom."""
+    parsed = urlparse(feed_url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("Feed URL must start with http:// or https://")
+    host = (parsed.hostname or "").lower()
+    if not host or host in ("localhost", "127.0.0.1", "::1") or host.startswith(("169.254.", "10.", "192.168.")):
+        raise ValueError("That URL isn't reachable")
+
+    try:
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            resp = await client.get(
+                feed_url, headers={"User-Agent": _FETCH_USER_AGENT}, timeout=_FETCH_TIMEOUT_SECONDS,
+            )
+        resp.raise_for_status()
+    except Exception:
+        raise ValueError("Could not reach that URL")
+
+    title = _feed_title(resp.text)
+    if not title:
+        raise ValueError("That doesn't look like an RSS or Atom feed")
+    return title.strip(), str(resp.url)
+
+
 def _logo_url_for(outlet: Outlet) -> str:
     """A favicon-as-logo, derived from the feed's own domain rather than hand-curated per
     outlet - one fewer thing to keep in sync as outlets are added/changed in catalog.py."""
@@ -178,9 +220,14 @@ async def run_cache_prewarmer() -> None:
         await asyncio.sleep(600)
 
 
+def _custom_outlet(cf: dict) -> Outlet:
+    return Outlet(id=cf["id"], name=cf["name"], description="Custom feed", feed_url=cf["feed_url"])
+
+
 async def get_headlines_for_user(
     news_country: Optional[str],
     news_outlet_ids: list[str],
+    custom_feeds: Optional[list[dict]] = None,
     limit: int = 5,
 ) -> list[NewsItem]:
     if not news_outlet_ids:
@@ -188,8 +235,10 @@ async def get_headlines_for_user(
 
     # Resolved against every known outlet, not just news_country's list: outlet_ids can also
     # include topic-pool feeds followed via /dailybrew/search-feeds (e.g. "AI"), which aren't
-    # scoped to any country. news_country only drives the picker's default suggestions.
+    # scoped to any country, plus this user's own custom-added feeds. news_country only drives
+    # the picker's default suggestions.
     outlets = [o for o in catalog.all_outlets() if o.id in news_outlet_ids]
+    outlets += [_custom_outlet(cf) for cf in (custom_feeds or []) if cf["id"] in news_outlet_ids]
     if not outlets:
         return []
 
@@ -204,15 +253,19 @@ def get_country_catalog(country: str) -> list[Outlet]:
     return catalog.OUTLET_CATALOG.get(country.upper(), [])
 
 
-def find_outlets(ids: list[str]) -> list[Outlet]:
+def find_outlets(ids: list[str], custom_feeds: Optional[list[dict]] = None) -> list[Outlet]:
     """Resolve specific outlet ids to their full display info - lets the client show what's
-    already selected/followed (including a topic-pool feed followed via search, which won't be
-    in the current country list or the current search results) without a live search query."""
+    already selected/followed (including a topic-pool feed followed via search, or this user's
+    own custom-added feed - neither of which is in the current country list or search results)
+    without a live search query."""
+    custom_by_id = {cf["id"]: cf for cf in (custom_feeds or [])}
     found = []
     for oid in ids:
         outlet = catalog.find_outlet(oid)
         if outlet:
             found.append(outlet)
+        elif oid in custom_by_id:
+            found.append(_custom_outlet(custom_by_id[oid]))
     return found
 
 

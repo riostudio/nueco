@@ -421,6 +421,10 @@ export const dailyBrewApi = {
     const res = await fetchApi(`/dailybrew/outlets?ids=${encodeURIComponent(ids.join(','))}`);
     return res.outlets ?? [];
   },
+  // Adds any website's own RSS/Atom feed, validated server-side (live fetch + <title>) before
+  // being saved. Throws (via fetchApi) with the backend's validation message on a bad URL.
+  addCustomFeed: (feedUrl: string): Promise<OutletInfo> =>
+    fetchApi('/dailybrew/custom-feed', { method: 'POST', body: JSON.stringify({ feed_url: feedUrl }) }),
   updateNewsPreferences: (country: string, outletIds: string[], showVerse: boolean) =>
     fetchApi('/auth/me/news-preferences', {
       method: 'PUT',

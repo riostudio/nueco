@@ -6,14 +6,14 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { useAuth } from '../../src/auth';
-import { accountApi } from '../../src/api';
-import { isAnalyticsEnabled, setAnalyticsEnabled, isDailyBrewEnabled } from '../../src/analytics';
-import { isPersistPinned, setPersistPinned } from '../../src/dailyBrew/dailyBrew';
-import { clearLocalData } from '../../src/offlineSync';
-import { exportMyData } from '../../src/dataExport';
-import { BACKEND_BASE_URL } from '../../src/backendBaseUrl';
-import { C, radius, borderWidth } from '../../src/theme';
+import { useAuth } from '../src/auth';
+import { accountApi } from '../src/api';
+import { isAnalyticsEnabled, setAnalyticsEnabled, isDailyBrewEnabled } from '../src/analytics';
+import { isPersistPinned, setPersistPinned } from '../src/dailyBrew/dailyBrew';
+import { clearLocalData } from '../src/offlineSync';
+import { exportMyData } from '../src/dataExport';
+import { BACKEND_BASE_URL } from '../src/backendBaseUrl';
+import { C, radius, borderWidth } from '../src/theme';
 
 // Served from the backend itself (same origin as the API) - see backend/server.py's
 // GET /privacy route and backend/static/privacy.html. Swap to a memopad.app URL if
@@ -290,7 +290,7 @@ const s = StyleSheet.create({
     paddingBottom: 12,
   },
   backBtn: { padding: 12 },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: C.text },
+  headerTitle: { fontSize: 22, fontWeight: '700', color: C.text },
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 24, paddingTop: 8 },
   card: {

@@ -36,6 +36,21 @@ function hashIndex(str: string): number {
   return h;
 }
 
+// fetchApi (src/api.ts) throws `Error("API Error 400: {\"detail\":\"...\"}")` - pull the
+// backend's actual validation message back out for display, rather than a generic fallback.
+function extractErrorDetail(e: unknown, fallback: string): string {
+  if (e instanceof Error) {
+    const match = e.message.match(/API Error \d+: (.*)/s);
+    if (match) {
+      try {
+        const parsed = JSON.parse(match[1]);
+        if (typeof parsed?.detail === 'string') return parsed.detail;
+      } catch {}
+    }
+  }
+  return fallback;
+}
+
 export default function NewsSourceSettingsScreen() {
   const router = useRouter();
   const { user } = useAuth();
@@ -61,6 +76,9 @@ export default function NewsSourceSettingsScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Outlet[]>([]);
   const [searching, setSearching] = useState(false);
+  const [customFeedUrl, setCustomFeedUrl] = useState('');
+  const [addingCustomFeed, setAddingCustomFeed] = useState(false);
+  const [customFeedError, setCustomFeedError] = useState('');
 
   const todayVerse = useMemo(() => getVerseForDate(new Date()), []);
 
@@ -172,6 +190,24 @@ export default function NewsSourceSettingsScreen() {
     }, 300);
     return () => clearTimeout(timer);
   }, [searchQuery]);
+
+  const handleAddCustomFeed = useCallback(async () => {
+    const url = customFeedUrl.trim();
+    if (!url || addingCustomFeed) return;
+    setAddingCustomFeed(true);
+    setCustomFeedError('');
+    try {
+      const outlet = await dailyBrewApi.addCustomFeed(url);
+      rememberOutlets([outlet]);
+      setSelectedOutletIds((prev) => (prev.includes(outlet.id) ? prev : [...prev, outlet.id]));
+      setCustomFeedUrl('');
+    } catch (e) {
+      console.error('Failed to add custom feed:', e);
+      setCustomFeedError(extractErrorDetail(e, 'Could not add that feed. Please try again.'));
+    } finally {
+      setAddingCustomFeed(false);
+    }
+  }, [customFeedUrl, addingCustomFeed, rememberOutlets]);
 
   const selectCountry = useCallback((code: string) => {
     setShowCountryPicker(false);
@@ -391,6 +427,40 @@ export default function NewsSourceSettingsScreen() {
 
           {searchQuery.trim().length >= 2 && !searching && searchResults.length === 0 && (
             <Text style={s.rowSub}>No feeds found for &quot;{searchQuery.trim()}.&quot;</Text>
+          )}
+        </View>
+
+        <View style={[s.card, { marginTop: 20 }]}>
+          <Text style={s.sectionLabel}>Add your own feed</Text>
+          <Text style={[s.rowSub, { marginBottom: 12 }]}>
+            Have a favorite site with an RSS or Atom feed? Paste its link here.
+          </Text>
+          <View style={s.searchBox}>
+            <MaterialIcons name="rss-feed" size={20} color={C.borderSub} />
+            <TextInput
+              testID="news-custom-feed-input"
+              style={s.searchInput}
+              placeholder="https://example.com/feed"
+              placeholderTextColor={C.borderSub}
+              value={customFeedUrl}
+              onChangeText={(t) => { setCustomFeedUrl(t); setCustomFeedError(''); }}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              onSubmitEditing={handleAddCustomFeed}
+            />
+            {addingCustomFeed && <ActivityIndicator size="small" color={C.primary} />}
+          </View>
+          <TouchableOpacity
+            testID="news-custom-feed-add-btn"
+            style={[s.confirmBtn, { marginTop: 4 }, (!customFeedUrl.trim() || addingCustomFeed) && s.confirmBtnDisabled]}
+            onPress={handleAddCustomFeed}
+            disabled={!customFeedUrl.trim() || addingCustomFeed}
+          >
+            <Text style={s.confirmBtnText}>Add feed</Text>
+          </TouchableOpacity>
+          {!!customFeedError && (
+            <Text style={[s.rowSub, { color: C.danger, marginTop: 8 }]}>{customFeedError}</Text>
           )}
         </View>
 

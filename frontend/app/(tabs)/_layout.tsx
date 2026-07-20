@@ -134,12 +134,6 @@ export default function TabLayout() {
             tabBarIcon: EventsIcon,
           }}
         />
-        <Tabs.Screen
-          name="settings"
-          options={{
-            href: null, // Hide settings tab from navigation
-          }}
-        />
       </Tabs>
       {/* Off-screen 1px WebView that pre-warms the Android System WebView engine while the user is in
           the tabs, so the first note editor (TenTap = a WebView) opens fast instead of paying the
