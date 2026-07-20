@@ -237,11 +237,11 @@ export default function DailyBrewCard({ preview = false }: Props) {
           eventsList.map((e) => (
             <TouchableOpacity
               key={e.id}
-              style={s.row}
+              style={s.eventRow}
               onPress={() => router.push({ pathname: '/event-editor', params: { eventId: e.id } })}
             >
-              <MaterialIcons name="event-note" size={17} color={C.textSec} />
-              <Text style={s.rowText} numberOfLines={1}>
+              <MaterialIcons name="event-note" size={17} color={C.secondary} />
+              <Text style={s.eventRowText} numberOfLines={1}>
                 {e.title} · {formatEventTime(e.startTime)}
               </Text>
             </TouchableOpacity>
@@ -316,6 +316,13 @@ const s = StyleSheet.create({
   },
   weatherText: { fontSize: 13, fontWeight: '500', color: C.text },
   row: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
+  // Same light-blue treatment as a note's linked-event chip (see (tabs)/index.tsx's
+  // eventInfo/eventInfoTitle) - same visual language for "this is a calendar event" everywhere.
+  eventRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: '#E3F2FD', borderRadius: 8, padding: 8, marginBottom: 6,
+  },
+  eventRowText: { flex: 1, fontSize: 14, fontWeight: '600', color: C.secondary },
   newsLogo: { width: 17, height: 17, borderRadius: 4 },
   rowText: { flex: 1, fontSize: 14, color: C.text },
   rowTextMuted: { flex: 1, fontSize: 14, color: C.textSec },

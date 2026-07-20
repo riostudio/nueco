@@ -66,8 +66,13 @@ type EditorApi = {
   toggleBold: () => void;
   toggleItalic: () => void;
   toggleBulletList: () => void;
+  undo: () => void;
+  redo: () => void;
 };
-type EditorUiState = { isFocused: boolean; isBoldActive: boolean; isItalicActive: boolean; isBulletListActive: boolean; isReady: boolean };
+type EditorUiState = {
+  isFocused: boolean; isBoldActive: boolean; isItalicActive: boolean; isBulletListActive: boolean;
+  isReady: boolean; canUndo: boolean; canRedo: boolean;
+};
 
 // The TenTap rich-text body, isolated so the bridge is created with the note's content as
 // `initialContent`. That's the reliable way to load existing content: `setContent` after mount
@@ -167,6 +172,8 @@ const NoteBodyEditor = forwardRef<EditorApi, {
     toggleBold: () => editor.toggleBold(),
     toggleItalic: () => editor.toggleItalic(),
     toggleBulletList: () => editor.toggleBulletList(),
+    undo: () => editor.undo(),
+    redo: () => editor.redo(),
   }), [editor]);
 
   useEffect(() => { if (html != null) onChange(html); }, [html]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -177,8 +184,10 @@ const NoteBodyEditor = forwardRef<EditorApi, {
       isItalicActive: state.isItalicActive,
       isBulletListActive: state.isBulletListActive,
       isReady: bridgeReady,
+      canUndo: state.canUndo,
+      canRedo: state.canRedo,
     });
-  }, [state.isFocused, state.isBoldActive, state.isItalicActive, state.isBulletListActive, bridgeReady]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [state.isFocused, state.isBoldActive, state.isItalicActive, state.isBulletListActive, state.canUndo, state.canRedo, bridgeReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <View style={s.richTextWrap}>
@@ -251,7 +260,10 @@ export default function EditorScreen() {
   // saving. The editor lives in <NoteBodyEditor>, mounted with the loaded content as initialContent
   // (below). We drive it imperatively via editorApiRef and mirror its UI state for the toolbar.
   const editorApiRef = useRef<EditorApi | null>(null);
-  const [editorUi, setEditorUi] = useState<EditorUiState>({ isFocused: false, isBoldActive: false, isItalicActive: false, isBulletListActive: false, isReady: false });
+  const [editorUi, setEditorUi] = useState<EditorUiState>({
+    isFocused: false, isBoldActive: false, isItalicActive: false, isBulletListActive: false,
+    isReady: false, canUndo: false, canRedo: false,
+  });
   // HTML to load into the editor once the note is available (null until loaded - editor waits).
   const [seedHtml, setSeedHtml] = useState<string | null>(isNew && shared !== '1' ? '' : null);
   const seededRef = useRef(false);
@@ -1713,6 +1725,24 @@ export default function EditorScreen() {
                 <MaterialIcons name="format-list-bulleted" size={22} color={editorUi.isBulletListActive ? C.primary : C.text} />
                 <Text style={[s.fmtLabel, editorUi.isBulletListActive && s.fmtLabelActive]}>List</Text>
               </TouchableOpacity>
+              <TouchableOpacity
+                testID="fmt-undo"
+                style={[s.fmtBtn, !editorUi.canUndo && s.fmtBtnDisabled]}
+                onPress={() => editorApiRef.current?.undo()}
+                disabled={!editorUi.canUndo}
+              >
+                <MaterialIcons name="undo" size={22} color={C.text} />
+                <Text style={s.fmtLabel}>Undo</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="fmt-redo"
+                style={[s.fmtBtn, !editorUi.canRedo && s.fmtBtnDisabled]}
+                onPress={() => editorApiRef.current?.redo()}
+                disabled={!editorUi.canRedo}
+              >
+                <MaterialIcons name="redo" size={22} color={C.text} />
+                <Text style={s.fmtLabel}>Redo</Text>
+              </TouchableOpacity>
             </View>
           )}
           
@@ -2231,6 +2261,9 @@ const s = StyleSheet.create({
   },
   fmtBtnActive: {
     backgroundColor: C.primary,
+  },
+  fmtBtnDisabled: {
+    opacity: 0.35,
   },
   fmtBold: { fontSize: 18, fontWeight: '900', color: C.text },
   fmtItalic: { fontSize: 18, fontStyle: 'italic', fontWeight: '600', color: C.text },
