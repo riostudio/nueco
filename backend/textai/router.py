@@ -1,7 +1,8 @@
 import base64
 import logging
+from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from auth.router import get_current_user
 from . import service
@@ -29,7 +30,7 @@ async def transcribe_audio_base64(request: TranscribeBase64Request, current_user
             logger.error(f"Failed to decode base64: {e}")
             raise HTTPException(status_code=400, detail="Invalid base64 audio data")
 
-        text = await service.transcribe_bytes(audio_bytes, request.file_extension)
+        text = await service.transcribe_bytes(audio_bytes, request.file_extension, request.language)
         logger.info(f"Transcription successful: {text[:100] if text else 'empty'}...")
         return {"text": text}
     except HTTPException:
@@ -40,11 +41,15 @@ async def transcribe_audio_base64(request: TranscribeBase64Request, current_user
 
 
 @router.post("/transcribe")
-async def transcribe_audio(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
+async def transcribe_audio(
+    file: UploadFile = File(...),
+    language: Optional[str] = Form(None),
+    current_user: dict = Depends(get_current_user),
+):
     """Transcribe uploaded audio file (requires authentication)"""
     try:
         logger.info(f"Received transcription request. Filename: {file.filename}, Content-Type: {file.content_type}")
-        text = await service.transcribe_upload(file)
+        text = await service.transcribe_upload(file, language)
         logger.info(f"Transcription successful: {text[:100]}...")
         return {"text": text}
     except HTTPException:

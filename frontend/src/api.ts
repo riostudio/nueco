@@ -1,4 +1,5 @@
 import * as LegacyFileSystem from 'expo-file-system/legacy';
+import * as Localization from 'expo-localization';
 import { authStorage } from './auth/storage/authStorage';
 import { BACKEND_API_BASE_URL, BACKEND_BASE_URL } from './backendBaseUrl';
 import { decryptAccountFromServer } from './crypto/accountCrypto';
@@ -295,6 +296,12 @@ export const transcribeApi = {
       const uploadUrl = `${BACKEND_API_BASE_URL}/transcribe-base64`;
       console.log('Uploading to:', uploadUrl);
       
+      // Whisper transcribes in whatever language it detects from the audio alone - a short or
+      // accented clip can lock onto the wrong (often closely related) language for the whole
+      // result. Passing the device's own language as a hint skips that guess: the recording is
+      // near-always in whatever language the phone itself is set to.
+      const language = Localization.getLocales()[0]?.languageCode ?? undefined;
+
       const response = await fetch(uploadUrl, {
         method: 'POST',
         headers: {
@@ -304,6 +311,7 @@ export const transcribeApi = {
         body: JSON.stringify({
           audio_base64: base64,
           file_extension: extension,
+          language,
         }),
       });
       

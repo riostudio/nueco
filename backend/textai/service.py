@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import tempfile
+from typing import Optional
 
 from fastapi import HTTPException, UploadFile
 
@@ -48,7 +49,7 @@ def _normalize_extension(extension: str) -> str:
     return extension
 
 
-async def transcribe_bytes(audio_bytes: bytes, file_extension: str) -> str:
+async def transcribe_bytes(audio_bytes: bytes, file_extension: str, language: Optional[str] = None) -> str:
     extension = _normalize_extension(file_extension)
     client = get_openai_client()
 
@@ -58,22 +59,23 @@ async def transcribe_bytes(audio_bytes: bytes, file_extension: str) -> str:
 
     try:
         with open(tmp_path, "rb") as audio_file:
-            response = await client.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file,
-                # language omitted - Whisper auto-detects
-            )
+            kwargs = {"model": "whisper-1", "file": audio_file}
+            # Only pass language when we actually have a hint - an empty/unrecognized value
+            # would force Whisper into that language instead of just falling back to auto-detect.
+            if language:
+                kwargs["language"] = language
+            response = await client.audio.transcriptions.create(**kwargs)
         return response.text or ""
     finally:
         os.unlink(tmp_path)
 
 
-async def transcribe_upload(file: UploadFile) -> str:
+async def transcribe_upload(file: UploadFile, language: Optional[str] = None) -> str:
     original_filename = file.filename or "recording.m4a"
     suffix = os.path.splitext(original_filename)[1] or ".m4a"
     content = await file.read()
     logger.info(f"Read {len(content)} bytes from uploaded file")
-    return await transcribe_bytes(content, suffix)
+    return await transcribe_bytes(content, suffix, language)
 
 
 async def process_text(text: str, action: str) -> dict:
