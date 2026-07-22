@@ -53,7 +53,7 @@ function extractErrorDetail(e: unknown, fallback: string): string {
 
 export default function NewsSourceSettingsScreen() {
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, updateNewsPreferences } = useAuth();
   const params = useLocalSearchParams<{ onboarding?: string }>();
   const isOnboarding = params.onboarding === '1';
   // Editing already-saved preferences (reached via the avatar menu, not onboarding) - drives
@@ -226,7 +226,10 @@ export default function NewsSourceSettingsScreen() {
     if (!canConfirm || confirming) return;
     setConfirming(true);
     try {
-      await dailyBrewApi.updateNewsPreferences(countryCode || '', selectedOutletIds, verseEnabled);
+      // Goes through AuthContext (not a bare dailyBrewApi call) so the in-memory user is
+      // updated with what was just saved - otherwise returning to this screen would keep
+      // reading the pre-save snapshot and show the previous selection.
+      await updateNewsPreferences(countryCode || '', selectedOutletIds, verseEnabled);
       goToDestination();
     } catch (e) {
       console.error('Failed to save news preferences:', e);
@@ -234,7 +237,7 @@ export default function NewsSourceSettingsScreen() {
     } finally {
       setConfirming(false);
     }
-  }, [canConfirm, confirming, countryCode, selectedOutletIds, verseEnabled, goToDestination]);
+  }, [canConfirm, confirming, countryCode, selectedOutletIds, verseEnabled, goToDestination, updateNewsPreferences]);
 
   const handleSkip = useCallback(() => {
     router.replace('/(tabs)');
