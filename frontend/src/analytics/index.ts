@@ -9,7 +9,6 @@ export {
   setAnalyticsEnabled,
   getAnalyticsConsent,
   hasAnalyticsDecision,
-  isDailyBrewEnabled,
   trackNoteCreated,
   trackNoteEdited,
   trackNoteDeleted,

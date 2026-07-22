@@ -1,11 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Modal, Pressable, Platform, StatusBar } from 'react-native';
 import { useRouter, type Href } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
 import { User } from '../types/auth.types';
 import { useAuth } from '../context/AuthContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { isDailyBrewEnabled } from '../../analytics';
 
 const C = {
   primary: '#D84315',
@@ -27,16 +26,13 @@ export function UserAvatar({ size = 40 }: UserAvatarProps) {
   const router = useRouter();
   const { user, logout } = useAuth();
   const [menuVisible, setMenuVisible] = useState(false);
-  const [dailyBrewEnabled, setDailyBrewEnabled] = useState(false);
   const insets = useSafeAreaInsets();
 
-  // Daily Brew's "News from home" entry only shows once the remote flag resolves on - avoids a
-  // dead-end menu item pointing at a hidden feature.
-  useEffect(() => {
-    isDailyBrewEnabled().then(setDailyBrewEnabled).catch(() => {});
-  }, []);
-
   if (!user) return null;
+
+  // Daily Brew's "News from home" entry only shows once the flag (resolved server-side, see
+  // backend/featureflags.py) comes back on - avoids a dead-end menu item pointing at a hidden feature.
+  const dailyBrewEnabled = user.daily_brew_enabled === true;
 
   const firstLetter = user.email.charAt(0).toUpperCase();
 

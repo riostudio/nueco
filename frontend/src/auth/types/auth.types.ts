@@ -13,6 +13,10 @@ export interface User {
   news_country?: string | null;
   news_outlet_ids?: string[];
   daily_brew_show_verse?: boolean;
+  // Resolved server-side from the daily-brew-enabled PostHog flag (backend/featureflags.py) -
+  // never checked from the client, since a device's own ad-blocker/DNS/VPN can hide a
+  // client-side PostHog call and there's no way to tell that apart from the flag being off.
+  daily_brew_enabled?: boolean;
 }
 
 export interface AuthResponse {

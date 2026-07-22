@@ -4,9 +4,9 @@
  * an opt-in Bible verse, up to 3 news headlines, and a "Done for today" dismiss. Own local
  * StyleSheet + Animated, same shape as OfflineBanner.tsx.
  *
- * Feature-flag gated (daily-brew-enabled, see src/analytics/posthog.ts): renders null and skips
- * all fetch logic if the flag isn't on, so a user who onboarded while it was on stops seeing the
- * card cleanly once it's flipped off.
+ * Feature-flag gated (daily-brew-enabled, resolved server-side - see backend/featureflags.py and
+ * user.daily_brew_enabled): renders null and skips all fetch logic if the flag isn't on, so a
+ * user who onboarded while it was on stops seeing the card cleanly once it's flipped off.
  *
  * Loading is silent, not spinner-driven: each section (weather/events/news) is simply omitted
  * from layout until it resolves (from cache instantly, or from the background fetch a moment
@@ -25,7 +25,6 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect, type Href } from 'expo-router';
 import { C, radius, borderWidth, DAY_NAMES, MONTH_NAMES } from '../theme';
 import { useAuth } from '../auth';
-import { isDailyBrewEnabled } from '../analytics';
 import { getVerseForDate } from '../dailyBrew/verses';
 import {
   isDismissedToday, markDismissedToday, isPersistPinned, getCachedBrew, setCachedBrew, pruneOldKeys,
@@ -117,20 +116,21 @@ export default function DailyBrewCard({ preview = false }: Props) {
   useFocusEffect(
     useCallback(() => {
       if (preview) return;
+      if (!user) return;
+      const userId = user.id;
       let cancelled = false;
 
       (async () => {
-        const flagOn = await isDailyBrewEnabled();
-        if (cancelled) return;
+        const flagOn = user.daily_brew_enabled === true;
         setFlagEnabled(flagOn);
         if (!flagOn) return; // Flag off - skip fetch logic entirely, card renders null below.
 
-        const persistPinned = await isPersistPinned();
+        const persistPinned = await isPersistPinned(userId);
         if (cancelled) return;
         setPinned(persistPinned);
 
         // Pinned mode ignores the daily dismiss entirely - always shown while the flag's on.
-        const alreadyDismissed = persistPinned ? false : await isDismissedToday();
+        const alreadyDismissed = persistPinned ? false : await isDismissedToday(userId);
         if (cancelled) return;
         if (alreadyDismissed) {
           setDismissed(true);
@@ -140,7 +140,7 @@ export default function DailyBrewCard({ preview = false }: Props) {
         playEntrance();
 
         // Stale-while-revalidate: hydrate instantly from cache before the fresh fetch resolves.
-        const cached = await getCachedBrew();
+        const cached = await getCachedBrew(userId);
         if (cancelled) return;
         setEvents(cached?.events !== undefined ? cached.events : 'loading');
         setWeather(cached?.weather != null ? cached.weather : 'loading');
@@ -157,7 +157,7 @@ export default function DailyBrewCard({ preview = false }: Props) {
 
         if (eventsR.status === 'fulfilled') {
           setEvents(eventsR.value);
-          setCachedBrew({ events: eventsR.value });
+          setCachedBrew(userId, { events: eventsR.value });
         } else {
           setEvents([]);
         }
@@ -167,7 +167,7 @@ export default function DailyBrewCard({ preview = false }: Props) {
           // Only cache real readings - 'denied'/'error' aren't part of CachedBrew's shape and
           // shouldn't paper over a fresh permission grant on the next load.
           if (weatherR.value !== 'denied' && weatherR.value !== 'error') {
-            setCachedBrew({ weather: weatherR.value });
+            setCachedBrew(userId, { weather: weatherR.value });
           }
         } else {
           setWeather('error');
@@ -175,14 +175,14 @@ export default function DailyBrewCard({ preview = false }: Props) {
 
         if (newsR.status === 'fulfilled') {
           setNews(newsR.value);
-          setCachedBrew({ news: newsR.value });
+          setCachedBrew(userId, { news: newsR.value });
         } else {
           setNews([]);
         }
       })();
 
       return () => { cancelled = true; };
-    }, [])
+    }, [user])
   );
 
   const verse = useMemo(() => getVerseForDate(new Date()), []);
@@ -190,7 +190,8 @@ export default function DailyBrewCard({ preview = false }: Props) {
   const hasNewsPrefs = Boolean(user?.news_country) || Boolean(user?.news_outlet_ids?.length);
 
   const handleDone = async () => {
-    await markDismissedToday();
+    if (!user) return;
+    await markDismissedToday(user.id);
     Animated.parallel([
       Animated.timing(cardOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
       Animated.spring(cardScale, { toValue: 0.85, useNativeDriver: true, friction: 8 }),

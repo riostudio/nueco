@@ -105,46 +105,6 @@ const getDeviceTypeName = (deviceType: number): string => {
 // Get PostHog instance
 export const getPostHog = (): PostHog | null => posthogInstance;
 
-// ============================================
-// DAILY BREW REMOTE FEATURE FLAG
-// ============================================
-// Gates the whole Daily Brew feature (onboarding, the card, the avatar menu entry) on a PostHog
-// remote flag so it can be toggled from the dashboard without a new build. Fail-closed: hidden
-// until the flag has resolved at least once.
-const DAILY_BREW_FLAG_CACHE_KEY = 'daily_brew_flag_cache';
-const DAILY_BREW_FLAG_KEY = 'daily-brew-enabled';
-
-async function refreshDailyBrewFlag(): Promise<boolean> {
-  if (!posthogInstance) return false;
-  // Flags auto-load on init, but force a refresh so a dashboard toggle is picked up.
-  await posthogInstance.reloadFeatureFlagsAsync();
-  const enabled = posthogInstance.isFeatureEnabled(DAILY_BREW_FLAG_KEY) ?? false;
-  await AsyncStorage.setItem(DAILY_BREW_FLAG_CACHE_KEY, enabled ? '1' : '0');
-  return enabled;
-}
-
-export async function isDailyBrewEnabled(): Promise<boolean> {
-  // Instant answer from cache while revalidating in the background - same stale-while-revalidate
-  // shape as the Daily Brew content cache itself (frontend/src/dailyBrew/dailyBrew.ts).
-  const cached = await AsyncStorage.getItem(DAILY_BREW_FLAG_CACHE_KEY).catch(() => null);
-
-  if (cached === null) {
-    // Never checked on this device before - a stale-cache read would silently read as "off" on
-    // the very first app open after the flag is turned on, forcing a throwaway relaunch. Wait for
-    // the real answer instead, capped so a slow/unreachable network can't stall app startup.
-    const timeout = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 3000));
-    return Promise.race([
-      refreshDailyBrewFlag().catch(() => false),
-      timeout,
-    ]);
-  }
-
-  // Revalidate in the background, don't await it holding up the caller.
-  refreshDailyBrewFlag().catch((e) => console.error('Failed to check Daily Brew feature flag:', e));
-
-  return cached === '1'; // fail-closed: stale '0' reads as hidden until the background refresh lands
-}
-
 // Identify user (call after login)
 export const identifyUser = (userId: string, properties?: Record<string, any>) => {
   if (!posthogInstance) return;

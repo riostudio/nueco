@@ -11,18 +11,20 @@ if (Platform.OS !== 'web') {
   try { ExpoLocation = require('expo-location'); } catch {}
 }
 
+// All keyed by user id: without it, two accounts logged into on the same device inherit each
+// other's dismiss/pin/cache state until the day rolls over, since AsyncStorage is device-global.
 const CACHE_PREFIX = 'dailybrew:cache:';
 const DISMISSED_PREFIX = 'dailybrew:dismissed:';
-const PERSIST_KEY = 'dailybrew:persist_pinned';
+const PERSIST_PREFIX = 'dailybrew:persist_pinned:';
 
 /** Whether the user's chosen to keep the Daily Brew card pinned at the top permanently,
  * instead of the default "Done for today" dismiss-until-tomorrow behavior. Settings screen. */
-export async function isPersistPinned(): Promise<boolean> {
-  return (await AsyncStorage.getItem(PERSIST_KEY)) === '1';
+export async function isPersistPinned(userId: string): Promise<boolean> {
+  return (await AsyncStorage.getItem(`${PERSIST_PREFIX}${userId}`)) === '1';
 }
 
-export async function setPersistPinned(enabled: boolean): Promise<void> {
-  await AsyncStorage.setItem(PERSIST_KEY, enabled ? '1' : '0');
+export async function setPersistPinned(userId: string, enabled: boolean): Promise<void> {
+  await AsyncStorage.setItem(`${PERSIST_PREFIX}${userId}`, enabled ? '1' : '0');
 }
 
 export function getTodayKey(d: Date = new Date()): string {
@@ -32,12 +34,12 @@ export function getTodayKey(d: Date = new Date()): string {
   return `${year}-${month}-${day}`;
 }
 
-export async function isDismissedToday(): Promise<boolean> {
-  return (await AsyncStorage.getItem(`${DISMISSED_PREFIX}${getTodayKey()}`)) === '1';
+export async function isDismissedToday(userId: string): Promise<boolean> {
+  return (await AsyncStorage.getItem(`${DISMISSED_PREFIX}${userId}:${getTodayKey()}`)) === '1';
 }
 
-export async function markDismissedToday(): Promise<void> {
-  await AsyncStorage.setItem(`${DISMISSED_PREFIX}${getTodayKey()}`, '1');
+export async function markDismissedToday(userId: string): Promise<void> {
+  await AsyncStorage.setItem(`${DISMISSED_PREFIX}${userId}:${getTodayKey()}`, '1');
 }
 
 export type NewsItem = {
@@ -57,8 +59,8 @@ export type CachedBrew = {
   fetchedAt: number;
 };
 
-export async function getCachedBrew(): Promise<CachedBrew | null> {
-  const raw = await AsyncStorage.getItem(`${CACHE_PREFIX}${getTodayKey()}`);
+export async function getCachedBrew(userId: string): Promise<CachedBrew | null> {
+  const raw = await AsyncStorage.getItem(`${CACHE_PREFIX}${userId}:${getTodayKey()}`);
   if (!raw) return null;
   try {
     return JSON.parse(raw) as CachedBrew;
@@ -69,20 +71,21 @@ export async function getCachedBrew(): Promise<CachedBrew | null> {
 
 // Merge-on-write so independently-resolving fetches (event/weather/news) don't clobber each
 // other's already-cached fields.
-export async function setCachedBrew(partial: Partial<CachedBrew>): Promise<void> {
-  const existing = (await getCachedBrew()) ?? { fetchedAt: 0 };
+export async function setCachedBrew(userId: string, partial: Partial<CachedBrew>): Promise<void> {
+  const existing = (await getCachedBrew(userId)) ?? { fetchedAt: 0 };
   const merged: CachedBrew = { ...existing, ...partial, fetchedAt: Date.now() };
-  await AsyncStorage.setItem(`${CACHE_PREFIX}${getTodayKey()}`, JSON.stringify(merged));
+  await AsyncStorage.setItem(`${CACHE_PREFIX}${userId}:${getTodayKey()}`, JSON.stringify(merged));
 }
 
 export async function pruneOldKeys(): Promise<void> {
   try {
     const todayKey = getTodayKey();
     const allKeys = await AsyncStorage.getAllKeys();
-    // PERSIST_KEY isn't a per-day key (it's a standing preference) - exclude it or every
-    // prune cycle would delete it the moment it's set.
+    // The persist-pinned preference isn't a per-day key (it's a standing preference) - exclude
+    // it or every prune cycle would delete it the moment it's set. Prunes stale keys for every
+    // account that's ever used this device, not just the one currently logged in.
     const staleKeys = allKeys.filter(
-      (k) => k.startsWith('dailybrew:') && k !== PERSIST_KEY && !k.endsWith(todayKey)
+      (k) => k.startsWith('dailybrew:') && !k.startsWith(PERSIST_PREFIX) && !k.endsWith(todayKey)
     );
     if (staleKeys.length > 0) await AsyncStorage.multiRemove(staleKeys);
   } catch (e) {

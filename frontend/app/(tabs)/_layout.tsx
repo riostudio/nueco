@@ -8,7 +8,7 @@ import { useRouter } from 'expo-router';
 import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { hasAnalyticsDecision, isDailyBrewEnabled } from '../../src/analytics';
+import { hasAnalyticsDecision } from '../../src/analytics';
 import { registerForPushNotifications, unregisterPushNotifications } from '../../src/notifications';
 import { runCalendarSync } from '../../src/calendarSync';
 import { registerCalendarSyncTaskAsync } from '../../src/calendarSyncTask';
@@ -44,7 +44,7 @@ function HeaderRight() {
 }
 
 export default function TabLayout() {
-  const { logout } = useAuth();
+  const { logout, user } = useAuth();
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
@@ -53,21 +53,19 @@ export default function TabLayout() {
 
   // First-run GDPR opt-in: if the user hasn't answered the analytics prompt yet, show it as a
   // full screen before they use the app. Once that's decided, a second first-run gate: if Daily
-  // Brew is flag-enabled and the user hasn't seen its intro yet, show that too. Runs after the
+  // Brew is flag-enabled and this account hasn't seen its intro yet, show that too. Runs after the
   // analytics gate resolves, not instead of / racing it.
   useEffect(() => {
+    if (!user) return;
     hasAnalyticsDecision().then(async (decided) => {
       if (!decided) {
         router.replace('/analytics-consent' as Href);
         return;
       }
-      const [flagOn, onboardingSeen] = await Promise.all([
-        isDailyBrewEnabled(),
-        AsyncStorage.getItem('daily_brew_onboarding_seen'),
-      ]);
-      if (flagOn && !onboardingSeen) router.replace('/daily-brew-intro' as Href);
+      const onboardingSeen = await AsyncStorage.getItem(`daily_brew_onboarding_seen:${user.id}`);
+      if (user.daily_brew_enabled && !onboardingSeen) router.replace('/daily-brew-intro' as Href);
     }).catch(() => {});
-  }, []);
+  }, [user]);
 
   // Calendar sync: the reliable trigger is "whenever the app is opened" (throttled inside
   // runCalendarSync itself); the background task registered here is a best-effort bonus on top -

@@ -15,21 +15,28 @@ import { useRouter, type Href } from 'expo-router';
 import { C } from '../src/theme';
 import { Button } from '../src/components';
 import DailyBrewCard from '../src/components/DailyBrewCard';
+import { useAuth } from '../src/auth';
 
-const ONBOARDING_SEEN_KEY = 'daily_brew_onboarding_seen';
+const ONBOARDING_SEEN_KEY_PREFIX = 'daily_brew_onboarding_seen:';
 
 export default function DailyBrewIntroScreen() {
   const router = useRouter();
+  const { user } = useAuth();
 
-  // If onboarding was already completed (or abandoned past this screen), don't show it again.
+  // If onboarding was already completed (or abandoned past this screen) for this account,
+  // don't show it again - keyed by user id so switching accounts on one device doesn't
+  // inherit another account's "already seen" state.
   useEffect(() => {
-    AsyncStorage.getItem(ONBOARDING_SEEN_KEY).then((v) => { if (v) router.replace('/(tabs)'); }).catch(() => {});
-  }, []);
+    if (!user) return;
+    AsyncStorage.getItem(`${ONBOARDING_SEEN_KEY_PREFIX}${user.id}`)
+      .then((v) => { if (v) router.replace('/(tabs)'); })
+      .catch(() => {});
+  }, [user]);
 
   const handleNext = async () => {
     // Marked on leaving (not on mount) so the intro is never shown twice even if the user
     // abandons the source-picker step that follows.
-    await AsyncStorage.setItem(ONBOARDING_SEEN_KEY, '1').catch(() => {});
+    if (user) await AsyncStorage.setItem(`${ONBOARDING_SEEN_KEY_PREFIX}${user.id}`, '1').catch(() => {});
     router.replace('/news-source-settings?onboarding=1' as Href);
   };
 

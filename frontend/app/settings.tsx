@@ -8,7 +8,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../src/auth';
 import { accountApi } from '../src/api';
-import { isAnalyticsEnabled, setAnalyticsEnabled, isDailyBrewEnabled } from '../src/analytics';
+import { isAnalyticsEnabled, setAnalyticsEnabled } from '../src/analytics';
 import { isPersistPinned, setPersistPinned } from '../src/dailyBrew/dailyBrew';
 import { clearLocalData } from '../src/offlineSync';
 import { exportMyData } from '../src/dataExport';
@@ -25,7 +25,7 @@ export default function PrivacyDataScreen() {
   const router = useRouter();
   const { logout, user, updateUserName } = useAuth();
   const [analyticsOn, setAnalyticsOn] = useState(false);
-  const [dailyBrewFeatureOn, setDailyBrewFeatureOn] = useState(false);
+  const dailyBrewFeatureOn = user?.daily_brew_enabled === true;
   const [dailyBrewPinned, setDailyBrewPinned] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [showDelete, setShowDelete] = useState(false);
@@ -38,8 +38,7 @@ export default function PrivacyDataScreen() {
   const [nameError, setNameError] = useState('');
 
   useEffect(() => { isAnalyticsEnabled().then(setAnalyticsOn); }, []);
-  useEffect(() => { isDailyBrewEnabled().then(setDailyBrewFeatureOn); }, []);
-  useEffect(() => { isPersistPinned().then(setDailyBrewPinned); }, []);
+  useEffect(() => { if (user) isPersistPinned(user.id).then(setDailyBrewPinned); }, [user]);
 
   const confirmEditName = useCallback(async () => {
     const trimmed = nameInput.trim();
@@ -73,9 +72,10 @@ export default function PrivacyDataScreen() {
   }, []);
 
   const toggleDailyBrewPinned = useCallback(async (value: boolean) => {
+    if (!user) return;
     setDailyBrewPinned(value);
-    await setPersistPinned(value);
-  }, []);
+    await setPersistPinned(user.id, value);
+  }, [user]);
 
   const confirmDelete = useCallback(async () => {
     if (!password) { setDeleteError('Enter your password to confirm.'); return; }
