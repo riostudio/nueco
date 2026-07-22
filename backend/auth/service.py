@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from .models import create_user_doc, create_device_doc, create_session_doc
 from .schemas import UserResponse
 from .email_service import send_verification_email, send_password_reset_email, send_password_changed_email
+from featureflags import is_daily_brew_enabled
 
 load_dotenv()
 
@@ -90,7 +91,8 @@ class AuthService:
             created_at=user.get("created_at", datetime.utcnow()),
             news_country=user.get("news_country"),
             news_outlet_ids=user.get("news_outlet_ids", []),
-            daily_brew_show_verse=user.get("daily_brew_show_verse", False)
+            daily_brew_show_verse=user.get("daily_brew_show_verse", False),
+            daily_brew_enabled=is_daily_brew_enabled()
         )
 
     async def signup(self, name: str, email: str, password: str) -> Tuple[bool, str, Optional[dict]]:

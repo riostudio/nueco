@@ -57,6 +57,7 @@ class UserResponse(BaseModel):
     news_country: Optional[str] = None
     news_outlet_ids: List[str] = []
     daily_brew_show_verse: bool = False
+    daily_brew_enabled: bool = False
 
 class AuthResponse(BaseModel):
     user: UserResponse

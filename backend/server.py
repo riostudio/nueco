@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, UploadFile, File, HTTPException, Query, Depends, Request
+from fastapi import FastAPI, APIRouter, HTTPException, Query, Depends, Request
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -10,13 +10,11 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 import uuid
 from datetime import datetime, timezone, timedelta
-import tempfile
 import bcrypt
 import httpx
 from pymongo import ReturnDocument
 from collections import defaultdict
 import time
-from openai import AsyncOpenAI
 from dateutil.rrule import rrule, DAILY, WEEKLY, MONTHLY, YEARLY
 from zoneinfo import ZoneInfo
 
@@ -55,12 +53,7 @@ class RateLimiter:
 rate_limiter = RateLimiter()
 
 
-def get_openai_client() -> AsyncOpenAI:
-    """Create an OpenAI client from environment configuration."""
-    api_key = os.getenv("OPENAI_API_KEY") or os.getenv("EMERGENT_LLM_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="OpenAI API key not configured")
-    return AsyncOpenAI(api_key=api_key)
+from openai_client import get_openai_client
 
 def get_client_ip(request: Request) -> str:
     """Get client IP from request, handling proxies"""
@@ -72,63 +65,16 @@ def get_client_ip(request: Request) -> str:
 # Import get_current_user for authentication
 from auth.router import get_current_user
 
-# ---- Attachment storage (S3) config ----
-import boto3
-from botocore.exceptions import ClientError, BotoCoreError
-
-S3_BUCKET = os.getenv("S3_BUCKET")
-AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
-ATTACHMENT_PREFIX = "note-attachments"
-MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024  # 100 MB (videos are large)
-ALLOWED_ATTACHMENT_MIME = {
-    # images
-    "image/jpeg", "image/png", "image/gif", "image/webp", "image/heic",
-    # video
-    "video/mp4", "video/quicktime", "video/webm", "video/x-msvideo",
-    "video/x-matroska", "video/3gpp",
-    # audio
-    "audio/mpeg", "audio/mp4", "audio/x-m4a", "audio/wav", "audio/x-wav",
-    "audio/aac", "audio/ogg", "audio/webm",
-    # docs
-    "application/pdf", "text/plain", "text/csv",
-    "application/msword",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "application/vnd.ms-excel",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "application/vnd.ms-powerpoint",
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-}
-ALLOWED_ATTACHMENT_EXT = {
-    "jpg", "jpeg", "png", "gif", "webp", "heic",
-    "mp4", "mov", "webm", "avi", "mkv", "3gp", "m4v",
-    "mp3", "m4a", "wav", "aac", "ogg", "oga",
-    "pdf", "txt", "csv",
-    "doc", "docx", "xls", "xlsx", "ppt", "pptx",
-}
-
-
-def get_s3_client():
-    """Return a boto3 S3 client, or None if attachment storage isn't configured.
-    Credentials come from the standard AWS env vars / IAM role."""
-    if not S3_BUCKET:
-        return None
-    return boto3.client("s3", region_name=AWS_REGION)
-
+# S3-backed attachment storage lives in attachments/ - only the shared embedded-in-a-note shape
+# and the account-deletion cleanup hook are needed here.
+from attachments.schemas import Attachment
+from attachments.service import delete_user_attachments
 
 # ---- Models ----
 
 class Tag(BaseModel):
     name: str
     color: str
-
-class Attachment(BaseModel):
-    id: str
-    key: str               # storage object key (server-generated)
-    url: str               # download URL
-    filename: str
-    mime_type: str
-    size_bytes: int
-    uploaded_at: str
 
 class NoteCreate(BaseModel):
     title: str = ""
@@ -421,110 +367,6 @@ async def toggle_pin(note_id: str, current_user: dict = Depends(get_current_user
     )
     note = await db.notes.find_one({"id": note_id, "user_id": user_id}, {"_id": 0})
     return NoteResponse(**note)
-
-
-# ---- Attachment Endpoints ----
-
-class PresignRequest(BaseModel):
-    filename: str
-    mime_type: str
-    size: int
-
-
-@api_router.post("/attachments/presign")
-async def presign_attachment(req: PresignRequest, current_user: dict = Depends(get_current_user)):
-    """Validate a file and return a presigned POST for direct-to-S3 upload.
-    The object key is generated server-side under the caller's prefix so a client
-    can never write outside its own namespace."""
-    s3 = get_s3_client()
-    if s3 is None:
-        raise HTTPException(status_code=503, detail="File attachments are not enabled on this server")
-
-    user_id = current_user.get("id") or str(current_user.get("_id", ""))
-
-    if req.size <= 0 or req.size > MAX_ATTACHMENT_BYTES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"File too large (max {MAX_ATTACHMENT_BYTES // (1024 * 1024)}MB)",
-        )
-
-    ext = (req.filename.rsplit(".", 1)[-1] if "." in req.filename else "").lower()
-    if ext not in ALLOWED_ATTACHMENT_EXT or req.mime_type not in ALLOWED_ATTACHMENT_MIME:
-        raise HTTPException(status_code=400, detail="File type not allowed")
-
-    attachment_id = str(uuid.uuid4())
-    key = f"{ATTACHMENT_PREFIX}/{user_id}/{attachment_id}.{ext}"
-
-    try:
-        presigned = s3.generate_presigned_post(
-            Bucket=S3_BUCKET,
-            Key=key,
-            Fields={"Content-Type": req.mime_type},
-            Conditions=[
-                {"Content-Type": req.mime_type},
-                ["content-length-range", 1, MAX_ATTACHMENT_BYTES],
-            ],
-            ExpiresIn=300,
-        )
-    except (ClientError, BotoCoreError) as e:
-        logger.error(f"Failed to presign attachment: {e}")
-        raise HTTPException(status_code=502, detail="Could not prepare upload")
-
-    file_url = f"https://{S3_BUCKET}.s3.{AWS_REGION}.amazonaws.com/{key}"
-    return {
-        "id": attachment_id,
-        "key": key,
-        "upload_url": presigned["url"],
-        "fields": presigned["fields"],
-        "file_url": file_url,
-    }
-
-
-@api_router.delete("/attachments")
-async def delete_attachment(key: str = Query(...), current_user: dict = Depends(get_current_user)):
-    """Delete a stored attachment. Scoped to the caller's own prefix."""
-    s3 = get_s3_client()
-    if s3 is None:
-        raise HTTPException(status_code=503, detail="File attachments are not enabled on this server")
-
-    user_id = current_user.get("id") or str(current_user.get("_id", ""))
-    if not key.startswith(f"{ATTACHMENT_PREFIX}/{user_id}/"):
-        raise HTTPException(status_code=403, detail="Not allowed to delete this file")
-
-    try:
-        s3.delete_object(Bucket=S3_BUCKET, Key=key)
-    except (ClientError, BotoCoreError) as e:
-        logger.error(f"Failed to delete attachment {key}: {e}")
-        raise HTTPException(status_code=502, detail="Could not delete file")
-    return {"message": "Attachment deleted"}
-
-
-class DownloadUrlRequest(BaseModel):
-    key: str
-
-
-@api_router.post("/attachments/download-url")
-async def attachment_download_url(req: DownloadUrlRequest, current_user: dict = Depends(get_current_user)):
-    """Return a presigned GET URL for viewing/downloading an attachment.
-    Scoped to the caller's own prefix. Used for tap-to-open and shareable links."""
-    s3 = get_s3_client()
-    if s3 is None:
-        raise HTTPException(status_code=503, detail="File attachments are not enabled on this server")
-
-    user_id = current_user.get("id") or str(current_user.get("_id", ""))
-    if not req.key.startswith(f"{ATTACHMENT_PREFIX}/{user_id}/"):
-        raise HTTPException(status_code=403, detail="Not allowed to access this file")
-
-    try:
-        url = s3.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": S3_BUCKET, "Key": req.key},
-            ExpiresIn=7 * 24 * 3600,  # 7 days (SigV4 max) - covers tap-to-open and shared links
-        )
-    except (ClientError, BotoCoreError) as e:
-        logger.error(f"Failed to presign download for {req.key}: {e}")
-        raise HTTPException(status_code=502, detail="Could not prepare download")
-    return {"url": url}
 
 
 # ---- E2EE key escrow + first-party feature telemetry ----
@@ -867,27 +709,6 @@ class DeleteAccountRequest(BaseModel):
     password: str
 
 
-def _delete_user_s3_attachments(user_id: str):
-    """Best-effort deletion of every stored attachment under the user's prefix."""
-    s3 = get_s3_client()
-    if not s3:
-        return
-    try:
-        prefix = f"{ATTACHMENT_PREFIX}/{user_id}/"
-        paginator = s3.get_paginator("list_objects_v2")
-        batch = []
-        for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=prefix):
-            for obj in page.get("Contents", []):
-                batch.append({"Key": obj["Key"]})
-                if len(batch) == 1000:
-                    s3.delete_objects(Bucket=S3_BUCKET, Delete={"Objects": batch})
-                    batch = []
-        if batch:
-            s3.delete_objects(Bucket=S3_BUCKET, Delete={"Objects": batch})
-    except Exception as e:
-        logger.error(f"S3 attachment cleanup failed for user {user_id}: {e}")
-
-
 @api_router.post("/account/delete")
 async def delete_account(body: DeleteAccountRequest, current_user: dict = Depends(get_current_user)):
     """Permanently erase the authenticated user and ALL their data (GDPR Art. 17). Requires the
@@ -901,7 +722,7 @@ async def delete_account(body: DeleteAccountRequest, current_user: dict = Depend
         raise HTTPException(status_code=401, detail="Incorrect password")
 
     # Wipe object storage first (attachments), then every DB record tied to the user.
-    _delete_user_s3_attachments(user_id)
+    delete_user_attachments(user_id)
     for coll in ("notes", "events", "push_tokens", "push_receipts", "feature_events", "devices", "sessions"):
         try:
             await db[coll].delete_many({"user_id": user_id})
@@ -1139,245 +960,7 @@ async def push_receipts_tick(request: Request):
     return {"checked": checked}
 
 
-# ---- Transcription Endpoint ----
-
-class TranscribeBase64Request(BaseModel):
-    audio_base64: str
-    file_extension: str = "m4a"
-
-@api_router.post("/transcribe-base64")
-async def transcribe_audio_base64(request: TranscribeBase64Request, current_user: dict = Depends(get_current_user)):
-    """Transcribe audio from base64 encoded data (requires authentication)"""
-    try:
-        import base64
-
-        logger.info(f"Received base64 transcription request. Extension: {request.file_extension}, Base64 length: {len(request.audio_base64)}")
-        client = get_openai_client()
-        
-        # Decode base64 to bytes
-        try:
-            audio_bytes = base64.b64decode(request.audio_base64)
-            logger.info(f"Decoded {len(audio_bytes)} bytes from base64")
-        except Exception as e:
-            logger.error(f"Failed to decode base64: {e}")
-            raise HTTPException(status_code=400, detail="Invalid base64 audio data")
-        
-        # Determine file extension
-        extension = request.file_extension.lower()
-        if not extension.startswith('.'):
-            extension = f'.{extension}'
-        
-        # Map unsupported formats
-        if extension == '.caf':
-            extension = '.m4a'
-        
-        logger.info(f"Processing audio with extension: {extension}")
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as tmp:
-            tmp.write(audio_bytes)
-            tmp_path = tmp.name
-
-        try:
-            with open(tmp_path, "rb") as audio_file:
-                response = await client.audio.transcriptions.create(
-                    model="whisper-1",
-                    file=audio_file,
-                    # language removed - Whisper auto-detects
-                )
-            transcription_text = response.text or ""
-            logger.info(f"Transcription successful: {transcription_text[:100] if transcription_text else 'empty'}...")
-            return {"text": transcription_text}
-        finally:
-            os.unlink(tmp_path)
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Transcription error: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Transcription failed: {str(e)}"
-        )
-
-@api_router.post("/transcribe")
-async def transcribe_audio(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
-    """Transcribe uploaded audio file (requires authentication)"""
-    try:
-        logger.info(f"Received transcription request. Filename: {file.filename}, Content-Type: {file.content_type}")
-        client = get_openai_client()
-        
-        # Get extension from filename or default to m4a
-        original_filename = file.filename or "recording.m4a"
-        suffix = os.path.splitext(original_filename)[1] or ".m4a"
-        
-        # Map common audio extensions to supported formats
-        if suffix.lower() == '.caf':
-            suffix = '.m4a'  # Convert CAF to m4a for Whisper compatibility
-        
-        logger.info(f"Processing audio file with suffix: {suffix}")
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            content = await file.read()
-            logger.info(f"Read {len(content)} bytes from uploaded file")
-            tmp.write(content)
-            tmp_path = tmp.name
-
-        try:
-            with open(tmp_path, "rb") as audio_file:
-                response = await client.audio.transcriptions.create(
-                    model="whisper-1",
-                    file=audio_file,
-                    # language removed - Whisper auto-detects
-                )
-            transcription_text = response.text or ""
-            logger.info(f"Transcription successful: {transcription_text[:100]}...")
-            return {"text": transcription_text}
-        finally:
-            os.unlink(tmp_path)
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Transcription error: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Transcription failed: {str(e)}"
-        )
-
-
-# ---- Text Processing Endpoint (Organize/Summarize/Smart Format) ----
-
-# Note types the smart-format classifier recognizes. "general" is the fallback for anything
-# that isn't clearly one of the others (or text too short/unclear to classify).
-NOTE_TYPES = {"recipe", "checklist", "meeting_notes", "general"}
-
-SMART_FORMAT_PROMPT_TEMPLATE = """Classify the following note text as exactly one of these types:
-- "recipe": a dish with ingredients and preparation steps
-- "checklist": a list of discrete to-do items or tasks
-- "meeting_notes": notes from a meeting/call (attendees, discussion, decisions, action items)
-- "general": anything else, or text too short/unclear to classify
-
-Then restructure it into clean HTML for that type:
-- recipe: an optional <p> title line, then <h3>Ingredients</h3> followed by a <ul> with one
-  ingredient (with its quantity) per <li>, then <h3>Steps</h3> followed by an <ol> with one step
-  per <li>, in order.
-- checklist: a <ul> with one <li>☐ item</li> per task (keep quantities/details).
-- meeting_notes: only the headings that have real content, each an <h3> followed by a <ul>.
-  Possible headings, in this order: "Attendees", "Discussion", "Decisions", "Action Items".
-- general: lightly organize into readable paragraphs/bullets and fix grammar.
-
-In every case, keep all original information (quantities, times, names, numbers) - do not invent
-or drop anything.
-
-Here's the text:
-
-{text}
-
-Respond with ONLY a JSON object of the shape {{"note_type": "recipe|checklist|meeting_notes|general", "html": "<the restructured HTML>"}}. No other text, no markdown code fence."""
-
-class TextProcessRequest(BaseModel):
-    text: str
-    action: str  # "organize", "summarize", or "smart_format"
-
-@api_router.post("/process-text")
-async def process_text(request: TextProcessRequest, current_user: dict = Depends(get_current_user)):
-    """Process text using AI - organize, summarize, or detect-and-restructure by note type (requires authentication)"""
-    try:
-        client = get_openai_client()
-
-        if request.action == "organize":
-            system_message = "You are a helpful assistant that organizes and structures text to make it easier to read."
-            prompt = f"""Please organize and structure the following text to make it easier to read.
-Add appropriate formatting like:
-- Clear paragraphs
-- Bullet points where appropriate
-- Headers if needed
-- Fix any grammar or punctuation issues
-
-Keep the original meaning intact. Here's the text:
-
-{request.text}
-
-Return only the organized text, no explanations."""
-
-            logger.info(f"Processing text with action: {request.action}, text length: {len(request.text)}")
-            response = await client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": system_message},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.2,
-            )
-            processed_text = (response.choices[0].message.content or "").strip()
-            if not processed_text:
-                raise HTTPException(status_code=500, detail="AI service returned an empty response")
-            logger.info(f"Text processing successful, result length: {len(processed_text)}")
-            return {"text": processed_text}
-
-        elif request.action == "summarize":
-            system_message = "You are a helpful assistant that summarizes text concisely while keeping key points."
-            prompt = f"""Please summarize the following text concisely while keeping the key points.
-Make it clear and easy to read.
-
-Here's the text:
-
-{request.text}
-
-Return only the summary, no explanations."""
-
-            logger.info(f"Processing text with action: {request.action}, text length: {len(request.text)}")
-            response = await client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": system_message},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.2,
-            )
-            processed_text = (response.choices[0].message.content or "").strip()
-            if not processed_text:
-                raise HTTPException(status_code=500, detail="AI service returned an empty response")
-            logger.info(f"Text processing successful, result length: {len(processed_text)}")
-            return {"text": processed_text}
-
-        elif request.action == "smart_format":
-            system_message = (
-                "You are a helpful assistant that identifies what kind of note a piece of text is, "
-                "and restructures it into clean HTML accordingly. Respond only with a JSON object."
-            )
-            prompt = SMART_FORMAT_PROMPT_TEMPLATE.format(text=request.text)
-
-            logger.info(f"Processing text with action: {request.action}, text length: {len(request.text)}")
-            response = await client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": system_message},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.2,
-                response_format={"type": "json_object"},
-            )
-            raw = (response.choices[0].message.content or "").strip()
-            try:
-                parsed = _json.loads(raw)
-            except _json.JSONDecodeError:
-                raise HTTPException(status_code=500, detail="AI service returned an unexpected response")
-            note_type = parsed.get("note_type") if isinstance(parsed, dict) else None
-            html = (parsed.get("html") or "").strip() if isinstance(parsed, dict) else ""
-            if note_type not in NOTE_TYPES:
-                note_type = "general"
-            if not html:
-                raise HTTPException(status_code=500, detail="AI service returned an empty response")
-            logger.info(f"Smart format successful, detected type: {note_type}, result length: {len(html)}")
-            return {"text": html, "note_type": note_type}
-
-        else:
-            raise HTTPException(status_code=400, detail="Invalid action. Use 'organize', 'summarize', or 'smart_format'")
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Text processing error: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"Text processing failed: {str(e)}"
-        )
+# ---- Transcription + AI text processing moved to textai/ (router registered below) ----
 
 
 # ---- Feedback Endpoint (5th-note feedback toast) ----
@@ -1481,6 +1064,12 @@ api_router.include_router(canva_router)
 # Include Daily Brew router (news headlines - see backend/dailybrew/)
 from dailybrew.router import router as dailybrew_router
 api_router.include_router(dailybrew_router)
+
+from textai.router import router as textai_router
+api_router.include_router(textai_router)
+
+from attachments.router import router as attachments_router
+api_router.include_router(attachments_router)
 
 app.include_router(api_router)
 
@@ -1659,6 +1248,18 @@ async def create_indexes():
 async def start_dailybrew_cache_prewarmer():
     from dailybrew.service import run_cache_prewarmer
     asyncio.create_task(run_cache_prewarmer())
+
+
+@app.on_event("startup")
+async def start_feature_flag_refresher():
+    from featureflags import _refresh_flags, run_flag_refresher
+    try:
+        # Resolve once before serving traffic so the very first /auth/me response after a deploy
+        # already has the real value instead of the fail-closed default.
+        await asyncio.wait_for(_refresh_flags(), timeout=10.0)
+    except Exception as e:
+        logger.warning(f"Initial feature flag fetch failed, will retry in background: {e}")
+    asyncio.create_task(run_flag_refresher())
 
 
 @app.on_event("shutdown")
