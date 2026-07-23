@@ -28,7 +28,7 @@ import { useAuth } from '../auth';
 import { getVerseForDate } from '../dailyBrew/verses';
 import {
   isDismissedToday, markDismissedToday, isPersistPinned, getCachedBrew, setCachedBrew, pruneOldKeys,
-  fetchEventsToday, fetchWeather, fetchNewsHeadlines, BrewEvent, NewsItem,
+  fetchEventsToday, fetchWeather, fetchNewsHeadlines, BrewEvent, NewsItem, CachedBrew,
 } from '../dailyBrew/dailyBrew';
 
 // Old Android bridge needs this opt-in for LayoutAnimation; no-op on iOS/New Architecture.
@@ -37,6 +37,9 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 }
 
 const NEWS_SHOWN = 3;
+// How long a cached brew is trusted as final before re-fetching on the next focus. Bounds how
+// often this card's weather/events/news call re-fires just from switching tabs or navigating back.
+const REVALIDATE_INTERVAL_MS = 5 * 60 * 1000;
 
 const PREVIEW_WEATHER: { tempC: number; condition: string; icon: string; color: string; place: string } = {
   tempC: 22, condition: 'Sunny', icon: 'wb-sunny', color: '#F2B23C', place: 'San Francisco',
@@ -125,6 +128,11 @@ export default function DailyBrewCard({ preview = false }: Props) {
         setFlagEnabled(flagOn);
         if (!flagOn) return; // Flag off - skip fetch logic entirely, card renders null below.
 
+        // Started immediately, in parallel with the pinned/dismissed checks below (which don't
+        // depend on it) - every AsyncStorage round-trip on the way to showing cached content
+        // adds to how long the card takes to appear "straight away".
+        const cachedPromise = getCachedBrew(userId);
+
         const persistPinned = await isPersistPinned(userId);
         if (cancelled) return;
         setPinned(persistPinned);
@@ -140,13 +148,20 @@ export default function DailyBrewCard({ preview = false }: Props) {
         playEntrance();
 
         // Stale-while-revalidate: hydrate instantly from cache before the fresh fetch resolves.
-        const cached = await getCachedBrew(userId);
+        const cached = await cachedPromise;
         if (cancelled) return;
         setEvents(cached?.events !== undefined ? cached.events : 'loading');
         setWeather(cached?.weather != null ? cached.weather : 'loading');
         setNews(cached?.news !== undefined ? cached.news : 'loading');
 
         pruneOldKeys();
+
+        // A cache recent enough is shown as final, not "loading-then-replaced" - this card
+        // re-runs its whole fetch on every focus (switching tabs, coming back from the editor),
+        // so without this a fresh network round-trip re-fires every single time, producing a
+        // visible pop-in even when nothing could plausibly have changed in the last few minutes.
+        const isFreshEnough = cached != null && Date.now() - cached.fetchedAt < REVALIDATE_INTERVAL_MS;
+        if (isFreshEnough) return;
 
         const [eventsR, weatherR, newsR] = await Promise.allSettled([
           fetchEventsToday(),
@@ -155,9 +170,18 @@ export default function DailyBrewCard({ preview = false }: Props) {
         ]);
         if (cancelled) return;
 
+        // Built up and written as ONE setCachedBrew call below - three separate calls here used
+        // to each independently read-modify-write the same AsyncStorage key with no ordering
+        // guarantee between them, so whichever of the three finished last would win and silently
+        // drop whatever the other two had just written. That corruption was invisible before
+        // (the card always re-fetched live on every focus, ignoring the cache), but the
+        // isFreshEnough check above now trusts the cache directly - so a dropped field showed up
+        // as "loading" forever on any focus that skipped the live fetch.
+        const cacheUpdate: Partial<CachedBrew> = {};
+
         if (eventsR.status === 'fulfilled') {
           setEvents(eventsR.value);
-          setCachedBrew(userId, { events: eventsR.value });
+          cacheUpdate.events = eventsR.value;
         } else {
           setEvents([]);
         }
@@ -167,7 +191,7 @@ export default function DailyBrewCard({ preview = false }: Props) {
           // Only cache real readings - 'denied'/'error' aren't part of CachedBrew's shape and
           // shouldn't paper over a fresh permission grant on the next load.
           if (weatherR.value !== 'denied' && weatherR.value !== 'error') {
-            setCachedBrew(userId, { weather: weatherR.value });
+            cacheUpdate.weather = weatherR.value;
           }
         } else {
           setWeather('error');
@@ -175,10 +199,12 @@ export default function DailyBrewCard({ preview = false }: Props) {
 
         if (newsR.status === 'fulfilled') {
           setNews(newsR.value);
-          setCachedBrew(userId, { news: newsR.value });
+          cacheUpdate.news = newsR.value;
         } else {
           setNews([]);
         }
+
+        if (Object.keys(cacheUpdate).length > 0) setCachedBrew(userId, cacheUpdate);
       })();
 
       return () => { cancelled = true; };
@@ -200,6 +226,12 @@ export default function DailyBrewCard({ preview = false }: Props) {
       // so the notes list below eases back up into the vacated space instead of snapping.
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       setDismissed(true);
+      // Without this, hasAnimatedIn stays permanently true from the card's first-ever entrance,
+      // so the next time it's asked to reappear (e.g. toggling "Keep Daily Brew pinned" back on
+      // forces alreadyDismissed to false) playEntrance() no-ops and the card renders stuck at
+      // this dismiss animation's end state - opacity 0, scale 0.85 - invisible but still taking
+      // up its normal layout height.
+      hasAnimatedIn.current = false;
     });
   };
 
