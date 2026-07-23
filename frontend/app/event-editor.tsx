@@ -9,7 +9,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { eventsApi, notesApi } from '../src/api';
 import { decryptEventFromServer } from '../src/crypto/eventCrypto';
-import { createEventOffline, updateEventOffline, deleteEventOffline, getLocalEvents, setLocalEventNotificationId } from '../src/offlineSync';
+import { createEventOffline, updateEventOffline, deleteEventOffline, getLocalEvents, setLocalEventNotificationId, processSyncQueue } from '../src/offlineSync';
 import { bumpDeviceCalendarSync } from '../src/deviceCalendarSync';
 import { nextOccurrenceOnOrAfter } from '../src/recurrence';
 import { MONTH_NAMES, DAY_NAMES, C, radius, borderWidth } from '../src/theme';
@@ -577,6 +577,26 @@ export default function EventEditorScreen() {
     };
   };
 
+  // Shared by triggerAutoSave (to detect real changes) and the post-load effect below (to seed
+  // lastSavedDataRef with the just-loaded, unedited state) - keeping this in one place means the
+  // two can never drift out of sync with each other.
+  const computeDataHash = (st: Date, et: Date): string => {
+    const recurrenceForHash = getRecurrenceValue();
+    return `${titleRef.current}|${descriptionRef.current}|${locationRef.current}|${st.toISOString()}|${et.toISOString()}|${reminderMinutesRef.current}|${recurrenceForHash ? `${recurrenceForHash.freq}|${(recurrenceForHash.byweekday || []).join(',')}|${recurrenceForHash.until || ''}` : 'none'}`;
+  };
+
+  // Without this, opening ANY existing event for editing silently re-saves it ~2s later (rewrites
+  // the device calendar entry, reschedules its notification) even with zero edits - because
+  // lastSavedDataRef started at '' and the freshly-loaded data's hash never matched that.
+  useEffect(() => {
+    if (loading || !isEditing) return;
+    const st = new Date(dateRef.current);
+    st.setHours(startTimeRef.current.getHours(), startTimeRef.current.getMinutes(), 0, 0);
+    const et = new Date(endDateRef.current);
+    et.setHours(endTimeRef.current.getHours(), endTimeRef.current.getMinutes(), 0, 0);
+    lastSavedDataRef.current = computeDataHash(st, et);
+  }, [loading]);
+
   const buildEventData = (st: Date, et: Date, deviceCalId: string | null) => {
     const recurrence = getRecurrenceValue();
     return {
@@ -612,8 +632,7 @@ export default function EventEditorScreen() {
       if (et <= st) { setSaveStatus('End must be after start'); return; }
 
       // Check if data actually changed to avoid unnecessary saves
-      const recurrenceForHash = getRecurrenceValue();
-      const dataHash = `${titleRef.current}|${descriptionRef.current}|${locationRef.current}|${st.toISOString()}|${et.toISOString()}|${reminderMinutesRef.current}|${recurrenceForHash ? `${recurrenceForHash.freq}|${(recurrenceForHash.byweekday || []).join(',')}|${recurrenceForHash.until || ''}` : 'none'}`;
+      const dataHash = computeDataHash(st, et);
       if (dataHash === lastSavedDataRef.current) return;
 
       setSaveStatus('Saving...');
@@ -722,7 +741,11 @@ export default function EventEditorScreen() {
               await AsyncStorage.setItem('pendingLinkedEventId', created.id);
             }
           } else {
-            await updateEventOffline(eventIdRef.current, eventData, { push: true });
+            // Local-only and awaited, network push fire-and-forget after: unlike the create path
+            // above, an update doesn't need the server round-trip's result for anything here, so
+            // there's no reason for it to block the tap that triggered this back navigation.
+            await updateEventOffline(eventIdRef.current, eventData, { push: false });
+            processSyncQueue().catch(() => {});
           }
         } catch (e) {
           console.error('Final save on back failed:', e);

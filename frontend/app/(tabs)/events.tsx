@@ -123,11 +123,11 @@ export default function EventsScreen() {
   // instantly (including anything still sitting in the offline retry queue - see
   // offlineSync.ts), then reconcile with the server. Replaces the previous network-only fetch
   // + its own ad-hoc AsyncStorage cache with the shared offline store.
-  const loadEvents = useCallback(async () => {
+  const loadEvents = useCallback(async (force?: boolean) => {
     try {
       const local = await getLocalEvents();
       setEvents(local.filter(e => !e._pendingDelete) as CalendarEvent[]);
-      await fullSync();
+      await fullSync({ force });
       const fresh = await getLocalEvents();
       setEvents(fresh.filter(e => !e._pendingDelete) as CalendarEvent[]);
     } catch (e) {
@@ -260,7 +260,7 @@ export default function EventsScreen() {
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
-            onRefresh={() => { setRefreshing(true); loadEvents(); }}
+            onRefresh={() => { setRefreshing(true); loadEvents(true); }}
             colors={[C.primary]}
           />
         }

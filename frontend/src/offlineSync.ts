@@ -441,6 +441,14 @@ export async function deleteEventOffline(id: string, opts: { push?: boolean } = 
 
 let _isSyncing = false;
 let _isFullSyncing = false;
+let _lastFullSyncAt = 0;
+// Every note/event CRUD already updates local state instantly; fullSync's job is reconciling
+// with the server, which doesn't need to happen nearly as often as it was being called - every
+// tab focus and every back-navigation each triggered their own full fullSync (2 network requests
+// + decrypting every note/event), competing with the screen transition for the JS thread. This
+// keeps focus-triggered resyncs from re-firing within a few seconds of each other while still
+// letting deliberate callers (post-login, app-foreground-resume, pull-to-refresh) force a real one.
+const FULL_SYNC_THROTTLE_MS = 20_000;
 
 export async function processSyncQueue(): Promise<void> {
   if (_isSyncing) {
@@ -544,8 +552,9 @@ async function processEventOperation(item: SyncQueueItem): Promise<void> {
 
 // ---- Full Sync (pull from server + merge local) ----
 
-export async function fullSync(): Promise<void> {
+export async function fullSync(opts: { force?: boolean } = {}): Promise<void> {
   if (_isFullSyncing) return;
+  if (!opts.force && Date.now() - _lastFullSyncAt < FULL_SYNC_THROTTLE_MS) return;
   _isFullSyncing = true;
   try {
     // 1. Push pending local changes first
@@ -614,6 +623,7 @@ export async function fullSync(): Promise<void> {
     console.warn('Full sync failed:', e);
   } finally {
     _isFullSyncing = false;
+    _lastFullSyncAt = Date.now();
   }
 }
 

@@ -52,7 +52,7 @@ export function useOfflineNotes() {
   // Sync and reload. Offline-first: show cached notes IMMEDIATELY, then sync in the background and
   // refresh. Previously the full network sync ran before the first loadNotes, so the list (and its
   // blocking spinner) waited on the network - the tab felt slow to open.
-  const syncAndReload = useCallback(async () => {
+  const syncAndReload = useCallback(async (opts: { force?: boolean } = {}) => {
     await loadNotes(); // instant: cached notes on screen right away
     const token = await authStorage.getAccessToken();
     if (!token) return;
@@ -62,7 +62,7 @@ export function useOfflineNotes() {
     setIsSyncing(true);
     setSyncError(null);
     try {
-      await fullSync();
+      await fullSync(opts);
       await loadNotes(); // reflect synced changes
     } catch (e: any) {
       setSyncError(e?.message || 'Sync failed');
@@ -90,7 +90,9 @@ export function useOfflineNotes() {
         appState.current.match(/inactive|background/) &&
         nextState === 'active'
       ) {
-        await syncAndReload();
+        // Force: real time has passed while backgrounded, unlike a quick tab-switch/back-nav -
+        // worth an actual resync regardless of the throttle.
+        await syncAndReload({ force: true });
       }
       appState.current = nextState;
     });

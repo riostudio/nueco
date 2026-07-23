@@ -715,8 +715,12 @@ export default function EditorScreen() {
       const hasContent = !!(titleRef.current || contentRef.current || linkedEventIdsRef.current.length > 0 || imagesRef.current.length > 0 || attachmentsRef.current.length > 0 || sourcePostRef.current);
       // Persist locally; only create a brand-new note if it actually has content.
       if (isCreatedRef.current ? !!noteIdRef.current : hasContent) {
-        await persistLocal({ push: true });
-        // Flush the queue so the note reaches the server on exit (best-effort).
+        // Local-only and awaited (fast, always succeeds offline) - `push: true` here used to
+        // await a full network round-trip before back navigation could even start, making every
+        // "edit a note, tap back" visibly hang on the network. The queue flush below already
+        // covers reaching the server; it just needs to not block the tap that triggered it.
+        await persistLocal({ push: false });
+        // Flush the queue so the note reaches the server on exit (best-effort, non-blocking).
         processSyncQueue().catch(() => {});
       }
     } catch (e) {

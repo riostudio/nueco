@@ -6,7 +6,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { eventsApi } from '../../src/api';
-import { decryptEventsFromServer } from '../../src/crypto/eventCrypto';
 import { CalendarEvent } from '../../src/types';
 import { MONTH_NAMES, DAY_NAMES, C, radius, borderWidth } from '../../src/theme';
 import { UserAvatar } from '../../src/auth';
@@ -33,8 +32,10 @@ export default function CalendarScreen() {
 
   const loadEvents = useCallback(async () => {
     try {
-      setLoading(true);
-      const data = await decryptEventsFromServer<CalendarEvent>(await eventsApi.getAll(month + 1, year));
+      // Cached (20s TTL, keyed by month/year - see src/api.ts) instead of a raw network fetch:
+      // this screen re-runs on every focus (tab switch, back-nav), so within that window a
+      // repeat visit to the same month is served instantly instead of re-fetching + re-decrypting.
+      const data = await eventsApi.getAllCached(month + 1, year);
       setEvents(data);
     } catch (e) {
       console.error('Failed to load events:', e);

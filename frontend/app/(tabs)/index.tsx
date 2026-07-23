@@ -130,9 +130,9 @@ export default function NotesScreen() {
     return `${minutes} min`;
   };
 
-  const loadNotes = useCallback(async () => {
+  const loadNotes = useCallback(async (force?: boolean) => {
     try {
-      await syncAndReload();
+      await syncAndReload({ force });
       const queue = await getSyncQueue();
       setPendingCount(queue.length);
       
@@ -481,7 +481,7 @@ export default function NotesScreen() {
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
-            onRefresh={() => { setRefreshing(true); loadNotes(); }}
+            onRefresh={() => { setRefreshing(true); loadNotes(true); }}
             colors={[C.primary]}
           />
         }
