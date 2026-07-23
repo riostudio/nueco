@@ -228,7 +228,7 @@ async def get_headlines_for_user(
     news_country: Optional[str],
     news_outlet_ids: list[str],
     custom_feeds: Optional[list[dict]] = None,
-    limit: int = 5,
+    limit: int = 3,
 ) -> list[NewsItem]:
     if not news_outlet_ids:
         return []
@@ -242,11 +242,46 @@ async def get_headlines_for_user(
     if not outlets:
         return []
 
-    results = await asyncio.gather(*(_fetch_outlet(o) for o in outlets))
-    flattened: list[dict] = [item for outlet_items in results for item in outlet_items]
-    flattened.sort(key=_sort_key, reverse=True)
+    # Preserve follow order (news_outlet_ids), not catalog/lookup order - the distribution below
+    # treats "first followed" and "last followed" as meaningful, which needs this.
+    follow_order = {oid: i for i, oid in enumerate(news_outlet_ids)}
+    outlets.sort(key=lambda o: follow_order.get(o.id, len(follow_order)))
+    # Only as many outlets as headline slots participate directly - matches the "follow at most
+    # `limit`" cap the client enforces; a client that somehow has more selected just contributes
+    # its first `limit` followed outlets.
+    outlets = outlets[:limit]
 
-    return [NewsItem(**item) for item in flattened[:limit]]
+    per_outlet_items = await asyncio.gather(*(_fetch_outlet(o) for o in outlets))
+    for items in per_outlet_items:
+        items.sort(key=_sort_key, reverse=True)
+
+    # One followed outlet -> every slot from it. Two -> the first-followed one gets the extra
+    # slot(s), so a lone second source doesn't crowd out the one the user prioritized. Three (or
+    # more, capped above to `limit`) -> exactly one each, an even spread across every source.
+    n = len(outlets)
+    if n == 1:
+        quotas = [limit]
+    elif n == 2:
+        quotas = [limit - limit // 2, limit // 2]  # limit=3 -> [2, 1]
+    else:
+        quotas = [1] * n
+        for i in range(limit - n):  # only matters if limit > n, not the common case
+            quotas[i % n] += 1
+
+    picked: list[dict] = []
+    leftover: list[dict] = []
+    for items, quota in zip(per_outlet_items, quotas):
+        picked.extend(items[:quota])
+        leftover.extend(items[quota:])
+
+    # Backfill: one followed outlet running short on fresh items shouldn't shrink the total below
+    # `limit` when another followed outlet has more available - fill any remaining slots with the
+    # next-freshest items from anywhere else, same ordering as the old single-pool behavior.
+    if len(picked) < limit:
+        leftover.sort(key=_sort_key, reverse=True)
+        picked.extend(leftover[: limit - len(picked)])
+
+    return [NewsItem(**item) for item in picked[:limit]]
 
 
 def get_country_catalog(country: str) -> list[Outlet]:

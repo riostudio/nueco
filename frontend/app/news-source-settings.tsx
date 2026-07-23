@@ -21,6 +21,11 @@ type Outlet = { id: string; name: string; description?: string; topics?: string[
 // Curated country list for v1's "Change" picker. Mirrors backend/dailybrew/catalog.py's keys -
 // hardcoded here because that module hadn't landed yet when this screen was built. Reconcile
 // against the real catalog once it exists (should just be AU/ID at launch either way).
+// Daily Brew always shows 3 headlines, distributed across whatever's followed (see
+// get_headlines_for_user in backend/dailybrew/service.py) - that distribution is specifically
+// designed around 1-3 sources, so the follow list is capped to match.
+const MAX_OUTLETS = 3;
+
 const CURATED_COUNTRIES = [
   { code: 'AU', name: 'Australia' },
   { code: 'ID', name: 'Indonesia' },
@@ -163,7 +168,14 @@ export default function NewsSourceSettingsScreen() {
   }, [countryCode]);
 
   const toggleOutlet = useCallback((id: string) => {
-    setSelectedOutletIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+    setSelectedOutletIds((prev) => {
+      if (prev.includes(id)) return prev.filter((x) => x !== id);
+      if (prev.length >= MAX_OUTLETS) {
+        Alert.alert('Following limit reached', `You can follow up to ${MAX_OUTLETS} news sources. Unfollow one first to add another.`);
+        return prev;
+      }
+      return [...prev, id];
+    });
   }, []);
 
   // Debounced topic-feed search - typing "AI news" surfaces specific suggested feeds to
@@ -194,12 +206,16 @@ export default function NewsSourceSettingsScreen() {
   const handleAddCustomFeed = useCallback(async () => {
     const url = customFeedUrl.trim();
     if (!url || addingCustomFeed) return;
+    if (selectedOutletIds.length >= MAX_OUTLETS) {
+      Alert.alert('Following limit reached', `You can follow up to ${MAX_OUTLETS} news sources. Unfollow one first to add another.`);
+      return;
+    }
     setAddingCustomFeed(true);
     setCustomFeedError('');
     try {
       const outlet = await dailyBrewApi.addCustomFeed(url);
       rememberOutlets([outlet]);
-      setSelectedOutletIds((prev) => (prev.includes(outlet.id) ? prev : [...prev, outlet.id]));
+      setSelectedOutletIds((prev) => (prev.includes(outlet.id) || prev.length >= MAX_OUTLETS ? prev : [...prev, outlet.id]));
       setCustomFeedUrl('');
     } catch (e) {
       console.error('Failed to add custom feed:', e);
@@ -289,7 +305,7 @@ export default function NewsSourceSettingsScreen() {
             query changes, with no other way to see (or unfollow) it. */}
         {selectedOutletIds.length > 0 && (
           <View style={[s.card, { marginTop: 20 }]}>
-            <Text style={s.sectionLabel}>Following</Text>
+            <Text style={s.sectionLabel}>Following <Text style={s.sectionLabelHint}>(maximum {MAX_OUTLETS})</Text></Text>
             {selectedOutletIds.map((id) => {
               const outlet = outletDetails[id];
               const avatarColor = TAG_COLORS[hashIndex(id) % TAG_COLORS.length].value;
@@ -525,6 +541,7 @@ const s = StyleSheet.create({
   card: { backgroundColor: C.surface, padding: 20 },
   toggleCard: { paddingVertical: 24, paddingHorizontal: 24 },
   sectionLabel: { fontSize: 16, fontWeight: '600', color: C.textSec, marginBottom: 12 },
+  sectionLabelHint: { fontSize: 13, fontWeight: '400', color: C.borderSub },
   row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10 },
   toggleRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, paddingHorizontal: 4 },
   rowLabel: { fontSize: 18, color: C.text, marginLeft: 16, flex: 1, fontWeight: '500' },

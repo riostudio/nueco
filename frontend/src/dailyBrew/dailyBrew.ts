@@ -77,6 +77,14 @@ export async function setCachedBrew(userId: string, partial: Partial<CachedBrew>
   await AsyncStorage.setItem(`${CACHE_PREFIX}${userId}:${getTodayKey()}`, JSON.stringify(merged));
 }
 
+// Call whenever something the cached content depends on changes outside of DailyBrewCard's own
+// fetch cycle (e.g. news source preferences saved from news-source-settings.tsx) - without this,
+// DailyBrewCard's freshness check would keep trusting the now-stale cache for up to
+// REVALIDATE_INTERVAL_MS after the change, showing news from sources the user just removed.
+export async function clearCachedBrew(userId: string): Promise<void> {
+  await AsyncStorage.removeItem(`${CACHE_PREFIX}${userId}:${getTodayKey()}`);
+}
+
 export async function pruneOldKeys(): Promise<void> {
   try {
     const todayKey = getTodayKey();

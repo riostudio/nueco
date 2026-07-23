@@ -12,6 +12,7 @@ import { migrateEventsToEncrypted } from '../../crypto/eventMigration';
 import { UNDECRYPTABLE_PLACEHOLDER } from '../../crypto/accountCrypto';
 import { loadDek } from '../../crypto/keystore';
 import { resetCalendarSyncState } from '../../calendarSync';
+import { clearCachedBrew } from '../../dailyBrew/dailyBrew';
 
 // Account name E2EE (Stage 5) reversed: push the already-decrypted plaintext name (every
 // place `User` reaches app code has already run it through decryptAccountFromServer) back to
@@ -174,7 +175,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // the network. The E2EE key bootstrap above is still awaited (needed to decrypt notes).
     (async () => {
       try {
-        await fullSync();
+        await fullSync({ force: true });
       } catch (e) {
         console.warn('Post-login sync failed:', e);
       } finally {
@@ -229,6 +230,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const updated = await dailyBrewApi.updateNewsPreferences(country, outletIds, showVerse) as User;
     setUser(updated);
     await authStorage.setUser(updated);
+    // Otherwise DailyBrewCard's freshness check keeps trusting the pre-change cache for up to
+    // REVALIDATE_INTERVAL_MS, showing headlines from sources just removed.
+    await clearCachedBrew(updated.id);
   }, []);
 
   const logout = useCallback(async () => {
