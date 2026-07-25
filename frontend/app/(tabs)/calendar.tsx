@@ -7,6 +7,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useIsFocused } from '@react-navigation/native';
 import { eventsApi } from '../../src/api';
+import { getLocalEvents } from '../../src/offlineSync';
 import { CalendarEvent } from '../../src/types';
 import { MONTH_NAMES, DAY_NAMES, C, radius, borderWidth } from '../../src/theme';
 import { UserAvatar } from '../../src/auth';
@@ -34,6 +35,14 @@ export default function CalendarScreen() {
 
   const loadEvents = useCallback(async () => {
     try {
+      // Local-first: show whatever's already synced instantly (the same offline store the
+      // Events tab and Notes' linked-event lookups already keep current via fullSync), instead
+      // of every calendar visit waiting on a network round-trip before day-markers/the selected
+      // day's events appear. Day-level filtering (eventOccursOnDay below) doesn't need this
+      // pre-filtered to the current month - the full local list works the same either way.
+      const local = await getLocalEvents();
+      setEvents(local.filter(e => !e._pendingDelete) as CalendarEvent[]);
+
       // Cached (20s TTL, keyed by month/year - see src/api.ts) instead of a raw network fetch:
       // this screen re-runs on every focus (tab switch, back-nav), so within that window a
       // repeat visit to the same month is served instantly instead of re-fetching + re-decrypting.
