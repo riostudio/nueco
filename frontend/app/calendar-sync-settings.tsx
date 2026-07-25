@@ -55,13 +55,15 @@ export default function CalendarSyncSettingsScreen() {
     }
   }, []);
 
-  const toggleCalendar = useCallback(async (id: string) => {
-    setSelectedIds((prev) => {
-      const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
-      setSyncedCalendarIds(next).then(() => runCalendarSync({ force: true }).catch(() => {}));
-      return next;
-    });
-  }, []);
+  const toggleCalendar = useCallback((id: string) => {
+    // Side effects (AsyncStorage write + kicking off a sync) computed and run outside the
+    // updater, not inside it - React documents that setState updaters must be pure since it may
+    // invoke them more than once (Strict Mode, concurrent rendering); this app doesn't use
+    // StrictMode today so it's harmless in practice, but doing it right costs nothing here.
+    const next = selectedIds.includes(id) ? selectedIds.filter((x) => x !== id) : [...selectedIds, id];
+    setSelectedIds(next);
+    setSyncedCalendarIds(next).then(() => runCalendarSync({ force: true }).catch(() => {}));
+  }, [selectedIds]);
 
   const syncNow = useCallback(async () => {
     setSyncing(true);

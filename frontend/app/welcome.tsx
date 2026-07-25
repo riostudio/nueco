@@ -4,12 +4,15 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  SafeAreaView,
   Image,
   StatusBar,
 } from 'react-native';
 import { useRouter, type Href } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+// react-native's own SafeAreaView already applies the iOS home-indicator inset automatically -
+// this screen also manually adds `insets.bottom + 24` to buttonSection below (intended for
+// Android's gesture-nav zone), so using react-native's version double-counted the bottom inset
+// on iPhone X+. Matches the SafeAreaView source every other screen in the app already uses.
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { DIAGNOSTICS_ENABLED } from '../src/crypto/flags';
 import { C, radius, borderWidth } from '../src/theme';
@@ -20,7 +23,7 @@ export default function WelcomeScreen() {
   const insets = useSafeAreaInsets();
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} edges={['top']}>
       <StatusBar barStyle="dark-content" backgroundColor={C.bg} />
       <View style={styles.container}>
         {/* Logo and Branding */}

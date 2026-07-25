@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, ActivityIndicator,
   Alert, Modal, Pressable, Platform, TextInput, KeyboardAvoidingView,
@@ -80,6 +80,7 @@ export default function NewsSourceSettingsScreen() {
   const [confirming, setConfirming] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<Outlet[]>([]);
+  const latestSearchQueryRef = useRef('');
   const [searching, setSearching] = useState(false);
   const [customFeedUrl, setCustomFeedUrl] = useState('');
   const [addingCustomFeed, setAddingCustomFeed] = useState(false);
@@ -182,6 +183,11 @@ export default function NewsSourceSettingsScreen() {
   // follow (e.g. TechCrunch AI), not a keyword filter over already-selected outlets' headlines.
   useEffect(() => {
     const q = searchQuery.trim();
+    // Cleanup only cancels the pending debounce timer, not an already-in-flight fetch - if an
+    // earlier (slower) search resolves after a later (faster) one, its stale results would
+    // overwrite the correct, newer ones with nothing to stop it. Guard with the latest query so
+    // a response for anything other than the current search query is silently dropped.
+    latestSearchQueryRef.current = q;
     if (q.length < 2) {
       setSearchResults([]);
       setSearching(false);
@@ -191,13 +197,15 @@ export default function NewsSourceSettingsScreen() {
     const timer = setTimeout(async () => {
       try {
         const results = await dailyBrewApi.searchFeeds(q);
+        if (latestSearchQueryRef.current !== q) return; // stale - a newer search superseded this one
         setSearchResults(results ?? []);
         rememberOutlets(results ?? []);
       } catch (e) {
+        if (latestSearchQueryRef.current !== q) return;
         console.error('Failed to search news feeds:', e);
         setSearchResults([]);
       } finally {
-        setSearching(false);
+        if (latestSearchQueryRef.current === q) setSearching(false);
       }
     }, 300);
     return () => clearTimeout(timer);
@@ -206,17 +214,26 @@ export default function NewsSourceSettingsScreen() {
   const handleAddCustomFeed = useCallback(async () => {
     const url = customFeedUrl.trim();
     if (!url || addingCustomFeed) return;
-    if (selectedOutletIds.length >= MAX_OUTLETS) {
-      Alert.alert('Following limit reached', `You can follow up to ${MAX_OUTLETS} news sources. Unfollow one first to add another.`);
-      return;
-    }
+    // No pre-check against selectedOutletIds here (a useCallback dep on it would let the
+    // MAX_OUTLETS guard run against a stale snapshot whenever the selection changed without
+    // customFeedUrl also changing - see toggleOutlet, which has the same "check + alert inside
+    // the functional updater" shape for the same reason: it always sees live state).
     setAddingCustomFeed(true);
     setCustomFeedError('');
     try {
       const outlet = await dailyBrewApi.addCustomFeed(url);
       rememberOutlets([outlet]);
-      setSelectedOutletIds((prev) => (prev.includes(outlet.id) || prev.length >= MAX_OUTLETS ? prev : [...prev, outlet.id]));
-      setCustomFeedUrl('');
+      let blocked = false;
+      setSelectedOutletIds((prev) => {
+        if (prev.includes(outlet.id)) return prev;
+        if (prev.length >= MAX_OUTLETS) { blocked = true; return prev; }
+        return [...prev, outlet.id];
+      });
+      if (blocked) {
+        Alert.alert('Following limit reached', `You can follow up to ${MAX_OUTLETS} news sources. Unfollow one first to add another.`);
+      } else {
+        setCustomFeedUrl('');
+      }
     } catch (e) {
       console.error('Failed to add custom feed:', e);
       setCustomFeedError(extractErrorDetail(e, 'Could not add that feed. Please try again.'));

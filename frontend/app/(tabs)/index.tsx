@@ -6,9 +6,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
+import { useIsFocused } from '@react-navigation/native';
 import Constants from 'expo-constants';
 import * as StoreReview from 'expo-store-review';
-import { notesApi, eventsApi, feedbackApi } from '../../src/api';
+import { eventsApi, feedbackApi } from '../../src/api';
 import { decryptEventFromServer, decryptEventsFromServer } from '../../src/crypto/eventCrypto';
 import { CalendarEvent } from '../../src/types';
 import { C, radius, borderWidth } from '../../src/theme';
@@ -69,8 +70,9 @@ function stripMd(text: string): string {
 
 export default function NotesScreen() {
   const router = useRouter();
+  const isFocused = useIsFocused();
   const { isSyncReady } = useAuth();
-  const { notes, online, isSyncing, syncError, syncAndReload, deleteNote } = useOfflineNotes();
+  const { notes, online, isSyncing, syncError, syncAndReload, deleteNote, updateNote } = useOfflineNotes();
   const [pendingCount, setPendingCount] = useState(0);
   const [eventsMap, setEventsMap] = useState<Record<string, CalendarEvent>>({});
   const [search, setSearch] = useState('');
@@ -270,17 +272,17 @@ export default function NotesScreen() {
     }
   }, []);
 
-  // Polling for sync across devices - check for updates every 30 seconds
+  // Polling for sync across devices - check for updates every 30 seconds, only while this tab
+  // is actually the one visible (see (tabs)/events.tsx for why - all three tabs stay mounted).
   useEffect(() => {
     const pollInterval = setInterval(() => {
-      // Only poll if not currently refreshing and screen is focused
-      if (!refreshing && !loading) {
+      if (!refreshing && !loading && isFocused) {
         loadNotes();
       }
     }, 30000); // 30 seconds
 
     return () => clearInterval(pollInterval);
-  }, [loadNotes, refreshing, loading]);
+  }, [loadNotes, refreshing, loading, isFocused]);
 
   const filteredNotes = debouncedSearch
     ? notes.filter((n) => {
@@ -296,9 +298,14 @@ export default function NotesScreen() {
   const otherNotes = filteredNotes.filter((n) => !n.is_pinned);
 
   const handleTogglePin = async (noteId: string) => {
+    // Goes through the same offline-first path every other write on this screen uses (delete,
+    // edit, create) instead of calling notesApi directly - the direct call silently no-op'd
+    // while offline (network error swallowed into a console.error, is_pinned never flipped
+    // locally, no user-visible feedback at all) since it bypassed the local-first queue entirely.
+    const note = notes.find((n) => n.id === noteId);
+    if (!note) return;
     try {
-      await notesApi.togglePin(noteId);
-      loadNotes();
+      await updateNote(noteId, { is_pinned: !note.is_pinned });
     } catch (e) {
       console.error('Toggle pin failed:', e);
     }

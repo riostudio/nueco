@@ -5,6 +5,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
+import { useIsFocused } from '@react-navigation/native';
 import { eventsApi } from '../../src/api';
 import { CalendarEvent } from '../../src/types';
 import { MONTH_NAMES, DAY_NAMES, C, radius, borderWidth } from '../../src/theme';
@@ -22,6 +23,7 @@ function formatEventTime(iso: string): string {
 
 export default function CalendarScreen() {
   const router = useRouter();
+  const isFocused = useIsFocused();
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [events, setEvents] = useState<CalendarEvent[]>([]);
@@ -46,16 +48,17 @@ export default function CalendarScreen() {
 
   useFocusEffect(useCallback(() => { loadEvents(); }, [loadEvents]));
 
-  // Polling for sync across devices - check for updates every 30 seconds
+  // Polling for sync across devices - check for updates every 30 seconds, only while this tab
+  // is actually the one visible (see (tabs)/events.tsx for why - all three tabs stay mounted).
   useEffect(() => {
     const pollInterval = setInterval(() => {
-      if (!loading) {
+      if (!loading && isFocused) {
         loadEvents();
       }
     }, 30000); // 30 seconds
 
     return () => clearInterval(pollInterval);
-  }, [loadEvents, loading]);
+  }, [loadEvents, loading, isFocused]);
 
   const firstDay = new Date(year, month, 1).getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -82,9 +85,18 @@ export default function CalendarScreen() {
   const nextMonth = () => setCurrentDate(new Date(year, month + 1, 1));
   const selectDay = (day: number) => setSelectedDate(new Date(year, month, day));
 
+  // Time-of-day, not raw start_time epoch: every event here already occurs on the selected day
+  // (eventOccursOnDay already filtered for that), so for a recurring event start_time's *date*
+  // is just whenever the series was originally created - comparing full epochs could sort a
+  // months-old recurring 3pm meeting before today's 9am one-off, even though 9am should render
+  // first. Only the local hour/minute-of-day is meaningful for ordering within a single day.
+  const timeOfDayMinutes = (iso: string): number => {
+    const d = new Date(iso);
+    return d.getHours() * 60 + d.getMinutes();
+  };
   const selectedDayEvents = events
     .filter((e) => eventOccursOnDay(e, selYear, selMonth, selDay))
-    .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
+    .sort((a, b) => timeOfDayMinutes(a.start_time) - timeOfDayMinutes(b.start_time));
 
   const rows: (number | null)[][] = [];
   for (let i = 0; i < days.length; i += 7) {

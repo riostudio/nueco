@@ -7,6 +7,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
+import { useIsFocused } from '@react-navigation/native';
 import { deleteEventOffline, getLocalEvents, fullSync } from '../../src/offlineSync';
 import { bumpDeviceCalendarSync } from '../../src/deviceCalendarSync';
 import { CalendarEvent } from '../../src/types';
@@ -66,45 +67,63 @@ function formatReminderMinutes(minutes: number | null | undefined): string {
   return `${minutes} min before`;
 }
 
+// The effective datetime a recurring event should be treated as occurring at - its next
+// upcoming occurrence, not the original series-creation start_time - falling back to start_time
+// once the series has ended (nextOccurrenceOnOrAfter returns null past `until`) so an ended
+// series still shows up somewhere instead of silently disappearing. Shared by the Upcoming
+// filter and the day-grouping below so both agree on what "today"/"upcoming" means for a series.
+function effectiveEventDate(evt: CalendarEvent): Date {
+  if (!evt.recurrence) return new Date(evt.start_time);
+  return nextOccurrenceOnOrAfter(evt, new Date()) ?? new Date(evt.start_time);
+}
+
 function isEventUpcoming(iso: string): boolean {
   return new Date(iso) >= new Date(new Date().setHours(0, 0, 0, 0));
+}
+
+// Local calendar-day key (not UTC) - dateKey used to come from the UTC ISO substring while
+// formatEventDate/isEventToday below both read local date fields, so events near local midnight
+// could land under the wrong day header or split the same local day across two mislabeled groups.
+function localDateKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 type GroupedEvents = { date: string; displayDate: string; isToday: boolean; events: CalendarEvent[] }[];
 
 function groupEventsByDate(events: CalendarEvent[]): GroupedEvents {
-  const map = new Map<string, { displayDate: string; isToday: boolean; events: CalendarEvent[] }>();
+  const map = new Map<string, { displayDate: string; isToday: boolean; entries: { evt: CalendarEvent; displayDate: Date }[] }>();
 
   for (const evt of events) {
-    // Recurring events group by their next upcoming occurrence (not the original
-    // start_time) so a series created weeks/months ago still sorts near "today"
-    // instead of staying pinned under its creation date - and since this groups the
-    // single CalendarEvent object by one computed date, it naturally produces exactly
-    // one row per recurring event rather than one per occurrence. If the series has
-    // already ended (nextOccurrenceOnOrAfter returns null because `until` passed),
-    // fall back to start_time so the ended series still shows up somewhere instead of
-    // silently disappearing from the list.
-    const displayIso = evt.recurrence
-      ? (nextOccurrenceOnOrAfter(evt, new Date())?.toISOString() ?? evt.start_time)
-      : evt.start_time;
-    const dateKey = displayIso.substring(0, 10);
+    const displayDate = effectiveEventDate(evt);
+    const dateKey = localDateKey(displayDate);
     if (!map.has(dateKey)) {
       map.set(dateKey, {
-        displayDate: formatEventDate(displayIso),
-        isToday: isEventToday(displayIso),
-        events: [],
+        displayDate: formatEventDate(displayDate.toISOString()),
+        isToday: isEventToday(displayDate.toISOString()),
+        entries: [],
       });
     }
-    map.get(dateKey)!.events.push(evt);
+    map.get(dateKey)!.entries.push({ evt, displayDate });
   }
 
   return Array.from(map.entries())
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, val]) => ({ date, ...val }));
+    .map(([date, val]) => ({
+      date,
+      displayDate: val.displayDate,
+      isToday: val.isToday,
+      // Chronological within the day - entries.push order above is arbitrary (whatever
+      // getLocalEvents() happened to return), and comparing recurring events' displayDate
+      // (their actual next-occurrence time) rather than raw start_time keeps a same-day
+      // recurring event correctly ordered against one-off events instead of sorting by its
+      // original (possibly months-old) creation timestamp.
+      events: val.entries.sort((a, b) => a.displayDate.getTime() - b.displayDate.getTime()).map((e) => e.evt),
+    }));
 }
 
 export default function EventsScreen() {
   const router = useRouter();
+  const isFocused = useIsFocused();
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -140,17 +159,19 @@ export default function EventsScreen() {
 
   useFocusEffect(useCallback(() => { loadEvents(); }, [loadEvents]));
 
-  // Polling for sync across devices - check for updates every 30 seconds
+  // Polling for sync across devices - check for updates every 30 seconds, only while this tab
+  // is actually the one visible. expo-router's Tabs navigator keeps all three tab screens
+  // mounted for fast switching, so without a real isFocused check this fired in parallel on
+  // whichever tabs weren't even on screen - wasted battery/data for no benefit.
   useEffect(() => {
     const pollInterval = setInterval(() => {
-      // Only poll if not currently refreshing and screen is focused
-      if (!refreshing && !loading) {
+      if (!refreshing && !loading && isFocused) {
         loadEvents();
       }
     }, 30000); // 30 seconds
 
     return () => clearInterval(pollInterval);
-  }, [loadEvents, refreshing, loading]);
+  }, [loadEvents, refreshing, loading, isFocused]);
 
   const handleDeletePress = (eventId: string, eventTitle: string, deviceCalendarEventId: string | null) => {
     setEventToDelete({ id: eventId, title: eventTitle || 'Untitled Event', deviceCalendarEventId });
@@ -214,8 +235,12 @@ export default function EventsScreen() {
     lastScrollY.current = currentY;
   };
 
+  // For a recurring event, start_time is the original series-creation timestamp - checking it
+  // directly against "today" silently drops any series created before today from the default
+  // Upcoming view, even though it clearly still occurs again. Use the same effectiveEventDate
+  // (next occurrence) groupEventsByDate already computes for exactly this reason.
   const filteredEvents = filter === 'upcoming'
-    ? events.filter((e) => isEventUpcoming(e.start_time))
+    ? events.filter((e) => isEventUpcoming(effectiveEventDate(e).toISOString()))
     : events;
 
   const grouped = groupEventsByDate(filteredEvents);

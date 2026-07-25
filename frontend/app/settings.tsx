@@ -81,11 +81,13 @@ export default function PrivacyDataScreen() {
     if (!password) { setDeleteError('Enter your password to confirm.'); return; }
     setDeleting(true);
     setDeleteError('');
+    // deleteAccount is the one irrevocable step - it's the only call whose failure means the
+    // password was actually wrong. clearLocalData/logout are best-effort local cleanup after
+    // that; bundling all three under one catch used to misreport a post-delete 401 from logout
+    // (its own session token is invalidated as part of the delete) as "Incorrect password" on
+    // an account that had, in fact, already been successfully deleted.
     try {
       await accountApi.deleteAccount(password);
-      await clearLocalData();
-      await logout();
-      router.replace('/welcome');
     } catch (e: any) {
       setDeleting(false);
       const msg = String(e?.message || '');
@@ -94,7 +96,12 @@ export default function PrivacyDataScreen() {
           ? 'Incorrect password.'
           : 'Could not delete account. Please try again.',
       );
+      return;
     }
+    // Account is gone server-side - proceed regardless of local cleanup failures.
+    try { await clearLocalData(); } catch {}
+    try { await logout(); } catch {}
+    router.replace('/welcome');
   }, [password, logout, router]);
 
   return (
