@@ -14,6 +14,12 @@ import {
 } from './noteCryptoCore';
 import { loadDek } from './keystore';
 import { E2EE_KEYS_ENABLED } from './flags';
+import { yieldToJS } from './yieldToJS';
+
+// Every this-many notes, yield to the event loop so decrypting a large collection
+// in one fullSync pass doesn't freeze touch handling / animations app-wide for the
+// whole loop - see the (tabs)/index.tsx and (tabs)/events.tsx focus-triggered sync.
+const DECRYPT_YIELD_EVERY = 25;
 
 export {
   encryptNoteFields,
@@ -50,5 +56,10 @@ export async function decryptNoteFromServer<T extends EncryptableNote>(note: T):
 export async function decryptNotesFromServer<T extends EncryptableNote>(notes: T[]): Promise<T[]> {
   const dek = await loadDek();
   if (!dek) return notes;
-  return notes.map((n) => decryptNoteFields(n, dek));
+  const out: T[] = [];
+  for (let i = 0; i < notes.length; i++) {
+    out.push(decryptNoteFields(notes[i], dek));
+    if ((i + 1) % DECRYPT_YIELD_EVERY === 0) await yieldToJS();
+  }
+  return out;
 }

@@ -15,6 +15,10 @@ import {
 } from './eventCryptoCore';
 import { loadDek } from './keystore';
 import { E2EE_KEYS_ENABLED } from './flags';
+import { yieldToJS } from './yieldToJS';
+
+// See noteCrypto.ts's DECRYPT_YIELD_EVERY - same reasoning, applied to events.
+const DECRYPT_YIELD_EVERY = 25;
 
 export {
   encryptEventFields,
@@ -50,5 +54,10 @@ export async function decryptEventFromServer<T extends EncryptableEvent>(event: 
 export async function decryptEventsFromServer<T extends EncryptableEvent>(events: T[]): Promise<T[]> {
   const dek = await loadDek();
   if (!dek) return events;
-  return events.map((e) => decryptEventFields(e, dek));
+  const out: T[] = [];
+  for (let i = 0; i < events.length; i++) {
+    out.push(decryptEventFields(events[i], dek));
+    if ((i + 1) % DECRYPT_YIELD_EVERY === 0) await yieldToJS();
+  }
+  return out;
 }
