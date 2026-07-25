@@ -65,8 +65,14 @@ function calDayLessOrEqual(a: { year: number; month: number; day: number }, b: {
  * Next occurrence (as a Date/UTC instant) of `event`'s recurrence at or after `from`,
  * or `null` if the event has no recurrence, or if `until` has already passed / no
  * matching occurrence exists within the search window.
+ *
+ * `searchCeiling`, if given, stops the day-stepping search as soon as the candidate
+ * passes it (returning null) instead of continuing all the way to MAX_SEARCH_DAYS. Since
+ * `candidate` only ever moves forward, this is safe whenever the caller only cares about
+ * occurrences up to a known point - `occursOnDay` below uses it to avoid an unbounded
+ * ~3-year search just to answer "does this land on one specific day".
  */
-export function nextOccurrenceOnOrAfter(event: CalendarEvent, from: Date): Date | null {
+export function nextOccurrenceOnOrAfter(event: CalendarEvent, from: Date, searchCeiling?: Date): Date | null {
   const recurrence = event.recurrence;
   if (!recurrence) return null;
 
@@ -94,6 +100,10 @@ export function nextOccurrenceOnOrAfter(event: CalendarEvent, from: Date): Date 
   let candidate = start.getTime() >= from.getTime() ? new Date(start.getTime()) : alignForward(start, from, stepMs);
 
   for (let i = 0; i < MAX_SEARCH_DAYS; i++) {
+    if (searchCeiling && candidate.getTime() > searchCeiling.getTime()) {
+      return null; // candidate only moves forward - nothing left to find within the ceiling
+    }
+
     const candDay = localCalendarDay(candidate, event.timezone);
 
     if (untilDay && !calDayLessOrEqual(candDay, untilDay)) {
@@ -148,8 +158,12 @@ export function occursOnDay(event: CalendarEvent, year: number, month: number, d
 
   // Find the next occurrence on/after the start of this local day; if it lands
   // within this same local day (by device-local time, matching the rest of
-  // calendar.tsx's grid math), the event occurs on this day.
-  const next = nextOccurrenceOnOrAfter(event, dayStart);
+  // calendar.tsx's grid math), the event occurs on this day. Bounded to dayEnd - this is only
+  // ever asked about one specific day, so there's no need to day-step arbitrarily far into the
+  // future (up to MAX_SEARCH_DAYS/~3 years) once the search has already passed it. This function
+  // runs once per calendar-grid cell per recurring event (dozens of calls per render), so an
+  // unbounded search here was a real, measurable render-time cost.
+  const next = nextOccurrenceOnOrAfter(event, dayStart, dayEnd);
   if (!next) return false;
   return next.getTime() <= dayEnd.getTime();
 }
