@@ -302,8 +302,8 @@ async def scenario_search(user):
         r = await timed(m, client, "GET", f"/api/notes?search={marker}", headers=headers)
         found = {n["id"] for n in r.json()}
         if found != ids_with_marker:
-            precision_ok = found <= ids_with_marker  # no false positives
-            recall_ok = ids_with_marker <= found
+            precision_ok &= found <= ids_with_marker  # no false positives
+            recall_ok &= ids_with_marker <= found
     checks.append(check("search_zero_false_positives", precision_ok, f"expected={len(ids_with_marker)}"))
     checks.append(check("search_full_recall", recall_ok))
     res["created"] = 6
