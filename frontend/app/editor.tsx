@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   ScrollView, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
@@ -78,12 +78,17 @@ type EditorUiState = {
 // `initialContent`. That's the reliable way to load existing content: `setContent` after mount
 // races the webview's readiness (it logs "Editor isn't ready yet" and drops the call, leaving the
 // body empty until tapped). Mounting this only once the content is known sidesteps the race.
-// Writing-area height: TenTap's own dynamicHeight (wired below) grows the WebView's own
-// containerStyle to fit its actual content, independent of RN flex layout entirely - a flex-based
-// height (100%/flex:1 of the surrounding chain) got squeezed by sibling sections lower on the
-// screen (attachments, linked events) competing for space, silently clipping pasted/typed text
-// behind the WebView's own internal scroll. dynamicHeight can't be squeezed that way since the
-// box's pixel height is reported by the webview's own content measurement, not RN's layout pass.
+// Writing-area height: TenTap's dynamicHeight is a no-op on Expo - node_modules/@10play/
+// tentap-editor/src/webEditorUtils/contentHeight.tsx swaps in a shimmed, do-nothing
+// ContentHeightListener whenever `expo-constants` is requireable (i.e. always, in this app),
+// so the WebView's containerStyle height stays stuck at its initial 0 forever; nothing ever
+// reports real content height back. So: grow the box from the content ourselves (bodyHeight
+// below) instead. This also sidesteps the OTHER failure mode a flex/100%-based height hit - it
+// got squeezed by sibling sections lower on the screen (attachments, linked events) competing
+// for space in the same flex chain, clipping content behind the WebView's own internal scroll.
+// bodyHeight is a plain pixel number, immune to both: it doesn't depend on the (broken)
+// WebView resize signal, and it doesn't participate in flex distribution with its siblings.
+const BODY_SANITY_MAX_HEIGHT = 20000;
 
 function escapeHtml(t: string): string {
   return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -112,10 +117,7 @@ const NoteBodyEditor = forwardRef<EditorApi, {
   onChange: (html: string) => void;
   onStateChange: (s: EditorUiState) => void;
 }>(function NoteBodyEditor({ initialContent, onChange, onStateChange }, ref) {
-  const editor = useEditorBridge({
-    autofocus: false, avoidIosKeyboard: true, initialContent, bridgeExtensions: noteBridgeExtensions,
-    dynamicHeight: true,
-  });
+  const editor = useEditorBridge({ autofocus: false, avoidIosKeyboard: true, initialContent, bridgeExtensions: noteBridgeExtensions });
   const state = useBridgeState(editor);
   const html = useEditorContent(editor, { type: 'html', debounceInterval: 400 });
 
@@ -134,12 +136,9 @@ const NoteBodyEditor = forwardRef<EditorApi, {
       if (type === 'editor-ready') setBridgeReady(true);
     } catch {}
   }, []);
-  // dynamicHeight resets the WebView's scroll position after boot itself (its own fix for
-  // https://github.com/10play/10tap-editor/issues/236 / 244), but only once the resize message
-  // it's keyed off of has actually fired - belt-and-suspenders against the page settling scrolled
-  // a few px past the top once fonts/layout finish reflowing after `initialContent` loads, which
-  // would clip the first line of imported/shared text. Runs once, right as the freshly-mounted
-  // editor reports ready.
+  // The page can settle scrolled a few px past the top once fonts/layout finish reflowing after
+  // `initialContent` loads, clipping the first line of imported/shared text. Runs once, right as
+  // the freshly-mounted editor reports ready.
   useEffect(() => {
     if (!bridgeReady) return;
     const t = setTimeout(() => {
@@ -147,6 +146,19 @@ const NoteBodyEditor = forwardRef<EditorApi, {
     }, 100);
     return () => clearTimeout(t);
   }, [bridgeReady]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Estimate the writing-area height from the content (dynamicHeight can't do this - see the
+  // note above) so a long paste (e.g. text copied from a webpage) grows the box to show all of
+  // it, instead of clipping it behind the WebView's internal scroll. No real max - BODY_SANITY_MAX
+  // is only a backstop against a degenerate estimate.
+  const bodyHeight = useMemo(() => {
+    const h = html || initialContent || '';
+    const blocks = (h.match(/<\/(p|div|h[1-6]|li|blockquote)>|<br\s*\/?>/gi) || []).length;
+    const text = h.replace(/<[^>]+>/g, ' ').replace(/&[a-z#0-9]+;/gi, ' ');
+    const wrapped = Math.ceil((text.trim().length || 1) / 36); // ~36 chars/line at the editor width
+    const lines = Math.max(blocks + 1, wrapped);
+    return Math.min(BODY_SANITY_MAX_HEIGHT, lines * 26 + 28);
+  }, [html, initialContent]);
 
   useImperativeHandle(ref, () => ({
     getHTML: () => editor.getHTML(),
@@ -175,7 +187,7 @@ const NoteBodyEditor = forwardRef<EditorApi, {
     <View style={s.richTextWrap}>
       <RichText
         editor={editor}
-        style={s.richText}
+        style={[s.richText, { height: bodyHeight }]}
         scrollEnabled
         onMessage={handleWebviewMessage}
         exclusivelyUseCustomOnMessage={false}
@@ -1501,143 +1513,147 @@ export default function EditorScreen() {
               ) : (
                 <View style={s.richTextWrap}><View style={{ height: 180 }} /></View>
               )}
+
+              {/* Attachments - shown inside the writing surface itself, not as a separate section
+                  below it. */}
+              {(attachments.length > 0 || pendingUploads.length > 0) && (
+                <View style={s.imagesContainerInBox}>
+                  <Text style={s.imagesSectionTitle}>Attachments</Text>
+                  {/* In-flight uploads: filename + radial progress */}
+                  {pendingUploads.map((u) => (
+                    <View key={u.id} style={s.attachmentRow} testID={`uploading-${u.id}`}>
+                      <MaterialIcons name="upload-file" size={22} color={C.secondary} />
+                      <Text style={s.attachmentName} numberOfLines={1}>{u.name}</Text>
+                      <RadialProgress progress={u.progress} size={22} />
+                    </View>
+                  ))}
+                  {attachments.map((att) => (
+                    <TouchableOpacity
+                      key={att.id}
+                      style={s.attachmentRow}
+                      onPress={() => openAttachment(att)}
+                      activeOpacity={0.7}
+                      testID={`open-attachment-${att.id}`}
+                    >
+                      <MaterialIcons name={attachmentIcon(att.mime_type)} size={22} color={C.secondary} />
+                      <Text style={s.attachmentName} numberOfLines={1}>{att.filename}</Text>
+                      <MaterialIcons name="open-in-new" size={18} color={C.borderSub} />
+                      <TouchableOpacity
+                        testID={`remove-attachment-${att.id}`}
+                        onPress={() => removeAttachment(att)}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      >
+                        <MaterialIcons name="close" size={20} color={C.error} />
+                      </TouchableOpacity>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+
+              {/* Images (the card's thumbnail lives at images[0] and is shown by the card, not here) -
+                  same in-box placement as Attachments above. */}
+              {images.filter((_, i) => !(thumbInImages0 && i === 0)).length > 0 && (
+                <View style={s.imagesContainerInBox}>
+                  <Text style={s.imagesSectionTitle}>Attached Images</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.imagesScroll}>
+                    {images.map((uri, index) => {
+                      if (thumbInImages0 && index === 0) return null;
+                      return (
+                        <View key={index} style={s.imageWrapper}>
+                          <Image source={{ uri }} style={s.attachedImage} />
+                          <TouchableOpacity
+                            style={s.removeImageBtn}
+                            onPress={() => removeImage(index)}
+                          >
+                            <MaterialIcons name="close" size={16} color={C.primaryFg} />
+                          </TouchableOpacity>
+                        </View>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+              )}
+
+              {/* Calendar Links / Event Details - a note can carry any number of linked events
+                  now, each rendered as its own card (was capped at one). Rendered inside the
+                  writing surface, below the body text and below Attachments/Images when either
+                  is present. */}
+              {linkedEvents.map((ev) => (
+                <TouchableOpacity
+                  key={ev.id}
+                  testID={`linked-event-card-${ev.id}`}
+                  style={s.eventCardInBox}
+                  onPress={() =>
+                    router.push({
+                      pathname: '/event-editor',
+                      params: {
+                        eventId: ev.id,
+                        noteId: noteIdRef.current || 'new',
+                      },
+                    })
+                  }
+                >
+                  <View style={s.eventHeader}>
+                    <MaterialIcons name="event" size={24} color={C.secondary} />
+                    <Text style={s.eventHeaderText}>Linked Event</Text>
+                    <TouchableOpacity
+                      testID={`remove-linked-event-btn-${ev.id}`}
+                      onPress={() => handleRemoveLinkedEvent(ev.id)}
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                      style={{ paddingHorizontal: 4 }}
+                    >
+                      <MaterialIcons name="delete" size={22} color={C.error} />
+                    </TouchableOpacity>
+                    <MaterialIcons name="chevron-right" size={24} color={C.borderSub} />
+                  </View>
+                  <View style={s.eventDetails}>
+                    <Text style={s.eventTitle}>{ev.title}</Text>
+                    <View style={s.eventTimeRow}>
+                      <MaterialIcons name="schedule" size={18} color={C.textSec} />
+                      <Text style={s.eventTimeText}>
+                        {formatEventDateTime(ev.start_time)}
+                      </Text>
+                    </View>
+                    <View style={s.eventTimeRow}>
+                      <MaterialIcons name="schedule" size={18} color={C.textSec} />
+                      <Text style={s.eventTimeText}>
+                        to {formatEventDateTime(ev.end_time)}
+                      </Text>
+                    </View>
+                    {ev.location ? (
+                      <View style={s.eventTimeRow}>
+                        <MaterialIcons name="place" size={18} color={C.textSec} />
+                        <Text style={s.eventTimeText} numberOfLines={1}>
+                          {ev.location}
+                        </Text>
+                      </View>
+                    ) : null}
+                    {ev.reminder_minutes ? (
+                      <View style={s.eventTimeRow}>
+                        <MaterialIcons name="notifications" size={18} color={C.primary} />
+                        <Text style={s.eventReminderText}>
+                          Reminder: {formatReminderMinutes(ev.reminder_minutes)}
+                        </Text>
+                      </View>
+                    ) : null}
+                    {formatRecurrenceSummary(ev.recurrence) ? (
+                      <View style={s.eventTimeRow}>
+                        <MaterialIcons name="repeat" size={18} color={C.primary} />
+                        <Text style={s.eventReminderText}>
+                          {formatRecurrenceSummary(ev.recurrence)}
+                        </Text>
+                      </View>
+                    ) : null}
+                    {ev.description ? (
+                      <Text style={s.eventDescription} numberOfLines={2}>
+                        {ev.description}
+                      </Text>
+                    ) : null}
+                  </View>
+                </TouchableOpacity>
+              ))}
             </View>
           </View>
-
-          {/* Attachments Section */}
-          {(attachments.length > 0 || pendingUploads.length > 0) && (
-            <View style={s.imagesContainer}>
-              <Text style={s.imagesSectionTitle}>Attachments</Text>
-              {/* In-flight uploads: filename + radial progress */}
-              {pendingUploads.map((u) => (
-                <View key={u.id} style={s.attachmentRow} testID={`uploading-${u.id}`}>
-                  <MaterialIcons name="upload-file" size={22} color={C.secondary} />
-                  <Text style={s.attachmentName} numberOfLines={1}>{u.name}</Text>
-                  <RadialProgress progress={u.progress} size={22} />
-                </View>
-              ))}
-              {attachments.map((att) => (
-                <TouchableOpacity
-                  key={att.id}
-                  style={s.attachmentRow}
-                  onPress={() => openAttachment(att)}
-                  activeOpacity={0.7}
-                  testID={`open-attachment-${att.id}`}
-                >
-                  <MaterialIcons name={attachmentIcon(att.mime_type)} size={22} color={C.secondary} />
-                  <Text style={s.attachmentName} numberOfLines={1}>{att.filename}</Text>
-                  <MaterialIcons name="open-in-new" size={18} color={C.borderSub} />
-                  <TouchableOpacity
-                    testID={`remove-attachment-${att.id}`}
-                    onPress={() => removeAttachment(att)}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  >
-                    <MaterialIcons name="close" size={20} color={C.error} />
-                  </TouchableOpacity>
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
-
-          {/* Images Section (the card's thumbnail lives at images[0] and is shown by the card, not here) */}
-          {images.filter((_, i) => !(thumbInImages0 && i === 0)).length > 0 && (
-            <View style={s.imagesContainer}>
-              <Text style={s.imagesSectionTitle}>Attached Images</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.imagesScroll}>
-                {images.map((uri, index) => {
-                  if (thumbInImages0 && index === 0) return null;
-                  return (
-                    <View key={index} style={s.imageWrapper}>
-                      <Image source={{ uri }} style={s.attachedImage} />
-                      <TouchableOpacity
-                        style={s.removeImageBtn}
-                        onPress={() => removeImage(index)}
-                      >
-                        <MaterialIcons name="close" size={16} color={C.primaryFg} />
-                      </TouchableOpacity>
-                    </View>
-                  );
-                })}
-              </ScrollView>
-            </View>
-          )}
-
-          {/* Calendar Links / Event Details - a note can carry any number of linked events now,
-              each rendered as its own card (was capped at one). */}
-          {linkedEvents.map((ev) => (
-            <TouchableOpacity
-              key={ev.id}
-              testID={`linked-event-card-${ev.id}`}
-              style={s.eventCard}
-              onPress={() =>
-                router.push({
-                  pathname: '/event-editor',
-                  params: {
-                    eventId: ev.id,
-                    noteId: noteIdRef.current || 'new',
-                  },
-                })
-              }
-            >
-              <View style={s.eventHeader}>
-                <MaterialIcons name="event" size={24} color={C.secondary} />
-                <Text style={s.eventHeaderText}>Linked Event</Text>
-                <TouchableOpacity
-                  testID={`remove-linked-event-btn-${ev.id}`}
-                  onPress={() => handleRemoveLinkedEvent(ev.id)}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  style={{ paddingHorizontal: 4 }}
-                >
-                  <MaterialIcons name="delete" size={22} color={C.error} />
-                </TouchableOpacity>
-                <MaterialIcons name="chevron-right" size={24} color={C.borderSub} />
-              </View>
-              <View style={s.eventDetails}>
-                <Text style={s.eventTitle}>{ev.title}</Text>
-                <View style={s.eventTimeRow}>
-                  <MaterialIcons name="schedule" size={18} color={C.textSec} />
-                  <Text style={s.eventTimeText}>
-                    {formatEventDateTime(ev.start_time)}
-                  </Text>
-                </View>
-                <View style={s.eventTimeRow}>
-                  <MaterialIcons name="schedule" size={18} color={C.textSec} />
-                  <Text style={s.eventTimeText}>
-                    to {formatEventDateTime(ev.end_time)}
-                  </Text>
-                </View>
-                {ev.location ? (
-                  <View style={s.eventTimeRow}>
-                    <MaterialIcons name="place" size={18} color={C.textSec} />
-                    <Text style={s.eventTimeText} numberOfLines={1}>
-                      {ev.location}
-                    </Text>
-                  </View>
-                ) : null}
-                {ev.reminder_minutes ? (
-                  <View style={s.eventTimeRow}>
-                    <MaterialIcons name="notifications" size={18} color={C.primary} />
-                    <Text style={s.eventReminderText}>
-                      Reminder: {formatReminderMinutes(ev.reminder_minutes)}
-                    </Text>
-                  </View>
-                ) : null}
-                {formatRecurrenceSummary(ev.recurrence) ? (
-                  <View style={s.eventTimeRow}>
-                    <MaterialIcons name="repeat" size={18} color={C.primary} />
-                    <Text style={s.eventReminderText}>
-                      {formatRecurrenceSummary(ev.recurrence)}
-                    </Text>
-                  </View>
-                ) : null}
-                {ev.description ? (
-                  <Text style={s.eventDescription} numberOfLines={2}>
-                    {ev.description}
-                  </Text>
-                ) : null}
-              </View>
-            </TouchableOpacity>
-          ))}
 
           <View style={{ height: 120 }} />
         </ScrollView>
@@ -1758,26 +1774,26 @@ export default function EditorScreen() {
             </ScrollView>
           )}
 
-          {/* Voice Input - hide when keyboard is visible */}
-          {!isKeyboardVisible && (
-            <View style={s.voiceBar}>
-              {isTranscribing ? (
-                <View style={s.transcribing}>
-                  <ActivityIndicator size="small" color={C.primary} />
-                  <Text style={s.transcribingText}>Converting speech to text...</Text>
-                </View>
-              ) : (
-                <Button
-                  testID="voice-input-btn"
-                  variant="cta"
-                  tone={isRecording ? 'danger' : 'default'}
-                  icon={isRecording ? 'stop' : 'mic'}
-                  label={isRecording ? 'Stop Recording' : 'Voice Input'}
-                  onPress={isRecording ? stopRecording : startRecording}
-                />
-              )}
-            </View>
-          )}
+          {/* Voice Input - always visible, including while typing. KeyboardAvoidingView already
+              lifts this whole bottomBar above the keyboard, so this stays pinned right on top of
+              it instead of disappearing while composing. */}
+          <View style={s.voiceBar}>
+            {isTranscribing ? (
+              <View style={s.transcribing}>
+                <ActivityIndicator size="small" color={C.primary} />
+                <Text style={s.transcribingText}>Converting speech to text...</Text>
+              </View>
+            ) : (
+              <Button
+                testID="voice-input-btn"
+                variant="cta"
+                tone={isRecording ? 'danger' : 'default'}
+                icon={isRecording ? 'stop' : 'mic'}
+                label={isRecording ? 'Stop Recording' : 'Voice Input'}
+                onPress={isRecording ? stopRecording : startRecording}
+              />
+            )}
+          </View>
         </View>
       </KeyboardAvoidingView>
       
@@ -2051,14 +2067,14 @@ const s = StyleSheet.create({
     paddingTop: 4,
     paddingBottom: 4,
   },
-  // TenTap rich editor (WebView). dynamicHeight (wired in NoteBodyEditor) grows the box to fit its
-  // actual content - no fixed/flex height here, so nothing ever gets clipped regardless of what
-  // else (attachments, linked events) is on the screen. Matches the page background (not white)
-  // so it reads as one continuous surface, but still opaque - a transparent Android WebView stops
-  // repainting after a parent re-render/blur (e.g. autosave), blanking the text until a tap forces
-  // a redraw.
+  // TenTap rich editor (WebView). Explicit pixel height (bodyHeight, computed in NoteBodyEditor)
+  // grows the box to fit its actual content - dynamicHeight doesn't work here (see the comment
+  // above NoteBodyEditor), so this is a plain style height, not flex/percentage-based, which also
+  // means it can't get squeezed by other sections lower on the screen (attachments, linked
+  // events). Matches the page background (not white) so it reads as one continuous surface, but
+  // still opaque - a transparent Android WebView stops repainting after a parent re-render/blur
+  // (e.g. autosave), blanking the text until a tap forces a redraw.
   richText: {
-    minHeight: 0,
     backgroundColor: C.bg,
   },
   attachBtn: {
@@ -2159,10 +2175,11 @@ const s = StyleSheet.create({
   },
   pickerRowTitle: { fontSize: 16, fontWeight: '600', color: C.text },
   pickerRowTime: { fontSize: 13, color: C.textSec, marginTop: 2 },
-  // Event Card Styles
-  eventCard: {
+  // Event Card Styles - nested inside inputBox (see imagesContainerInBox), inset from the box
+  // edge instead of the screen's own outer margin.
+  eventCardInBox: {
     backgroundColor: C.surface, borderRadius: 12, padding: 16,
-    borderWidth: 2, borderColor: C.secondary, marginTop: 16,
+    borderWidth: 2, borderColor: C.secondary, marginTop: 12, marginHorizontal: 10, marginBottom: 4,
   },
   eventHeader: {
     flexDirection: 'row', alignItems: 'center', marginBottom: 12,
@@ -2367,6 +2384,13 @@ const s = StyleSheet.create({
   imagesContainer: {
     marginTop: 16,
     paddingHorizontal: 20,
+  },
+  // Same section, but nested inside inputBox (Attachments/Attached Images now render inline
+  // with the writing area) - inset from the box edge like cardInInput rather than the screen's
+  // own outer margin.
+  imagesContainerInBox: {
+    marginTop: 12,
+    marginHorizontal: 10,
   },
   imagesSectionTitle: {
     fontSize: 16, fontWeight: '600', color: C.text, marginBottom: 12,
