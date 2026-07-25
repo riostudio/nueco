@@ -221,7 +221,13 @@ class AuthApiService {
 
     const result = await response.json();
     if (!response.ok) {
-      throw new Error(result.detail || 'Change password failed');
+      // useChangePassword reads error.status to decide whether to show the dedicated "wrong
+      // password" message (ChangePasswordScreen checks result.code === 401) - a plain Error
+      // here left that branch permanently unreachable, always falling through to the generic
+      // error message even on a wrong-password 401.
+      const err: any = new Error(result.detail || 'Change password failed');
+      err.status = response.status;
+      throw err;
     }
     return result;
   }

@@ -204,7 +204,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      await pushBackPlaintextName(result.user);
+      // result.user was decrypted back at the top of login(), before bootstrapKeyOnLogin above
+      // had loaded a DEK - on a fresh device (empty SecureStore) that decrypt is a no-op, so
+      // result.user.name can still be ciphertext here even though pushBackPlaintextName's own
+      // guards all pass: they check that a DEK exists NOW, not that this specific object was
+      // actually decrypted with it. Pushing that stale object back would permanently bake the
+      // ciphertext in as the "plaintext" name. Re-fetch with the DEK now in place instead, and
+      // update the in-memory user too so the UI doesn't show ciphertext in the meantime.
+      let userForPushBack: User | null = result.user;
+      if (E2EE_KEYS_ENABLED && result.user?.enc_version) {
+        try {
+          const fresh = await authApi.getMe();
+          userForPushBack = fresh;
+          setUser(fresh);
+        } catch (e) {
+          console.warn('Post-bootstrap user refresh failed (name push-back skipped):', e);
+          userForPushBack = null; // don't risk pushing back a possibly-still-stale name
+        }
+      }
+      await pushBackPlaintextName(userForPushBack);
     })();
 
     return bootstrap;
