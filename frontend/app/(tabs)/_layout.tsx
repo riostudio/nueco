@@ -1,18 +1,27 @@
 import { Tabs, type Href } from 'expo-router';
 import { MaterialIcons } from '@expo/vector-icons';
-import { StyleSheet, View, Alert } from 'react-native';
+import { StyleSheet, View, Alert, Platform } from 'react-native';
 import React, { useEffect } from 'react';
 import { UserAvatar, useAuth } from '../../src/auth';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useRouter } from 'expo-router';
-import { WebView } from 'react-native-webview';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { hasAnalyticsDecision } from '../../src/analytics';
-import { registerForPushNotifications, unregisterPushNotifications } from '../../src/notifications';
+import { registerForPushNotifications, unregisterPushNotifications, refreshRecurringReminders } from '../../src/notifications';
 import { runCalendarSync } from '../../src/calendarSync';
 import { registerCalendarSyncTaskAsync } from '../../src/calendarSyncTask';
 import { refreshRecurringDeviceCalendarEntries } from '../../src/deviceCalendarSync';
+
+// The WebView pre-warm below is specifically an Android System WebView cold-start workaround -
+// iOS's WKWebView doesn't need it, and react-native-webview doesn't officially support web at
+// all, so importing/rendering it unconditionally risked breaking (or at best wastefully
+// rendering on) every other platform. Same require-gate pattern as expo-calendar/expo-location
+// elsewhere in this app.
+let WebView: typeof import('react-native-webview').WebView | null = null;
+if (Platform.OS === 'android') {
+  try { WebView = require('react-native-webview').WebView; } catch {}
+}
 
 const C = {
   primary: '#D84315',
@@ -77,6 +86,10 @@ export default function TabLayout() {
     // occurrence - the periodic-refresh half of the reliability-backup device calendar
     // write (event-editor.tsx's writeToDeviceCalendar handles the create/edit-time half).
     refreshRecurringDeviceCalendarEntries().catch(() => {});
+    // Same idea for local reminder notifications - a recurring event's reminder otherwise
+    // only ever fires for its very first occurrence (event-editor.tsx's scheduleReminder
+    // handles the create/edit-time half; expo-notifications' DATE trigger is one-shot).
+    refreshRecurringReminders().catch(() => {});
   }, []);
 
   const handleLogout = () => {
@@ -135,10 +148,12 @@ export default function TabLayout() {
       </Tabs>
       {/* Off-screen 1px WebView that pre-warms the Android System WebView engine while the user is in
           the tabs, so the first note editor (TenTap = a WebView) opens fast instead of paying the
-          engine cold-start on demand. */}
-      <View style={styles.prewarm} pointerEvents="none">
-        <WebView source={{ html: '<html></html>' }} style={{ flex: 1, opacity: 0 }} />
-      </View>
+          engine cold-start on demand. Android-only, see the WebView require-gate above. */}
+      {WebView && (
+        <View style={styles.prewarm} pointerEvents="none">
+          <WebView source={{ html: '<html></html>' }} style={{ flex: 1, opacity: 0 }} />
+        </View>
+      )}
     </GestureHandlerRootView>
   );
 }

@@ -95,6 +95,20 @@ function addOneHour(d: Date): Date {
   return result;
 }
 
+// Dual-writes the same way editor.tsx's persistLocal/unlink flow does (linked_event_ids
+// authoritative, the deprecated singular linked_event_id rides along) - a singular-only write
+// used to leave the plural stale, and editor.tsx prefers the plural whenever it has any entries,
+// so the just-linked event would vanish on the note's next reload and then be permanently
+// orphaned the moment that note autosaves (which dual-writes the plural back to its old value).
+async function linkEventToExistingNote(noteId: string, eventId: string): Promise<void> {
+  const note = await notesApi.get(noteId);
+  const existingIds: string[] = note.linked_event_ids?.length
+    ? note.linked_event_ids
+    : (note.linked_event_id ? [note.linked_event_id] : []);
+  const nextIds = Array.from(new Set([...existingIds, eventId]));
+  await notesApi.update(noteId, { linked_event_ids: nextIds, linked_event_id: nextIds[0] ?? null });
+}
+
 // ---- Web input components ----
 
 function NativeDateInput({ value, onChange, testID }: { value: Date; onChange: (d: Date) => void; testID: string }) {
@@ -523,13 +537,35 @@ export default function EventEditorScreen() {
   // locally scheduled notification on the device, which is fine for one event per note but
   // becomes a real cross-contamination bug once a note carries several independently-edited
   // reminders (editing one used to silently cancel the others too).
-  const scheduleReminder = async (eventTitle: string, eventStartTime: Date, minutesBefore: number): Promise<string | null> => {
+  const scheduleReminder = async (
+    eventTitle: string,
+    eventStartTime: Date,
+    minutesBefore: number,
+    recurrence: Recurrence | null = null,
+    recurrenceTimezone: string | null = null,
+  ): Promise<string | null> => {
     if (!Notifications || isWeb) return localNotificationIdRef.current;
     try {
       if (localNotificationIdRef.current) {
         try { await Notifications.cancelScheduledNotificationAsync(localNotificationIdRef.current); } catch {}
       }
-      const reminderTime = new Date(eventStartTime.getTime() - minutesBefore * 60 * 1000);
+      // Same advance-to-next-occurrence handling as writeToDeviceCalendar just above - without
+      // it, editing an existing recurring event recomputes the reminder from its original
+      // (possibly long-past) start_time, which the `reminderTime > new Date()` guard below then
+      // silently skips scheduling, cancelling the reminder with nothing to replace it. Ongoing
+      // occurrences beyond this one are kept fresh by refreshRecurringReminders (notifications.ts),
+      // which runs on every app foreground the same way refreshRecurringDeviceCalendarEntries does.
+      let effectiveStart = eventStartTime;
+      if (recurrence) {
+        const pseudoEvent = {
+          start_time: eventStartTime.toISOString(),
+          recurrence,
+          timezone: recurrenceTimezone,
+        } as unknown as CalendarEvent;
+        const next = nextOccurrenceOnOrAfter(pseudoEvent, new Date());
+        if (next) effectiveStart = next;
+      }
+      const reminderTime = new Date(effectiveStart.getTime() - minutesBefore * 60 * 1000);
       let newId: string | null = null;
       if (reminderTime > new Date()) {
         newId = await Notifications.scheduleNotificationAsync({
@@ -597,7 +633,7 @@ export default function EventEditorScreen() {
     lastSavedDataRef.current = computeDataHash(st, et);
   }, [loading]);
 
-  const buildEventData = (st: Date, et: Date, deviceCalId: string | null) => {
+  const buildEventData = (st: Date, et: Date, deviceCalId: string | null, isCreate: boolean) => {
     const recurrence = getRecurrenceValue();
     return {
       title: titleRef.current.trim(),
@@ -605,7 +641,13 @@ export default function EventEditorScreen() {
       location: locationRef.current.trim(),
       start_time: st.toISOString(),
       end_time: et.toISOString(),
-      linked_note_ids: params.noteId && params.noteId !== 'new' ? [params.noteId] : [],
+      // Only set on create, when the event is first being linked to the note it was opened
+      // from. Omitted (not sent as []) on update, so the backend's exclude_unset preserves
+      // whatever's already there - this field previously got resent unconditionally on every
+      // autosave/back-navigation, silently wiping links to any other notes (or every link, if
+      // the event was opened from the Events tab with no noteId at all). All link mutations
+      // after creation already flow through editor.tsx's linkExistingEvent/handleRemoveLinkedEvent.
+      ...(isCreate ? { linked_note_ids: params.noteId && params.noteId !== 'new' ? [params.noteId] : [] } : {}),
       reminder_minutes: reminderMinutesRef.current,
       device_calendar_event_id: deviceCalId,
       // `recurrence`/`timezone` are always sent explicitly (including `null` for "does not
@@ -660,7 +702,11 @@ export default function EventEditorScreen() {
         let newNotificationId = localNotificationIdRef.current;
         if (!isWeb) {
           if (reminderMinutesRef.current) {
-            newNotificationId = await scheduleReminder(titleRef.current.trim(), st, reminderMinutesRef.current);
+            const reminderRecurrence = getRecurrenceValue();
+            newNotificationId = await scheduleReminder(
+              titleRef.current.trim(), st, reminderMinutesRef.current,
+              reminderRecurrence, reminderRecurrence ? Intl.DateTimeFormat().resolvedOptions().timeZone : null,
+            );
           } else if (localNotificationIdRef.current) {
             newNotificationId = await cancelLocalNotification();
           }
@@ -668,17 +714,20 @@ export default function EventEditorScreen() {
 
         // Local-first + a durable retry queue (offlineSync.ts) instead of a direct API call -
         // encryption happens inside these, callers pass plaintext.
-        const eventData = buildEventData(st, et, newDeviceCalEventId);
+        const eventData = buildEventData(st, et, newDeviceCalEventId, !isCreatedRef.current);
 
         if (!isCreatedRef.current) {
-          const created = await createEventOffline(eventData, { push: true });
+          const created = await createEventOffline({ ...eventData, linked_note_ids: eventData.linked_note_ids ?? [] }, { push: true });
           eventIdRef.current = created.id;
           isCreatedRef.current = true;
           setEventExists(true);
 
           if (params.noteId && params.noteId !== 'new') {
-            try { await notesApi.update(params.noteId, { linked_event_id: created.id }); } catch {}
-          } else {
+            try { await linkEventToExistingNote(params.noteId, created.id); } catch {}
+          } else if (params.noteId === 'new') {
+            // Bare `else` here used to also catch the events-tab entry point (no noteId at
+            // all), writing a marker that the next unrelated note opened would silently pick
+            // up and self-link to. Only the "created inside a brand-new note" flow needs this.
             try {
               const AsyncStorage = require('@react-native-async-storage/async-storage').default;
               await AsyncStorage.setItem('pendingLinkedEventId', created.id);
@@ -731,11 +780,11 @@ export default function EventEditorScreen() {
             );
             if (written) { devId = written; deviceCalendarEventIdRef.current = written; }
           }
-          const eventData = buildEventData(st, et, devId);
+          const eventData = buildEventData(st, et, devId, !isCreatedRef.current);
           if (!isCreatedRef.current) {
-            const created = await createEventOffline(eventData, { push: true });
+            const created = await createEventOffline({ ...eventData, linked_note_ids: eventData.linked_note_ids ?? [] }, { push: true });
             if (params.noteId && params.noteId !== 'new') {
-              await notesApi.update(params.noteId, { linked_event_id: created.id });
+              try { await linkEventToExistingNote(params.noteId, created.id); } catch {}
             } else if (params.noteId === 'new') {
               const AsyncStorage = require('@react-native-async-storage/async-storage').default;
               await AsyncStorage.setItem('pendingLinkedEventId', created.id);
