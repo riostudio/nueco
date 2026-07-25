@@ -116,6 +116,8 @@ export async function clearLocalData(): Promise<void> {
     // ignore - nothing to clear or already gone
   }
   _dirReady = false;
+  _notesCache = null;
+  _eventsCache = null;
 }
 
 // Reads a JSON file, falling back to (and migrating from) a legacy AsyncStorage
@@ -164,19 +166,40 @@ function isNewer(incoming: string, existing: string): boolean {
 
 // ---- Local Storage ----
 
+// In-memory mirror of the on-disk notes/events files. A single focus-triggered sync (Notes or
+// Events tab) reads the full local collection 2-3x (once for the instant local-first render,
+// again inside fullSync's merge, again after fullSync to reflect the result) - each read is a
+// synchronous JSON.parse of the whole file, which was blocking the JS thread long enough to jank
+// tab switches and modal opens (see the crypto decrypt-loop yielding fix, which addressed a
+// smaller contributor to the same symptom but not this one). Cached reads return a shallow copy
+// (never the live array) so callers that mutate what they get back - several do, in place, before
+// saving - can't corrupt the cache or leak a mutation across concurrent callers. Invalidated by
+// every write, and by clearLocalData on account deletion so a stale cache can't leak a previous
+// account's notes.
+let _notesCache: LocalNote[] | null = null;
+let _eventsCache: LocalEvent[] | null = null;
+
 export async function getLocalNotes(): Promise<LocalNote[]> {
-  return readJsonFile<LocalNote[]>(FILES.NOTES, [], KEYS.NOTES);
+  if (_notesCache) return [..._notesCache];
+  const notes = await readJsonFile<LocalNote[]>(FILES.NOTES, [], KEYS.NOTES);
+  _notesCache = notes;
+  return [...notes];
 }
 
 export async function saveLocalNotes(notes: LocalNote[]): Promise<void> {
+  _notesCache = [...notes];
   await writeJsonFile(FILES.NOTES, notes);
 }
 
 export async function getLocalEvents(): Promise<LocalEvent[]> {
-  return readJsonFile<LocalEvent[]>(FILES.EVENTS, [], KEYS.EVENTS);
+  if (_eventsCache) return [..._eventsCache];
+  const events = await readJsonFile<LocalEvent[]>(FILES.EVENTS, [], KEYS.EVENTS);
+  _eventsCache = events;
+  return [...events];
 }
 
 export async function saveLocalEvents(events: LocalEvent[]): Promise<void> {
+  _eventsCache = [...events];
   await writeJsonFile(FILES.EVENTS, events);
 }
 

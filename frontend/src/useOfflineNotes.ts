@@ -7,8 +7,14 @@
  */
 import { authStorage } from './auth/storage/authStorage';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { AppState, AppStateStatus } from 'react-native';
+import { AppState, AppStateStatus, LayoutAnimation, Platform, UIManager } from 'react-native';
 import { useAuth } from './auth/context/AuthContext';
+
+// Old Android bridge needs this opt-in for LayoutAnimation; no-op on iOS/New Architecture.
+// Same pattern as DailyBrewCard.tsx's dismiss animation.
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 import uuid from 'react-native-uuid';
 import {
   getLocalNotes,
@@ -45,6 +51,10 @@ export function useOfflineNotes() {
   const loadNotes = useCallback(async () => {
     const local = await getLocalNotes();
     console.log('loadNotes - local count:', local.length);
+    // Animate the list reflow (card sliding in/out, siblings easing into the vacated/new space)
+    // instead of an abrupt snap whenever a note is created/deleted - a no-op if this particular
+    // update doesn't actually change the list.
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     // Filter out pending deletes for display
     setNotes(local.filter(n => !n._pendingDelete));
   }, []);
@@ -112,8 +122,14 @@ export function useOfflineNotes() {
   }, [loadNotes]);
 
   const updateNote = useCallback(async (id: string, data: Partial<LocalNote>): Promise<void> => {
-    await updateNoteOffline(id, data);
+    // Local-first, network push deferred: updateNoteOffline's default push:true awaited the
+    // network round-trip before returning, so loadNotes() (and the pin/edit becoming visible in
+    // the list) didn't run until that finished - a tap on Pin visibly did nothing for the whole
+    // round-trip, and a second tap inside that window read stale is_pinned state and could flap
+    // the toggle back. Same local-write-then-background-flush pattern as editor.tsx's handleBack.
+    await updateNoteOffline(id, data, { push: false });
     await loadNotes();
+    processSyncQueue().catch(() => {});
   }, [loadNotes]);
 
   const deleteNote = useCallback(async (id: string): Promise<void> => {
@@ -123,32 +139,37 @@ export function useOfflineNotes() {
     if (existing?._isLocal) {
       // Never synced - just remove locally and drop from queue
       await deleteLocalNote(id);
-    } else {
-      // Mark as pending delete locally
-      const updated = notes.map(n =>
-        n.id === id ? { ...n, _pendingDelete: true } : n
-      );
-      await saveLocalNotes(updated);
-
-      await enqueueOperation({
-        id,
-        entity: 'note',
-        operation: 'delete',
-        timestamp: new Date().toISOString(),
-      });
-
-      const online = await checkOnline();
-      if (online) {
-        try {
-          await processSyncQueue();
-        } catch (e) {
-          // Sync failed but delete is queued locally
-        }
-        await deleteLocalNote(id);
-      }
+      await loadNotes();
+      return;
     }
 
+    // Mark as pending delete locally and reflect that in the list right away - loadNotes()
+    // filters out _pendingDelete notes, so the card disappears immediately instead of waiting
+    // on the network push below (previously this ran last, so the note visibly lingered in My
+    // Notes for the entire round-trip after the user had already confirmed the delete).
+    const updated = notes.map(n =>
+      n.id === id ? { ...n, _pendingDelete: true } : n
+    );
+    await saveLocalNotes(updated);
     await loadNotes();
+
+    await enqueueOperation({
+      id,
+      entity: 'note',
+      operation: 'delete',
+      timestamp: new Date().toISOString(),
+    });
+
+    const online = await checkOnline();
+    if (online) {
+      try {
+        await processSyncQueue();
+      } catch (e) {
+        // Sync failed but delete is queued locally
+      }
+      await deleteLocalNote(id);
+      await loadNotes();
+    }
   }, [loadNotes]);
 
   return {
