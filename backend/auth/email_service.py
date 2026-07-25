@@ -1,11 +1,13 @@
 import os
 import logging
-import requests
+import httpx
 from dotenv import load_dotenv
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+_SEND_TIMEOUT_SECONDS = 10.0
 
 def get_resend_config():
     return {
@@ -19,29 +21,32 @@ def get_base_url():
         raise ValueError("APP_BASE_URL environment variable is required")
     return base_url
 
-def send_email(to_email: str, subject: str, html_content: str) -> bool:
-    """Send email via Resend API"""
+async def send_email(to_email: str, subject: str, html_content: str) -> bool:
+    """Send email via Resend API. Async + an explicit timeout (was sync requests.post with no
+    timeout, called from async auth flows - a hung Resend connection blocked this backend's
+    single uvicorn worker indefinitely, stalling every other request for as long as it hung)."""
     config = get_resend_config()
-    
+
     if not config["api_key"]:
         logger.warning(f"Resend not configured. Would send email to {to_email}: {subject}")
         return True  # Return true in dev mode
-    
+
     try:
-        response = requests.post(
-            "https://api.resend.com/emails",
-            headers={
-                "Authorization": f"Bearer {config['api_key']}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "from": f"MemoPad <{config['from_email']}>",
-                "to": [to_email],
-                "subject": subject,
-                "html": html_content
-            }
-        )
-        
+        async with httpx.AsyncClient(timeout=_SEND_TIMEOUT_SECONDS) as client:
+            response = await client.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {config['api_key']}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "from": f"MemoPad <{config['from_email']}>",
+                    "to": [to_email],
+                    "subject": subject,
+                    "html": html_content
+                }
+            )
+
         if response.status_code == 200:
             result = response.json()
             logger.info(f"Email sent to {to_email}: {subject} (id: {result.get('id', 'unknown')})")
@@ -53,7 +58,7 @@ def send_email(to_email: str, subject: str, html_content: str) -> bool:
         logger.error(f"Failed to send email to {to_email}: {e}")
         return False
 
-def send_verification_email(email: str, name: str, token: str) -> bool:
+async def send_verification_email(email: str, name: str, token: str) -> bool:
     """Send email verification link"""
     base_url = get_base_url()
     verify_url = f"{base_url}/api/auth/verify-email/{token}"
@@ -79,9 +84,9 @@ def send_verification_email(email: str, name: str, token: str) -> bool:
     </html>
     """
     
-    return send_email(email, "Verify your MemoPad account", html)
+    return await send_email(email, "Verify your MemoPad account", html)
 
-def send_password_reset_email(email: str, name: str, token: str) -> bool:
+async def send_password_reset_email(email: str, name: str, token: str) -> bool:
     """Send password reset link"""
     base_url = get_base_url()
     reset_url = f"https://web-production-a3258.up.railway.app/reset-password?token={token}"
@@ -107,10 +112,10 @@ def send_password_reset_email(email: str, name: str, token: str) -> bool:
     </html>
     """
     
-    return send_email(email, "Reset your MemoPad password", html)
+    return await send_email(email, "Reset your MemoPad password", html)
 
 
-def send_password_changed_email(email: str, name: str) -> bool:
+async def send_password_changed_email(email: str, name: str) -> bool:
     """Send confirmation email when password is changed"""
     html = f"""
     <!DOCTYPE html>
@@ -135,4 +140,4 @@ def send_password_changed_email(email: str, name: str) -> bool:
     </html>
     """
     
-    return send_email(email, "Your MemoPad password was changed", html)
+    return await send_email(email, "Your MemoPad password was changed", html)

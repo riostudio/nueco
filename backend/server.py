@@ -722,7 +722,11 @@ async def delete_account(body: DeleteAccountRequest, current_user: dict = Depend
         raise HTTPException(status_code=401, detail="Incorrect password")
 
     # Wipe object storage first (attachments), then every DB record tied to the user.
-    delete_user_attachments(user_id)
+    # to_thread: delete_user_attachments uses sync boto3 (paginated list+delete over the S3
+    # prefix) - called directly, it blocks the single uvicorn worker's event loop for the whole
+    # walk, stalling every other in-flight request for however long a user's attachment count
+    # takes to page through.
+    await asyncio.to_thread(delete_user_attachments, user_id)
     for coll in ("notes", "events", "push_tokens", "push_receipts", "feature_events", "devices", "sessions"):
         try:
             await db[coll].delete_many({"user_id": user_id})

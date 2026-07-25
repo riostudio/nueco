@@ -227,13 +227,6 @@ async def verify_email(token: str, db: AsyncIOMotorDatabase = Depends(get_db)):
     </html>
     """
 
-@router.post("/resend-verification", response_model=MessageResponse)
-async def resend_verification(request: ResendVerificationRequest, db: AsyncIOMotorDatabase = Depends(get_db)):
-    """Resend verification email"""
-    service = AuthService(db)
-    success, message = await service.resend_verification(request.email)
-    return MessageResponse(message=message, success=success)
-
 @router.post("/forgot-password", response_model=MessageResponse)
 async def forgot_password(request: ForgotPasswordRequest, req: Request, db: AsyncIOMotorDatabase = Depends(get_db)):
     """Request password reset"""

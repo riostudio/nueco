@@ -132,7 +132,7 @@ class AuthService:
         
         # Send verification email (may fail in dev due to domain restrictions)
         try:
-            send_verification_email(email, name, verification_token)
+            await send_verification_email(email, name, verification_token)
         except Exception as e:
             logger.warning(f"Could not send verification email to {email}: {e}")
         
@@ -182,7 +182,7 @@ class AuthService:
         
         # Send new verification email
         try:
-            send_verification_email(email, self._greeting_name(user), verification_token)
+            await send_verification_email(email, self._greeting_name(user), verification_token)
             logger.info(f"Resent verification email to: {email}")
         except Exception as e:
             logger.warning(f"Could not resend verification email to {email}: {e}")
@@ -283,31 +283,6 @@ class AuthService:
         logger.info(f"Email verified: {user['email']}")
         return True, "Email verified successfully", user["email"]
 
-    async def resend_verification(self, email: str) -> Tuple[bool, str]:
-        """Resend verification email"""
-        email = email.lower()
-        user = await self.users.find_one({"email": email})
-        
-        if not user:
-            return True, "If an account exists, a verification email has been sent"  # Don't reveal if email exists
-        
-        if user.get("email_verified"):
-            return False, "Email is already verified"
-
-        verification_token = secrets.token_urlsafe(32)
-        await self.users.update_one(
-            {"email": email},
-            {
-                "$set": {
-                    "verification_token": verification_token,
-                    "verification_token_expiry": datetime.utcnow() + timedelta(hours=24)
-                }
-            }
-        )
-        
-        send_verification_email(email, self._greeting_name(user), verification_token)
-        return True, "Verification email sent"
-
     async def forgot_password(self, email: str) -> Tuple[bool, str]:
         """Send password reset email"""
         email = email.lower()
@@ -328,7 +303,7 @@ class AuthService:
             }
         )
         
-        send_password_reset_email(email, self._greeting_name(user), reset_token)
+        await send_password_reset_email(email, self._greeting_name(user), reset_token)
         logger.info(f"Password reset requested: {email}")
         return True, "If an account exists, a password reset email has been sent"
 
@@ -376,7 +351,7 @@ class AuthService:
         
         # Send confirmation email
         try:
-            send_password_changed_email(user["email"], self._greeting_name(user))
+            await send_password_changed_email(user["email"], self._greeting_name(user))
         except Exception as e:
             logger.warning(f"Failed to send password change confirmation email: {e}")
         

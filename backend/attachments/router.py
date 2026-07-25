@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import APIRouter, Depends, Query
 
 from auth.router import get_current_user
@@ -15,16 +17,19 @@ def _user_id(current_user: dict) -> str:
 
 @router.post("/attachments/presign")
 async def presign_attachment(req: PresignRequest, current_user: dict = Depends(get_current_user)):
-    return service.presign_upload(_user_id(current_user), req.filename, req.mime_type, req.size)
+    # to_thread: service.* below call sync boto3, which would otherwise block the event loop -
+    # these are the hottest attachment routes (every upload/delete/open), so it matters in
+    # aggregate even where a single call is cheap.
+    return await asyncio.to_thread(service.presign_upload, _user_id(current_user), req.filename, req.mime_type, req.size)
 
 
 @router.delete("/attachments")
 async def delete_attachment(key: str = Query(...), current_user: dict = Depends(get_current_user)):
-    service.delete_attachment(_user_id(current_user), key)
+    await asyncio.to_thread(service.delete_attachment, _user_id(current_user), key)
     return {"message": "Attachment deleted"}
 
 
 @router.post("/attachments/download-url")
 async def attachment_download_url(req: DownloadUrlRequest, current_user: dict = Depends(get_current_user)):
-    url = service.presign_download(_user_id(current_user), req.key)
+    url = await asyncio.to_thread(service.presign_download, _user_id(current_user), req.key)
     return {"url": url}
