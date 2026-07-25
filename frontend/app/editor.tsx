@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react';
+import React, { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   ScrollView, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
-  Keyboard, Share, Modal, Image, useWindowDimensions, Animated, Easing,
+  Keyboard, Share, Modal, Image, Animated, Easing,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -78,14 +78,12 @@ type EditorUiState = {
 // `initialContent`. That's the reliable way to load existing content: `setContent` after mount
 // races the webview's readiness (it logs "Editor isn't ready yet" and drops the call, leaving the
 // body empty until tapped). Mounting this only once the content is known sidesteps the race.
-// Writing-area height bounds: TenTap's native auto-height is shimmed on Expo, so we grow the box
-// from the content instead (see bodyHeight). No max: the box is inside the screen's own ScrollView,
-// so a long paste/import should grow the box to fit and show from the top, not get clipped to a
-// fixed height with its own internal (and separately-scrolled) WebView scroll. BODY_SANITY_MAX is
-// only a backstop against a degenerate height estimate, not a real content limit - see bodyHeight
-// below. The min is computed from the window height (see minBodyHeight) so an empty/short note
-// fills the page instead of leaving a small box with dead space below it.
-const BODY_SANITY_MAX_HEIGHT = 20000;
+// Writing-area height: TenTap's own dynamicHeight (wired below) grows the WebView's own
+// containerStyle to fit its actual content, independent of RN flex layout entirely - a flex-based
+// height (100%/flex:1 of the surrounding chain) got squeezed by sibling sections lower on the
+// screen (attachments, linked events) competing for space, silently clipping pasted/typed text
+// behind the WebView's own internal scroll. dynamicHeight can't be squeezed that way since the
+// box's pixel height is reported by the webview's own content measurement, not RN's layout pass.
 
 function escapeHtml(t: string): string {
   return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -106,7 +104,7 @@ function animateSheet(backdrop: Animated.Value, translateY: Animated.Value, open
 // Same default extension set TenTap ships (bold/lists/links/etc.), with the placeholder text
 // configured - the default kit includes PlaceholderBridge already, just unconfigured (blank).
 const noteBridgeExtensions = TenTapStartKit.map((ext) =>
-  ext === PlaceholderBridge ? ext.configureExtension({ placeholder: 'What do you have in mind?' }) : ext
+  ext === PlaceholderBridge ? ext.configureExtension({ placeholder: 'What do you have in mind' }) : ext
 );
 
 const NoteBodyEditor = forwardRef<EditorApi, {
@@ -114,9 +112,10 @@ const NoteBodyEditor = forwardRef<EditorApi, {
   onChange: (html: string) => void;
   onStateChange: (s: EditorUiState) => void;
 }>(function NoteBodyEditor({ initialContent, onChange, onStateChange }, ref) {
-  // No dynamicHeight: it overshoots to a huge height then snaps down while the webview boots, which
-  // reads as a glitchy open. A fixed-height box (styles below) + internal scroll stays stable.
-  const editor = useEditorBridge({ autofocus: false, avoidIosKeyboard: true, initialContent, bridgeExtensions: noteBridgeExtensions });
+  const editor = useEditorBridge({
+    autofocus: false, avoidIosKeyboard: true, initialContent, bridgeExtensions: noteBridgeExtensions,
+    dynamicHeight: true,
+  });
   const state = useBridgeState(editor);
   const html = useEditorContent(editor, { type: 'html', debounceInterval: 400 });
 
@@ -135,18 +134,12 @@ const NoteBodyEditor = forwardRef<EditorApi, {
       if (type === 'editor-ready') setBridgeReady(true);
     } catch {}
   }, []);
-  // Proportional rather than a subtract-the-chrome pixel count, since the chrome above (title/tags)
-  // and below (Schedule/Link buttons, then the fixed format bar/actions/voice input) both vary by
-  // state. Capped well under 100% so Schedule/Link stay visible on load instead of requiring a
-  // scroll past the box to discover them.
-  const { height: windowHeight } = useWindowDimensions();
-  const minBodyHeight = Math.max(180, Math.round(windowHeight * 0.4));
-
-  // TenTap only resets the WebView's scroll position after boot when `dynamicHeight` is on (its own
-  // fix for https://github.com/10play/10tap-editor/issues/236 / 244). We don't use dynamicHeight (see
-  // note above), so without this the page can settle scrolled a few px past the top once fonts/layout
-  // finish reflowing after `initialContent` loads - clipping the first line of imported/shared text.
-  // Runs once, right as the freshly-mounted editor reports ready.
+  // dynamicHeight resets the WebView's scroll position after boot itself (its own fix for
+  // https://github.com/10play/10tap-editor/issues/236 / 244), but only once the resize message
+  // it's keyed off of has actually fired - belt-and-suspenders against the page settling scrolled
+  // a few px past the top once fonts/layout finish reflowing after `initialContent` loads, which
+  // would clip the first line of imported/shared text. Runs once, right as the freshly-mounted
+  // editor reports ready.
   useEffect(() => {
     if (!bridgeReady) return;
     const t = setTimeout(() => {
@@ -154,17 +147,6 @@ const NoteBodyEditor = forwardRef<EditorApi, {
     }, 100);
     return () => clearTimeout(t);
   }, [bridgeReady]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Estimate the writing-area height from the content so a long paste (e.g. text copied from a
-  // webpage) grows the box to show all of it, instead of being clipped to a fixed height.
-  const bodyHeight = useMemo(() => {
-    const h = html || initialContent || '';
-    const blocks = (h.match(/<\/(p|div|h[1-6]|li|blockquote)>|<br\s*\/?>/gi) || []).length;
-    const text = h.replace(/<[^>]+>/g, ' ').replace(/&[a-z#0-9]+;/gi, ' ');
-    const wrapped = Math.ceil((text.trim().length || 1) / 36); // ~36 chars/line at the editor width
-    const lines = Math.max(blocks + 1, wrapped);
-    return Math.min(BODY_SANITY_MAX_HEIGHT, Math.max(minBodyHeight, lines * 26 + 28));
-  }, [html, initialContent, minBodyHeight]);
 
   useImperativeHandle(ref, () => ({
     getHTML: () => editor.getHTML(),
@@ -193,7 +175,7 @@ const NoteBodyEditor = forwardRef<EditorApi, {
     <View style={s.richTextWrap}>
       <RichText
         editor={editor}
-        style={[s.richText, { height: bodyHeight }]}
+        style={s.richText}
         scrollEnabled
         onMessage={handleWebviewMessage}
         exclusivelyUseCustomOnMessage={false}
@@ -256,6 +238,7 @@ export default function EditorScreen() {
   // editor has focus" as "keyboard is up but neither of those does" - together they're the only
   // three focusable fields on this screen.
   const [plainInputFocused, setPlainInputFocused] = useState(false);
+  const titleInputRef = useRef<TextInput>(null);
   // Rich-text editor (TenTap). Content is the note body HTML; `contentRef` holds the latest for
   // saving. The editor lives in <NoteBodyEditor>, mounted with the loaded content as initialContent
   // (below). We drive it imperatively via editorApiRef and mirror its UI state for the toolbar.
@@ -1363,6 +1346,15 @@ export default function EditorScreen() {
     router.back();
   };
 
+  // New note: cursor lands in the Title field right away, so typing can start immediately without
+  // an extra tap. Delayed slightly to clear the screen's push-in transition - focusing before it
+  // settles gets silently dropped on Android.
+  useEffect(() => {
+    if (!isNew) return;
+    const t = setTimeout(() => titleInputRef.current?.focus(), 300);
+    return () => clearTimeout(t);
+  }, [isNew]);
+
   // No full-screen loader: render the editor chrome immediately. The body seeds instantly from the
   // local copy (local-first in loadNote) and metadata fills in as it resolves - so the screen opens
   // at once instead of blocking on a spinner until the network load finishes.
@@ -1409,30 +1401,19 @@ export default function EditorScreen() {
         ) : null}
 
         <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent} keyboardShouldPersistTaps="handled">
-          {/* Title + Add Tag trigger, side by side */}
-          <View style={s.titleRow}>
-            <TextInput
-              testID="note-title-input"
-              style={[s.titleInput, s.titleInputFlex]}
-              placeholder="Note title..."
-              placeholderTextColor={C.borderSub}
-              value={title}
-              onChangeText={handleTitleChange}
-              onFocus={() => setPlainInputFocused(true)}
-              onBlur={() => setPlainInputFocused(false)}
-              returnKeyType="next"
-            />
-            {tags.length < 3 && (
-              <TouchableOpacity
-                testID="add-tag-btn"
-                style={s.addTagBtn}
-                onPress={() => setShowTagPicker(!showTagPicker)}
-              >
-                <MaterialIcons name="sell" size={18} color={C.text} />
-                <Text style={s.addTagText}>Add Tag</Text>
-              </TouchableOpacity>
-            )}
-          </View>
+          {/* Title */}
+          <TextInput
+            ref={titleInputRef}
+            testID="note-title-input"
+            style={s.titleInput}
+            placeholder="Note title..."
+            placeholderTextColor={C.borderSub}
+            value={title}
+            onChangeText={handleTitleChange}
+            onFocus={() => setPlainInputFocused(true)}
+            onBlur={() => setPlainInputFocused(false)}
+            returnKeyType="next"
+          />
 
           {/* Tag chips + picker */}
           {(tags.length > 0 || showTagPicker) && (
@@ -1455,6 +1436,16 @@ export default function EditorScreen() {
 
               {showTagPicker && (
                 <View style={s.tagPicker}>
+                  <View style={s.tagPickerHeader}>
+                    <Text style={s.tagPickerTitle}>Add Tag</Text>
+                    <TouchableOpacity
+                      testID="close-tag-picker-btn"
+                      onPress={() => setShowTagPicker(false)}
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    >
+                      <MaterialIcons name="close" size={22} color={C.textSec} />
+                    </TouchableOpacity>
+                  </View>
                   <TextInput
                     testID="tag-name-input"
                     style={s.tagInput}
@@ -1510,22 +1501,6 @@ export default function EditorScreen() {
               ) : (
                 <View style={s.richTextWrap}><View style={{ height: 180 }} /></View>
               )}
-              {/* Attach-file footer - a WebView can't be overlaid, so the paperclip sits below it */}
-              <View style={s.editorFooter}>
-                <TouchableOpacity
-                  testID="attach-file-btn"
-                  style={s.attachInline}
-                  onPress={pickAttachment}
-                  disabled={isUploadingAttachment}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                >
-                  {isUploadingAttachment ? (
-                    <ActivityIndicator size="small" color={C.secondary} />
-                  ) : (
-                    <MaterialIcons name="attach-file" size={22} color={C.secondary} />
-                  )}
-                </TouchableOpacity>
-              </View>
             </View>
           </View>
 
@@ -1664,37 +1639,6 @@ export default function EditorScreen() {
             </TouchableOpacity>
           ))}
 
-          {/* Schedule/Link row - always visible now (was hidden once one event was linked), so
-              adding more reminders to the same note is always available. */}
-          <View style={s.calBtnRow}>
-            <Button
-              testID="schedule-event-btn"
-              variant="box"
-              layout="row"
-              icon="calendar-today"
-              label={linkedEvents.length > 0 ? 'Add Reminder' : 'Schedule'}
-              onPress={() =>
-                router.push({
-                  pathname: '/event-editor',
-                  params: {
-                    noteId: noteIdRef.current || 'new',
-                    noteTitle: title,
-                  },
-                })
-              }
-              style={s.calBtnBox}
-            />
-            <Button
-              testID="link-event-btn"
-              variant="box"
-              layout="row"
-              icon="link"
-              label="Link an event"
-              onPress={openEventPicker}
-              style={s.calBtnBox}
-            />
-          </View>
-
           <View style={{ height: 120 }} />
         </ScrollView>
 
@@ -1750,50 +1694,68 @@ export default function EditorScreen() {
             </View>
           )}
           
-          {/* Action Buttons - Pin, Add Image, Share, Delete - shows when keyboard is hidden */}
+          {/* Icon action row - Attachment, Add Tag, Schedule, Link Event, Pin, Image, Share, Delete
+              (once saved). Icon-only, spread across the full row width; still horizontally
+              scrollable so all of them stay reachable if they don't all fit on a narrow screen.
+              Shows when keyboard is hidden - the format toolbar above takes over while typing. */}
           {!isKeyboardVisible && (
-            <View style={s.actionBar}>
-              <Button
-                testID="pin-btn"
-                variant="box"
-                layout="stack"
-                icon="push-pin"
-                label={isPinned ? 'Pinned' : 'Pin'}
-                active={isPinned}
-                onPress={togglePin}
-                style={s.actionBoxBtn}
-              />
-              <Button
-                testID="add-image-btn"
-                variant="box"
-                layout="stack"
-                icon="add-photo-alternate"
-                label="Image"
-                onPress={() => setShowImagePicker(true)}
-                style={s.actionBoxBtn}
-              />
-              <Button
-                testID="share-btn"
-                variant="box"
-                layout="stack"
-                icon="share"
-                label="Share"
-                onPress={handleShare}
-                style={s.actionBoxBtn}
-              />
-              {noteExists && (
-                <Button
-                  testID="delete-note-btn"
-                  variant="box"
-                  layout="stack"
-                  tone="danger"
-                  icon="delete"
-                  label="Delete"
-                  onPress={handleDelete}
-                  style={s.actionBoxBtn}
-                />
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={s.iconActionBar}
+              contentContainerStyle={s.iconActionBarContent}
+            >
+              <TouchableOpacity
+                testID="attach-file-btn"
+                style={s.iconActionBtn}
+                onPress={pickAttachment}
+                disabled={isUploadingAttachment}
+              >
+                {isUploadingAttachment ? (
+                  <ActivityIndicator size="small" color={C.secondary} />
+                ) : (
+                  <MaterialIcons name="attach-file" size={24} color={C.text} />
+                )}
+              </TouchableOpacity>
+              {tags.length < 3 && (
+                <TouchableOpacity testID="add-tag-btn" style={s.iconActionBtn} onPress={() => setShowTagPicker(!showTagPicker)}>
+                  <MaterialIcons name="sell" size={24} color={C.text} />
+                </TouchableOpacity>
               )}
-            </View>
+              <TouchableOpacity
+                testID="schedule-event-btn"
+                style={s.iconActionBtn}
+                onPress={() =>
+                  router.push({
+                    pathname: '/event-editor',
+                    params: { noteId: noteIdRef.current || 'new', noteTitle: title },
+                  })
+                }
+              >
+                <MaterialIcons name="calendar-today" size={24} color={C.text} />
+              </TouchableOpacity>
+              <TouchableOpacity testID="link-event-btn" style={s.iconActionBtn} onPress={openEventPicker}>
+                <MaterialIcons name="link" size={24} color={C.text} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="pin-btn"
+                style={s.iconActionBtn}
+                onPress={togglePin}
+              >
+                <MaterialIcons name="push-pin" size={24} color={isPinned ? C.primary : C.text} />
+              </TouchableOpacity>
+              <TouchableOpacity testID="add-image-btn" style={s.iconActionBtn} onPress={() => setShowImagePicker(true)}>
+                <MaterialIcons name="add-photo-alternate" size={24} color={C.text} />
+              </TouchableOpacity>
+              <TouchableOpacity testID="share-btn" style={s.iconActionBtn} onPress={handleShare}>
+                <MaterialIcons name="share" size={24} color={C.text} />
+              </TouchableOpacity>
+              {noteExists && (
+                <TouchableOpacity testID="delete-note-btn" style={s.iconActionBtn} onPress={handleDelete}>
+                  <MaterialIcons name="delete" size={24} color={C.error} />
+                </TouchableOpacity>
+              )}
+            </ScrollView>
           )}
 
           {/* Voice Input - hide when keyboard is visible */}
@@ -2032,7 +1994,7 @@ const s = StyleSheet.create({
   headerTitle: { fontSize: 20, fontWeight: '700', color: C.text },
   headerBtn: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8, height: 48 },
   headerBtnLabel: { fontSize: 18, fontWeight: '600', color: C.text, marginLeft: 4 },
-  headerRight: { flexDirection: 'row', gap: 4 },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   statusBar: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     paddingVertical: 4, backgroundColor: C.surface,
@@ -2040,12 +2002,10 @@ const s = StyleSheet.create({
   statusText: { fontSize: 14, marginLeft: 4 },
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 24, paddingTop: 16 },
-  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   titleInput: {
     fontSize: 26, fontWeight: '500', color: C.text,
-    paddingBottom: 12, marginBottom: 16,
+    paddingBottom: 4, marginBottom: 8,
   },
-  titleInputFlex: { flex: 1, marginBottom: 0 },
   tagsSection: { marginTop: 12, marginBottom: 16 },
   tagsRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center' },
   tagChip: {
@@ -2054,16 +2014,13 @@ const s = StyleSheet.create({
     borderWidth: 1.5, marginRight: 8, marginBottom: 8,
   },
   tagChipText: { fontSize: 16, fontWeight: '600', marginRight: 4 },
-  addTagBtn: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 14, paddingVertical: 8,
-    borderRadius: radius.pill, borderWidth: 1.5, borderColor: C.border,
-    marginBottom: 8,
-  },
-  addTagText: { fontSize: 16, fontWeight: '600', color: C.text, marginLeft: 4 },
   tagPicker: {
     backgroundColor: C.surface, marginTop: 8,
   },
+  tagPickerHeader: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8,
+  },
+  tagPickerTitle: { fontSize: 16, fontWeight: '700', color: C.text },
   tagInput: {
     height: 48,
     paddingHorizontal: 12, fontSize: 18, color: C.text, marginBottom: 12,
@@ -2073,51 +2030,35 @@ const s = StyleSheet.create({
   colorDotSel: { borderWidth: 3, borderColor: C.text },
   confirmTagBtn: { height: 48 },
   contentContainer: {
-    flex: 1,
     marginBottom: 16,
   },
-  // The bordered box that visually contains both the shared-post card and the writing area.
+  // Visually contains both the shared-post card and the writing area. No white card background -
+  // matches the page so the writing area reads as one continuous surface, not a boxed input.
   inputBox: {
-    backgroundColor: C.surface,
+    backgroundColor: C.bg,
     borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: C.border,
     paddingBottom: 4,
   },
-  // The shared-post card nested inside the input box: inset from the border, small gap before text.
+  // The shared-post card nested inside the input box: small gap before text.
   cardInInput: {
     marginHorizontal: 10,
     marginTop: 10,
     marginBottom: 2,
   },
-  // Insets the editor from the box border so the text has breathing room on all sides.
+  // No horizontal padding - the writing area's text starts flush with the box edge, at the same
+  // x-position as the Title input above (both rely on scrollContent's outer paddingHorizontal).
   richTextWrap: {
-    paddingHorizontal: 14,
-    paddingTop: 8,
+    paddingTop: 4,
     paddingBottom: 4,
   },
-  // TenTap rich editor (WebView). FIXED height (not dynamicHeight) so the box is the same size from
-  // the first frame - no resize glitch while the webview boots. Long notes scroll internally.
-  // Opaque (surface-colored, matching the inputBox) - a transparent Android WebView stops repainting
-  // after a parent re-render/blur (e.g. autosave), blanking the text until a tap forces a redraw.
+  // TenTap rich editor (WebView). dynamicHeight (wired in NoteBodyEditor) grows the box to fit its
+  // actual content - no fixed/flex height here, so nothing ever gets clipped regardless of what
+  // else (attachments, linked events) is on the screen. Matches the page background (not white)
+  // so it reads as one continuous surface, but still opaque - a transparent Android WebView stops
+  // repainting after a parent re-render/blur (e.g. autosave), blanking the text until a tap forces
+  // a redraw.
   richText: {
-    height: 180,
-    backgroundColor: C.surface,
-  },
-  // Footer row inside the input box holding the attach-file button (below the WebView editor).
-  editorFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingBottom: 8,
-    paddingTop: 2,
-  },
-  attachInline: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
+    minHeight: 0,
     backgroundColor: C.bg,
   },
   attachBtn: {
@@ -2201,8 +2142,6 @@ const s = StyleSheet.create({
     fontSize: 18,
     lineHeight: 28,
   },
-  calBtnRow: { flexDirection: 'row', gap: 10, marginTop: 16 },
-  calBtnBox: { flex: 1 },
   // Event picker modal
   pickerOverlay: { flex: 1, justifyContent: 'flex-end' },
   pickerSheet: {
@@ -2278,16 +2217,28 @@ const s = StyleSheet.create({
     paddingHorizontal: 24, paddingVertical: 12,
     backgroundColor: C.bg,
   },
-  actionBar: {
-    flexDirection: 'row',
-    gap: 10,
-    paddingVertical: 12,
-    paddingHorizontal: 12,
+  // Icon-only action row (Attachment/Add Tag/Schedule/Link/Pin/Image/Share/Delete). The ScrollView
+  // itself spans the full row width (default stretch); contentContainerStyle's flexGrow makes its
+  // content match that same full width and spread the icons across it (space-between) whenever
+  // they all fit, while still scrolling normally if they ever don't.
+  iconActionBar: {
     backgroundColor: C.bg,
     borderBottomWidth: 1,
     borderBottomColor: C.borderSub + '40',
   },
-  actionBoxBtn: { flex: 1 },
+  iconActionBarContent: {
+    flexGrow: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 8,
+  },
+  // 48x48 tap target (finger-friendly minimum) around a 24x24 icon.
+  iconActionBtn: {
+    width: 48,
+    height: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   transcribing: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     height: 56,
