@@ -1425,6 +1425,7 @@ export default function EditorScreen() {
             onFocus={() => setPlainInputFocused(true)}
             onBlur={() => setPlainInputFocused(false)}
             returnKeyType="next"
+            multiline
           />
 
           {/* Tag chips + picker */}
@@ -2019,7 +2020,7 @@ const s = StyleSheet.create({
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 24, paddingTop: 16 },
   titleInput: {
-    fontSize: 26, fontWeight: '500', color: C.text,
+    fontSize: 26, fontWeight: '700', color: C.text,
     paddingBottom: 4, marginBottom: 8,
   },
   tagsSection: { marginTop: 12, marginBottom: 16 },

@@ -29,7 +29,7 @@ const C = {
   surface: '#FFFFFF',
   text: '#121212',
   textSec: '#37474F',
-  border: '#CBC4BB',
+  border: '#E0E0E0',
   borderSub: '#78909C',
   error: '#C62828',
   success: '#2E7D32',

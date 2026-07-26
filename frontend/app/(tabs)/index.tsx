@@ -634,7 +634,7 @@ const s = StyleSheet.create({
     justifyContent: 'center', alignItems: 'center',
     backgroundColor: C.bg,
   },
-  cardTitle: { fontSize: 18, fontWeight: '600', color: C.text, flex: 1, marginRight: 8 },
+  cardTitle: { fontSize: 18, fontWeight: '700', color: C.text, flex: 1, marginRight: 8 },
   cardPreview: { fontSize: 15, color: C.textSec, lineHeight: 20, marginBottom: 8 },
   // Event info in card
   eventInfo: {
