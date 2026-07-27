@@ -1,10 +1,13 @@
+"""Business logic for S3-backed attachment storage: presigned-URL validation/issuance and
+GDPR bulk deletion. Framework-agnostic: raises plain exceptions rather than
+fastapi.HTTPException. backend/attachments/router.py translates them to HTTP status codes.
+"""
 import logging
 import os
 import uuid
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
-from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +42,26 @@ ALLOWED_ATTACHMENT_EXT = {
 }
 
 
+class AttachmentStorageUnavailableError(Exception):
+    pass
+
+
+class AttachmentTooLargeError(Exception):
+    pass
+
+
+class UnsupportedAttachmentTypeError(Exception):
+    pass
+
+
+class AttachmentAccessDeniedError(Exception):
+    pass
+
+
+class AttachmentStorageError(Exception):
+    pass
+
+
 def get_s3_client():
     """Return a boto3 S3 client, or None if attachment storage isn't configured.
     Credentials come from the standard AWS env vars / IAM role."""
@@ -53,17 +76,14 @@ def presign_upload(user_id: str, filename: str, mime_type: str, size: int) -> di
     namespace."""
     s3 = get_s3_client()
     if s3 is None:
-        raise HTTPException(status_code=503, detail="File attachments are not enabled on this server")
+        raise AttachmentStorageUnavailableError()
 
     if size <= 0 or size > MAX_ATTACHMENT_BYTES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"File too large (max {MAX_ATTACHMENT_BYTES // (1024 * 1024)}MB)",
-        )
+        raise AttachmentTooLargeError(f"File too large (max {MAX_ATTACHMENT_BYTES // (1024 * 1024)}MB)")
 
     ext = (filename.rsplit(".", 1)[-1] if "." in filename else "").lower()
     if ext not in ALLOWED_ATTACHMENT_EXT or mime_type not in ALLOWED_ATTACHMENT_MIME:
-        raise HTTPException(status_code=400, detail="File type not allowed")
+        raise UnsupportedAttachmentTypeError()
 
     attachment_id = str(uuid.uuid4())
     key = f"{ATTACHMENT_PREFIX}/{user_id}/{attachment_id}.{ext}"
@@ -81,7 +101,7 @@ def presign_upload(user_id: str, filename: str, mime_type: str, size: int) -> di
         )
     except (ClientError, BotoCoreError) as e:
         logger.error(f"Failed to presign attachment: {e}")
-        raise HTTPException(status_code=502, detail="Could not prepare upload")
+        raise AttachmentStorageError("Could not prepare upload")
 
     file_url = f"https://{S3_BUCKET}.s3.{AWS_REGION}.amazonaws.com/{key}"
     return {
@@ -97,16 +117,16 @@ def delete_attachment(user_id: str, key: str) -> None:
     """Delete a stored attachment. Scoped to the caller's own prefix."""
     s3 = get_s3_client()
     if s3 is None:
-        raise HTTPException(status_code=503, detail="File attachments are not enabled on this server")
+        raise AttachmentStorageUnavailableError()
 
     if not key.startswith(f"{ATTACHMENT_PREFIX}/{user_id}/"):
-        raise HTTPException(status_code=403, detail="Not allowed to delete this file")
+        raise AttachmentAccessDeniedError("Not allowed to delete this file")
 
     try:
         s3.delete_object(Bucket=S3_BUCKET, Key=key)
     except (ClientError, BotoCoreError) as e:
         logger.error(f"Failed to delete attachment {key}: {e}")
-        raise HTTPException(status_code=502, detail="Could not delete file")
+        raise AttachmentStorageError("Could not delete file")
 
 
 def presign_download(user_id: str, key: str) -> str:
@@ -114,10 +134,10 @@ def presign_download(user_id: str, key: str) -> str:
     own prefix. Used for tap-to-open and shareable links."""
     s3 = get_s3_client()
     if s3 is None:
-        raise HTTPException(status_code=503, detail="File attachments are not enabled on this server")
+        raise AttachmentStorageUnavailableError()
 
     if not key.startswith(f"{ATTACHMENT_PREFIX}/{user_id}/"):
-        raise HTTPException(status_code=403, detail="Not allowed to access this file")
+        raise AttachmentAccessDeniedError("Not allowed to access this file")
 
     try:
         return s3.generate_presigned_url(
@@ -127,7 +147,7 @@ def presign_download(user_id: str, key: str) -> str:
         )
     except (ClientError, BotoCoreError) as e:
         logger.error(f"Failed to presign download for {key}: {e}")
-        raise HTTPException(status_code=502, detail="Could not prepare download")
+        raise AttachmentStorageError("Could not prepare download")
 
 
 def delete_user_attachments(user_id: str) -> None:

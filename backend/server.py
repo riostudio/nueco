@@ -7,14 +7,8 @@ import os
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field
-from typing import Optional
 import uuid
-from datetime import datetime, timezone, timedelta
-import bcrypt
-import httpx
-from pymongo import ReturnDocument
-from collections import defaultdict
-import time
+from datetime import datetime, timezone
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -32,26 +26,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ---- Rate Limiting ----
-class RateLimiter:
-    def __init__(self):
-        self.requests = defaultdict(list)
-    
-    def is_allowed(self, key: str, max_requests: int, window_seconds: int) -> bool:
-        now = time.time()
-        # Clean old requests
-        self.requests[key] = [t for t in self.requests[key] if now - t < window_seconds]
-        
-        if len(self.requests[key]) >= max_requests:
-            return False
-        
-        self.requests[key].append(now)
-        return True
-
-rate_limiter = RateLimiter()
-
-
-from openai_client import get_openai_client
 
 def get_client_ip(request: Request) -> str:
     """Get client IP from request, handling proxies"""
@@ -61,18 +35,11 @@ def get_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 # Import get_current_user for authentication
-from auth.router import get_current_user
+from core.deps import get_current_user
 
-# S3-backed attachment storage lives in attachments/ - only the account-deletion
-# cleanup hook is needed here (the embedded-in-a-note Attachment shape moved with
-# NoteCreate/NoteUpdate/NoteResponse into notes/schemas.py).
-from attachments.service import delete_user_attachments
-
-# Notes and events (the core domain) live in their own modules - see backend/notes/
-# and backend/events/ for schemas, validation, and persistence. Only the Recurrence
-# schema and a few reminder-scheduling functions are still needed here, for push_tick.
-from events.schemas import Recurrence
-from events.service import compute_reminder_fields, next_occurrence_on_or_after, reminder_label
+# Notes, events, reminders, accounts, and feedback (the core domain + its heavier workflows)
+# live in their own modules - see backend/notes/, backend/events/, backend/reminders/,
+# backend/accounts/, backend/feedback/ for schemas, validation, and persistence.
 
 
 # ---- E2EE key escrow + first-party feature telemetry ----
@@ -155,60 +122,8 @@ async def record_feature_event(body: FeatureEvent, current_user: dict = Depends(
     return {"ok": True}
 
 
-# ---- Account deletion (GDPR right to erasure) ----
-
-class DeleteAccountRequest(BaseModel):
-    password: str
-
-
-@api_router.post("/account/delete")
-async def delete_account(body: DeleteAccountRequest, current_user: dict = Depends(get_current_user)):
-    """Permanently erase the authenticated user and ALL their data (GDPR Art. 17). Requires the
-    account password as a confirmation. Irreversible."""
-    user_id = current_user.get("id") or str(current_user.get("_id", ""))
-    # Re-verify the password (fetch fresh so we always have the hash).
-    user = await db.users.find_one({"id": user_id})
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    if not body.password or not bcrypt.checkpw(body.password.encode(), user.get("password", "").encode()):
-        raise HTTPException(status_code=401, detail="Incorrect password")
-
-    # Wipe object storage first (attachments), then every DB record tied to the user.
-    # to_thread: delete_user_attachments uses sync boto3 (paginated list+delete over the S3
-    # prefix) - called directly, it blocks the single uvicorn worker's event loop for the whole
-    # walk, stalling every other in-flight request for however long a user's attachment count
-    # takes to page through.
-    await asyncio.to_thread(delete_user_attachments, user_id)
-    for coll in ("notes", "events", "push_tokens", "push_receipts", "feature_events", "devices", "sessions"):
-        try:
-            await db[coll].delete_many({"user_id": user_id})
-        except Exception as e:
-            logger.error(f"Account delete: failed clearing {coll} for {user_id}: {e}")
-    await db.users.delete_one({"id": user_id})
-    logger.info(f"Account deleted (GDPR erasure): user {user_id}")
-    return {"ok": True}
-
-
-# ---- Push notifications (event reminders) ----
-
-EXPO_PUSH_SEND_URL = "https://exp.host/--/api/v2/push/send"
-EXPO_PUSH_RECEIPTS_URL = "https://exp.host/--/api/v2/push/getReceipts"
-
-
-def _expo_headers() -> dict:
-    headers = {"Content-Type": "application/json", "Accept": "application/json"}
-    token = os.environ.get("EXPO_ACCESS_TOKEN")  # optional but recommended for send security
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    return headers
-
-
-def _require_tick_secret(request: Request):
-    """Cron/internal endpoints are gated by a shared secret, not user auth."""
-    secret = os.environ.get("PUSH_TICK_SECRET")
-    if not secret or request.headers.get("X-Tick-Secret") != secret:
-        raise HTTPException(status_code=403, detail="Forbidden")
-
+# ---- Push notifications (device token registration; delivery pipeline lives in
+# backend/reminders/, account erasure lives in backend/accounts/) ----
 
 class PushTokenBody(BaseModel):
     token: str
@@ -246,258 +161,7 @@ async def unregister_push_token(body: PushTokenBody, current_user: dict = Depend
     return {"ok": True}
 
 
-@api_router.post("/internal/push/tick")
-async def push_tick(request: Request):
-    """Cron-driven (once/minute). Claims due reminders atomically, sends them via Expo in batches,
-    handles per-item results, and records tickets for later receipt resolution. Recurring events
-    (see `recurrence`/`timezone`) are additionally rolled forward to their next occurrence at the
-    end - see step 5 below for why that step is restricted to this tick's own claimed batch."""
-    _require_tick_secret(request)
-    now = datetime.now(timezone.utc)
-    now_iso = now.isoformat()
-
-    # 1) Recover stuck claims - a prior tick crashed between claim and send. Return them to 'pending'.
-    stuck_before = (now - timedelta(minutes=5)).isoformat()
-    await db.events.update_many(
-        {"reminder_status": "claimed", "reminder_claimed_at": {"$lt": stuck_before}},
-        {"$set": {"reminder_status": "pending", "reminder_claimed_at": None}},
-    )
-
-    # 2) Atomically claim due, pending reminders (this is what stops overlapping ticks double-sending).
-    claimed = []
-    while len(claimed) < 500:
-        ev = await db.events.find_one_and_update(
-            {"reminder_minutes": {"$ne": None},
-             "reminder_status": "pending",
-             "reminder_fire_at": {"$lte": now_iso}},
-            {"$set": {"reminder_status": "claimed", "reminder_claimed_at": now_iso}},
-            return_document=ReturnDocument.AFTER,
-        )
-        if not ev:
-            break
-        claimed.append(ev)
-
-    if not claimed:
-        return {"claimed": 0, "sent": 0}
-
-    # 3) Build one Expo message per (event, active token). No tokens -> the reminder is done.
-    messages = []  # list of (event_id, token, message_dict)
-    for ev in claimed:
-        tokens = await db.push_tokens.find({"user_id": ev["user_id"], "active": True}).to_list(20)
-        if not tokens:
-            await db.events.update_one({"id": ev["id"]}, {"$set": {"reminder_status": "sent"}})
-            continue
-        # E2EE (Stage 5): an encrypted title is ciphertext to the server, so a reminder
-        # push falls back to a generic title rather than showing garbled text. This is
-        # a documented non-goal, not a bug - see docs/E2EE-DESIGN.md.
-        push_title = 'Event Reminder' if ev.get('enc_version') else (ev.get('title') or 'Event Reminder')
-        for t in tokens:
-            messages.append((ev["id"], t["token"], {
-                "to": t["token"],
-                "title": f"⏰ {push_title}",
-                "body": f"Starts in {reminder_label(ev.get('reminder_minutes'))}",
-                "data": {"eventId": ev["id"], "kind": "event-reminder"},
-                "sound": "default",
-                "channelId": "event-reminders",
-            }))
-
-    # 4) Batch-send (<=100/call). Expo returns one result PER ITEM - walk them individually.
-    processed_event_ids = set()  # events whose batch got any response -> move to 'sent'
-    receipts = []
-    async with httpx.AsyncClient(timeout=30) as http:
-        for i in range(0, len(messages), 100):
-            batch = messages[i:i + 100]
-            try:
-                resp = await http.post(EXPO_PUSH_SEND_URL, headers=_expo_headers(),
-                                       json=[m for (_e, _t, m) in batch])
-                results = resp.json().get("data", [])
-            except Exception as e:
-                # Whole call failed (rate limit / 5xx) - leave events 'claimed'; recovery retries.
-                logger.error(f"Expo push send failed (batch left claimed): {e}")
-                continue
-            for (eid, token, _msg), result in zip(batch, results):
-                processed_event_ids.add(eid)
-                if result.get("status") == "ok" and result.get("id"):
-                    receipts.append({"ticket_id": result["id"], "event_id": eid, "token": token,
-                                     "created_at": now_iso, "checked": False})
-                else:
-                    err = (result.get("details") or {}).get("error")
-                    if err == "DeviceNotRegistered":
-                        await db.push_tokens.update_one({"token": token}, {"$set": {"active": False}})
-                    logger.warning(f"Expo push item error: {result}")
-
-    if processed_event_ids:
-        await db.events.update_many({"id": {"$in": list(processed_event_ids)}},
-                                    {"$set": {"reminder_status": "sent"}})
-
-    # 5) Advance recurring reminders to their next occurrence.
-    #
-    # Operates ONLY on `claimed` - the exact in-memory list of event documents this
-    # tick invocation atomically owned via the find_one_and_update loop in step 2
-    # above. Deliberately NOT a fresh DB query (e.g. `find({"reminder_status": "sent"})`)
-    # to find "the recurring ones to advance": every event in `claimed` is already
-    # 'sent' by this point (either directly, in the no-active-tokens branch in step 3,
-    # or via the bulk update just above), so re-querying by status would let a second,
-    # overlapping tick match those same just-marked-sent events and race to advance
-    # them too - a possible double-advance (skipping an occurrence) or write race.
-    # The atomic claim in step 2 guarantees no two tick invocations ever claim the
-    # same event id, so restricting this step to `claimed` makes that race
-    # structurally impossible rather than merely unlikely. Each event is wrapped in
-    # its own try/except so one bad/corrupt recurrence rule can only strand that one
-    # event on terminal 'sent' (the same failure mode a non-recurring event already
-    # has today) instead of aborting the rest of the batch.
-    for ev in claimed:
-        if not ev.get("recurrence"):
-            continue  # non-recurring: already 'sent' above, byte-identical to pre-recurrence behavior
-        try:
-            recurrence = Recurrence(**ev["recurrence"])
-            # +1s so we don't re-match the instant that just fired.
-            next_dt = next_occurrence_on_or_after(
-                ev.get("start_time"), recurrence, ev.get("timezone"), now + timedelta(seconds=1),
-            )
-            if next_dt is None:
-                continue  # series ended (`until` passed, inclusive) - stays terminal 'sent'
-            new_fire_at = next_dt - timedelta(minutes=ev["reminder_minutes"])
-            await db.events.update_one(
-                {"id": ev["id"]},
-                {"$set": {
-                    "reminder_status": "pending",
-                    "reminder_fire_at": new_fire_at.isoformat(),
-                    "reminder_claimed_at": None,
-                }},
-            )
-        except Exception as e:
-            logger.error(f"push_tick: failed to advance recurring event {ev.get('id')}: {e}")
-
-    if receipts:
-        await db.push_receipts.insert_many(receipts)
-    return {"claimed": len(claimed), "sent": len(processed_event_ids), "tickets": len(receipts)}
-
-
-@api_router.post("/internal/push/receipts")
-async def push_receipts_tick(request: Request):
-    """Cron-driven (~every 15-20 min). Resolves Expo delivery receipts; prunes tokens Expo reports
-    as DeviceNotRegistered - the main way stale tokens (uninstall/reinstall) get cleaned up."""
-    _require_tick_secret(request)
-    now = datetime.now(timezone.utc)
-    ready_before = (now - timedelta(minutes=15)).isoformat()   # receipts are ready ~15 min after send
-    give_up_before = (now - timedelta(hours=24)).isoformat()   # stop chasing a receipt after 24h
-    pending = await db.push_receipts.find(
-        {"checked": False, "created_at": {"$lte": ready_before}}
-    ).to_list(1000)
-    if not pending:
-        return {"checked": 0}
-
-    checked = 0
-    async with httpx.AsyncClient(timeout=30) as http:
-        for i in range(0, len(pending), 300):
-            batch = pending[i:i + 300]
-            try:
-                resp = await http.post(EXPO_PUSH_RECEIPTS_URL, headers=_expo_headers(),
-                                       json={"ids": [r["ticket_id"] for r in batch]})
-                data = resp.json().get("data", {})
-            except Exception as e:
-                logger.error(f"Expo getReceipts failed: {e}")
-                continue
-            for r in batch:
-                rec = data.get(r["ticket_id"])
-                if rec is None:
-                    if r["created_at"] <= give_up_before:  # never resolved - stop chasing it
-                        await db.push_receipts.update_one({"_id": r["_id"]}, {"$set": {"checked": True}})
-                    continue
-                if rec.get("status") == "error":
-                    err = (rec.get("details") or {}).get("error")
-                    if err == "DeviceNotRegistered":
-                        await db.push_tokens.update_one({"token": r["token"]}, {"$set": {"active": False}})
-                    else:
-                        logger.warning(f"Push receipt error ({r['ticket_id']}): {rec}")
-                await db.push_receipts.update_one({"_id": r["_id"]}, {"$set": {"checked": True}})
-                checked += 1
-    return {"checked": checked}
-
-
 # ---- Transcription + AI text processing moved to textai/ (router registered below) ----
-
-
-# ---- Feedback Endpoint (5th-note feedback toast) ----
-
-MAX_FEEDBACK_TEXT_CHARS = 2000
-
-class FeedbackCreate(BaseModel):
-    sentiment: str  # "positive" | "negative"
-    tag: Optional[str] = None
-    text: str = ""
-    note_count_at_submission: int = 0
-    app_version: str = ""
-    platform: str = ""
-
-
-def _parse_ai_triage(raw: str) -> dict:
-    """Best-effort parse of the triage model's JSON reply, tolerating a markdown code fence."""
-    cleaned = raw.strip()
-    if cleaned.startswith("```"):
-        cleaned = cleaned.strip("`")
-        if cleaned.lower().startswith("json"):
-            cleaned = cleaned[4:]
-    return _json.loads(cleaned)
-
-
-@api_router.post("/feedback")
-async def submit_feedback(body: FeedbackCreate, current_user: dict = Depends(get_current_user)):
-    """Store a feedback-toast response, AI-triaging any free-text comment (never blocks the
-    submission if triage fails -- the record is saved either way)."""
-    user_id = current_user.get("id") or str(current_user.get("_id", ""))
-    if body.sentiment not in ("positive", "negative"):
-        raise HTTPException(status_code=400, detail="Invalid sentiment")
-    if len(body.text) > MAX_FEEDBACK_TEXT_CHARS:
-        raise HTTPException(status_code=400, detail="Feedback text too long")
-    if not rate_limiter.is_allowed(f"feedback:{user_id}", max_requests=5, window_seconds=86400):
-        raise HTTPException(status_code=429, detail="Too many feedback submissions, please try again later")
-
-    doc = {
-        "id": str(uuid.uuid4()),
-        "user_id": user_id,
-        "sentiment": body.sentiment,
-        "tag": body.tag,
-        "text": body.text,
-        "aiCategory": None,
-        "aiPriority": None,
-        "aiSummary": None,
-        "appVersion": body.app_version,
-        "platform": body.platform,
-        "noteCountAtSubmission": body.note_count_at_submission,
-        "createdAt": datetime.now(timezone.utc).isoformat(),
-        "status": "new",
-    }
-
-    if body.text.strip():
-        try:
-            client = get_openai_client()
-            response = await client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You triage user feedback for a note-taking app. Respond with ONLY "
-                            'compact JSON: {"category": one of bug|feature_request|ux_friction|'
-                            'praise|unclear, "priority": one of low|medium|high|urgent (urgent = '
-                            'crash, data loss, or billing issue), "summary": a single short sentence}.'
-                        ),
-                    },
-                    {"role": "user", "content": body.text},
-                ],
-                temperature=0.2,
-            )
-            parsed = _parse_ai_triage(response.choices[0].message.content or "")
-            doc["aiCategory"] = parsed.get("category")
-            doc["aiPriority"] = parsed.get("priority")
-            doc["aiSummary"] = parsed.get("summary")
-        except Exception as e:
-            logger.error(f"Feedback AI triage failed: {e}")
-
-    await db.feedback.insert_one(doc)
-    return {"id": doc["id"], "status": "received"}
 
 
 # ---- Health Check ----
@@ -518,6 +182,15 @@ from notes.router import router as notes_router
 from events.router import router as events_router
 api_router.include_router(notes_router)
 api_router.include_router(events_router)
+
+# Include reminders/accounts/feedback routers (extracted out of server.py - see
+# backend/reminders/, backend/accounts/, backend/feedback/)
+from reminders.router import router as reminders_router
+from accounts.router import router as accounts_router
+from feedback.router import router as feedback_router
+api_router.include_router(reminders_router)
+api_router.include_router(accounts_router)
+api_router.include_router(feedback_router)
 
 # Include Canva integration router (design import - see backend/canva/)
 from canva.router import router as canva_router

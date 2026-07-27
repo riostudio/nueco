@@ -1,10 +1,12 @@
+"""Business logic for voice transcription and AI text processing. Framework-agnostic: raises
+plain exceptions rather than fastapi.HTTPException, and never types a parameter as UploadFile -
+callers (backend/textai/router.py) unwrap the framework upload type into bytes/filename first.
+"""
 import json
 import logging
 import os
 import tempfile
 from typing import Optional
-
-from fastapi import HTTPException, UploadFile
 
 from openai_client import get_openai_client
 
@@ -39,6 +41,18 @@ Here's the text:
 Respond with ONLY a JSON object of the shape {{"note_type": "recipe|checklist|meeting_notes|general", "html": "<the restructured HTML>"}}. No other text, no markdown code fence."""
 
 
+class AIEmptyResponseError(Exception):
+    pass
+
+
+class AIResponseParseError(Exception):
+    pass
+
+
+class InvalidTextActionError(Exception):
+    pass
+
+
 def _normalize_extension(extension: str) -> str:
     extension = extension.lower()
     if not extension.startswith("."):
@@ -70,14 +84,6 @@ async def transcribe_bytes(audio_bytes: bytes, file_extension: str, language: Op
         os.unlink(tmp_path)
 
 
-async def transcribe_upload(file: UploadFile, language: Optional[str] = None) -> str:
-    original_filename = file.filename or "recording.m4a"
-    suffix = os.path.splitext(original_filename)[1] or ".m4a"
-    content = await file.read()
-    logger.info(f"Read {len(content)} bytes from uploaded file")
-    return await transcribe_bytes(content, suffix, language)
-
-
 async def process_text(text: str, action: str) -> dict:
     client = get_openai_client()
 
@@ -107,7 +113,7 @@ Return only the organized text, no explanations."""
         )
         processed_text = (response.choices[0].message.content or "").strip()
         if not processed_text:
-            raise HTTPException(status_code=500, detail="AI service returned an empty response")
+            raise AIEmptyResponseError("AI service returned an empty response")
         logger.info(f"Text processing successful, result length: {len(processed_text)}")
         return {"text": processed_text}
 
@@ -133,7 +139,7 @@ Return only the summary, no explanations."""
         )
         processed_text = (response.choices[0].message.content or "").strip()
         if not processed_text:
-            raise HTTPException(status_code=500, detail="AI service returned an empty response")
+            raise AIEmptyResponseError("AI service returned an empty response")
         logger.info(f"Text processing successful, result length: {len(processed_text)}")
         return {"text": processed_text}
 
@@ -158,15 +164,15 @@ Return only the summary, no explanations."""
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError:
-            raise HTTPException(status_code=500, detail="AI service returned an unexpected response")
+            raise AIResponseParseError("AI service returned an unexpected response")
         note_type = parsed.get("note_type") if isinstance(parsed, dict) else None
         html = (parsed.get("html") or "").strip() if isinstance(parsed, dict) else ""
         if note_type not in NOTE_TYPES:
             note_type = "general"
         if not html:
-            raise HTTPException(status_code=500, detail="AI service returned an empty response")
+            raise AIEmptyResponseError("AI service returned an empty response")
         logger.info(f"Smart format successful, detected type: {note_type}, result length: {len(html)}")
         return {"text": html, "note_type": note_type}
 
     else:
-        raise HTTPException(status_code=400, detail="Invalid action. Use 'organize', 'summarize', or 'smart_format'")
+        raise InvalidTextActionError("Invalid action. Use 'organize', 'summarize', or 'smart_format'")

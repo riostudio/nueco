@@ -1,11 +1,13 @@
 import base64
 import logging
+import os
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
-from auth.router import get_current_user
+from core.deps import get_current_user
 from . import service
+from .service import AIEmptyResponseError, AIResponseParseError, InvalidTextActionError
 from .schemas import TextProcessRequest, TranscribeBase64Request
 
 logger = logging.getLogger(__name__)
@@ -49,7 +51,13 @@ async def transcribe_audio(
     """Transcribe uploaded audio file (requires authentication)"""
     try:
         logger.info(f"Received transcription request. Filename: {file.filename}, Content-Type: {file.content_type}")
-        text = await service.transcribe_upload(file, language)
+        # Unwrap the framework upload type here - service.transcribe_bytes takes plain
+        # bytes/filename so it stays framework-agnostic (see textai/service.py's module doc).
+        original_filename = file.filename or "recording.m4a"
+        suffix = os.path.splitext(original_filename)[1] or ".m4a"
+        content = await file.read()
+        logger.info(f"Read {len(content)} bytes from uploaded file")
+        text = await service.transcribe_bytes(content, suffix, language)
         logger.info(f"Transcription successful: {text[:100]}...")
         return {"text": text}
     except HTTPException:
@@ -64,8 +72,10 @@ async def process_text_route(request: TextProcessRequest, current_user: dict = D
     """Process text using AI - organize, summarize, or detect-and-restructure by note type (requires authentication)"""
     try:
         return await service.process_text(request.text, request.action)
-    except HTTPException:
-        raise
+    except InvalidTextActionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except (AIEmptyResponseError, AIResponseParseError) as e:
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         logger.error(f"Text processing error: {e}")
         raise HTTPException(status_code=500, detail=f"Text processing failed: {str(e)}")

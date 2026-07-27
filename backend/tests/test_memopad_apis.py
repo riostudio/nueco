@@ -34,6 +34,14 @@ if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
 import harness  # noqa: E402
 
+# Recurrence/next_occurrence_on_or_after live in events/ (not re-exported from server.py -
+# server.py no longer imports them now that the reminder-tick pipeline moved to
+# backend/reminders/service.py). Imported directly here as ground-truth helpers for
+# constructing fixtures/expected values; the actual routes under test are still exercised
+# over HTTP via api_client, not by calling these directly.
+from events.schemas import Recurrence  # noqa: E402
+from events.service import next_occurrence_on_or_after  # noqa: E402
+
 PASSWORD = "TestPass0rd!"
 
 
@@ -42,7 +50,7 @@ async def api_client():
     """Fresh isolated DB + a freshly signed-up, verified, logged-in user per test.
 
     Each test gets a distinct X-Forwarded-For so the per-IP signup rate limiter
-    (backend/server.py's RateLimiter) doesn't trip across the whole test run.
+    (backend/auth/router.py's AuthRateLimiter) doesn't trip across the whole test run.
     """
     await harness.reset_db()
     n = uuid.uuid4().int
@@ -475,11 +483,11 @@ class TestNextOccurrenceOnOrAfter:
         """dtstart is a Tuesday; rule is Mon/Wed/Fri. The first occurrence must land
         on a listed day (not Tuesday) and preserve the original 09:00 time-of-day."""
         server = server_module
-        recurrence = server.Recurrence(freq="weekly", byweekday=[1, 3, 5], until=None)  # Mon, Wed, Fri
+        recurrence = Recurrence(freq="weekly", byweekday=[1, 3, 5], until=None)  # Mon, Wed, Fri
         start_time_iso = "2024-01-02T09:00:00Z"  # Tuesday
         after = datetime(2024, 1, 2, 9, 0, 0, tzinfo=timezone.utc)
 
-        result = server.next_occurrence_on_or_after(start_time_iso, recurrence, "UTC", after)
+        result = next_occurrence_on_or_after(start_time_iso, recurrence, "UTC", after)
 
         assert result is not None
         assert result.weekday() in (0, 2, 4)  # Python Mon=0..Sun=6: Mon/Wed/Fri
@@ -488,18 +496,18 @@ class TestNextOccurrenceOnOrAfter:
 
     def test_until_boundary_is_inclusive_both_sides(self, server_module):
         server = server_module
-        recurrence = server.Recurrence(freq="daily", byweekday=None, until="2024-01-05")
+        recurrence = Recurrence(freq="daily", byweekday=None, until="2024-01-05")
         start_time_iso = "2024-01-01T09:00:00Z"
 
         # Exactly on `until` date -> still returned (inclusive)
-        on_boundary = server.next_occurrence_on_or_after(
+        on_boundary = next_occurrence_on_or_after(
             start_time_iso, recurrence, "UTC", datetime(2024, 1, 5, 9, 0, 0, tzinfo=timezone.utc)
         )
         assert on_boundary is not None
         assert on_boundary.date().isoformat() == "2024-01-05"
 
         # The day after `until` -> nothing left
-        past_boundary = server.next_occurrence_on_or_after(
+        past_boundary = next_occurrence_on_or_after(
             start_time_iso, recurrence, "UTC", datetime(2024, 1, 6, 9, 0, 0, tzinfo=timezone.utc)
         )
         assert past_boundary is None
@@ -509,15 +517,15 @@ class TestNextOccurrenceOnOrAfter:
         local reminder must keep firing at 9am local (UTC instant shifts by 1 hour),
         not silently drift to 8am/10am local."""
         server = server_module
-        recurrence = server.Recurrence(freq="daily", byweekday=None, until=None)
+        recurrence = Recurrence(freq="daily", byweekday=None, until=None)
         start_time_iso = "2025-03-07T14:00:00Z"  # 2025-03-07 09:00 EST (UTC-5)
         tz = ZoneInfo("America/New_York")
 
-        before = server.next_occurrence_on_or_after(
+        before = next_occurrence_on_or_after(
             start_time_iso, recurrence, "America/New_York",
             datetime(2025, 3, 8, 9, 0, 0, tzinfo=timezone.utc),  # any time on/before the 8th
         )
-        after = server.next_occurrence_on_or_after(
+        after = next_occurrence_on_or_after(
             start_time_iso, recurrence, "America/New_York",
             datetime(2025, 3, 10, 0, 0, 0, tzinfo=timezone.utc),  # forces the 3/10 occurrence
         )
@@ -533,8 +541,8 @@ class TestNextOccurrenceOnOrAfter:
 
     def test_falls_back_to_utc_when_timezone_missing(self, server_module):
         server = server_module
-        recurrence = server.Recurrence(freq="daily", byweekday=None, until=None)
-        result = server.next_occurrence_on_or_after(
+        recurrence = Recurrence(freq="daily", byweekday=None, until=None)
+        result = next_occurrence_on_or_after(
             "2026-01-01T09:00:00Z", recurrence, None,
             datetime(2026, 1, 1, 9, 0, 0, tzinfo=timezone.utc),
         )
@@ -543,8 +551,8 @@ class TestNextOccurrenceOnOrAfter:
 
     def test_falls_back_to_utc_when_timezone_invalid(self, server_module):
         server = server_module
-        recurrence = server.Recurrence(freq="daily", byweekday=None, until=None)
-        result = server.next_occurrence_on_or_after(
+        recurrence = Recurrence(freq="daily", byweekday=None, until=None)
+        result = next_occurrence_on_or_after(
             "2026-01-01T09:00:00Z", recurrence, "Not/AZone",
             datetime(2026, 1, 1, 9, 0, 0, tzinfo=timezone.utc),
         )
@@ -553,8 +561,8 @@ class TestNextOccurrenceOnOrAfter:
 
     def test_unknown_freq_returns_none(self, server_module):
         server = server_module
-        recurrence = server.Recurrence(freq="monthly", byweekday=None, until=None)
-        result = server.next_occurrence_on_or_after(
+        recurrence = Recurrence(freq="monthly", byweekday=None, until=None)
+        result = next_occurrence_on_or_after(
             "2026-01-01T09:00:00Z", recurrence, "UTC",
             datetime(2026, 1, 1, 9, 0, 0, tzinfo=timezone.utc),
         )
@@ -747,12 +755,12 @@ class TestPushTickRecurrenceAdvance:
         # distinguishable from timing noise.
         start_time = now - timedelta(hours=36)
         original_fire_at = (start_time - timedelta(minutes=5)).isoformat()
-        recurrence = server.Recurrence(freq="daily", byweekday=None, until=None)
+        recurrence = Recurrence(freq="daily", byweekday=None, until=None)
         # Ground truth for "one correct advance", computed via the same helper and
         # (approximately) the same after_dt the tick job itself will use - this
         # test is checking that the tick job claims/advances *exactly once*, not
         # re-deriving next_occurrence_on_or_after's own correctness (covered above).
-        expected_next = server.next_occurrence_on_or_after(
+        expected_next = next_occurrence_on_or_after(
             start_time.isoformat(), recurrence, "UTC", now + timedelta(seconds=1),
         )
         assert expected_next is not None

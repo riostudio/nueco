@@ -1,8 +1,7 @@
 import os
-from fastapi import APIRouter, Depends, HTTPException, Header, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from typing import Optional
 from dotenv import load_dotenv
 from collections import defaultdict
 import time
@@ -14,6 +13,7 @@ from .schemas import (
     DeleteUnverifiedRequest, UpdateNameRequest, UpdateNewsPreferencesRequest,
     AuthResponse, MessageResponse, UserResponse, SyncStatusResponse
 )
+from core.deps import get_current_user, get_db
 
 load_dotenv()
 
@@ -89,29 +89,6 @@ def get_client_ip(request: Request) -> str:
     if forwarded:
         return forwarded.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
-
-# Dependency to get database
-async def get_db():
-    from server import db
-    return db
-
-async def get_current_user(authorization: Optional[str] = Header(None), db: AsyncIOMotorDatabase = Depends(get_db)):
-    """Get current user from access token"""
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    
-    token = authorization.split(" ")[1]
-    service = AuthService(db)
-    user_id = await service.verify_access_token(token)
-    
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-    
-    user = await service.get_user_by_id(user_id)
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-    
-    return user
 
 @router.post("/signup", response_model=MessageResponse)
 async def signup(request: SignUpRequest, req: Request, db: AsyncIOMotorDatabase = Depends(get_db)):

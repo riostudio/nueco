@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from auth.router import get_current_user, get_db
+from core.deps import get_current_user, get_db
 from .service import CanvaService
 from .schemas import (
     CanvaConnectResponse, CanvaStatusResponse, CanvaDesignsResponse,

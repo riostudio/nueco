@@ -1,8 +1,6 @@
 import asyncio
-import ipaddress
 import logging
 import re
-import socket
 import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -15,6 +13,7 @@ import httpx
 from . import catalog
 from .catalog import Outlet
 from .schemas import NewsItem
+from security import ssrf_guard
 
 logger = logging.getLogger(__name__)
 
@@ -132,29 +131,6 @@ def _feed_title(xml_text: str) -> Optional[str]:
     return None
 
 
-_MAX_CUSTOM_FEED_REDIRECTS = 5
-
-
-async def _reject_private_host(hostname: str) -> None:
-    """Resolves the hostname and raises unless every resolved address is an ordinary public IP.
-    A hostname-string blocklist alone (the previous approach) misses 172.16.0.0/12, most of
-    127.0.0.0/8, IPv6 private/link-local/mapped ranges, and - the sharpest gap - DNS rebinding,
-    since an attacker-controlled domain can simply resolve to whatever private IP they want.
-    Uses the event loop's own resolver (not the blocking stdlib socket call directly) to match
-    this module's async-everywhere convention."""
-    try:
-        loop = asyncio.get_running_loop()
-        infos = await loop.getaddrinfo(hostname, None)
-    except socket.gaierror:
-        raise ValueError("That URL isn't reachable")
-    if not infos:
-        raise ValueError("That URL isn't reachable")
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
-            raise ValueError("That URL isn't reachable")
-
-
 async def fetch_custom_feed_name(feed_url: str) -> tuple[str, str]:
     """Validates a user-submitted feed URL with a live fetch and returns (name, resolved_url) -
     the channel/feed's own <title>, and the final URL after following any redirects (so the
@@ -162,44 +138,24 @@ async def fetch_custom_feed_name(feed_url: str) -> tuple[str, str]:
     curated catalog's pre-resolved URLs, still works on subsequent fetches). Raises ValueError
     with a user-facing message on any failure - bad scheme, unreachable, not parseable RSS/Atom.
 
-    Redirects are followed manually (httpx's follow_redirects=True was the SSRF hole here) so
-    every hop - not just the first URL - gets the same public-IP check before being connected to;
-    otherwise a public initial URL could 302 straight to an internal target with no recheck."""
-    url = feed_url
-    async with httpx.AsyncClient(follow_redirects=False) as client:
-        for _ in range(_MAX_CUSTOM_FEED_REDIRECTS + 1):
-            parsed = urlparse(url)
-            if parsed.scheme not in ("http", "https"):
-                raise ValueError("Feed URL must start with http:// or https://")
-            if not parsed.hostname:
-                raise ValueError("That URL isn't reachable")
-            await _reject_private_host(parsed.hostname)
+    The actual SSRF-safe fetch (manual redirect-following with a public-IP check on every hop)
+    lives in security/ssrf_guard.py, generalized out of this module - see that module's doc
+    comment for why a plain hostname blocklist isn't enough."""
+    try:
+        resp = await ssrf_guard.safe_get(
+            feed_url, headers={"User-Agent": _FETCH_USER_AGENT}, timeout=_FETCH_TIMEOUT_SECONDS,
+        )
+    except ssrf_guard.InvalidSchemeError:
+        raise ValueError("Feed URL must start with http:// or https://")
+    except ssrf_guard.UnreachableHostError:
+        raise ValueError("That URL isn't reachable")
+    except ssrf_guard.FetchFailedError:
+        raise ValueError("Could not reach that URL")
 
-            try:
-                resp = await client.get(
-                    url, headers={"User-Agent": _FETCH_USER_AGENT}, timeout=_FETCH_TIMEOUT_SECONDS,
-                )
-            except Exception:
-                raise ValueError("Could not reach that URL")
-
-            if resp.is_redirect:
-                location = resp.headers.get("location")
-                if not location:
-                    raise ValueError("Could not reach that URL")
-                url = str(httpx.URL(url).join(location))
-                continue
-
-            try:
-                resp.raise_for_status()
-            except Exception:
-                raise ValueError("Could not reach that URL")
-
-            title = _feed_title(resp.text)
-            if not title:
-                raise ValueError("That doesn't look like an RSS or Atom feed")
-            return title.strip(), str(resp.url)
-
-    raise ValueError("Could not reach that URL")
+    title = _feed_title(resp.text)
+    if not title:
+        raise ValueError("That doesn't look like an RSS or Atom feed")
+    return title.strip(), str(resp.url)
 
 
 def _logo_url_for(outlet: Outlet) -> str:

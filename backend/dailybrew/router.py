@@ -3,7 +3,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from auth.router import get_current_user, get_db
+from core.deps import get_current_user, get_db
 from . import service
 from .schemas import (
     AddCustomFeedRequest, NewsHeadlinesResponse, NewsSourceResponse, OutletInfo, SearchFeedsResponse,

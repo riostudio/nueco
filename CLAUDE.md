@@ -4,9 +4,12 @@ React Native app (Expo SDK 55, expo-router) + FastAPI backend (Railway) + MongoD
 
 - Frontend lives under `frontend/`, NOT the repo root.
 - Backend lives under `backend/`, organized as one directory per feature
-  (`auth/`, `attachments/`, `canva/`, `dailybrew/`, `textai/`), each with
-  `router.py` (HTTP), `service.py` (business logic), `schemas.py` (data
-  contracts).
+  (`auth/`, `attachments/`, `canva/`, `dailybrew/`, `textai/`, `notes/`,
+  `events/`, `reminders/`, `accounts/`, `feedback/`), each with `router.py`
+  (HTTP), `service.py` (business logic), `schemas.py` (data contracts, where
+  the module has request/response bodies of its own). `backend/core/deps.py`
+  holds the `get_current_user`/`get_db` FastAPI dependencies shared by every
+  feature module's `router.py` — import from there, not from `auth.router`.
 
 ## Clean Architecture rules
 
@@ -63,16 +66,9 @@ reach back into them.
 
 ## Known debt (fix opportunistically, don't let it spread)
 
-- `backend/attachments/service.py`, `backend/textai/service.py` import
-  `fastapi.HTTPException`/`UploadFile` directly — needs a translation layer
-  in the router instead.
 - `backend/auth/service.py`, `backend/canva/service.py` import
   `AsyncIOMotorDatabase` directly — acceptable short-term, but don't add more
   direct driver usage in new services without discussing a repository seam.
-- `attachments/router.py`, `canva/router.py`, `dailybrew/router.py`,
-  `textai/router.py`, `notes/router.py`, `events/router.py` import
-  `get_current_user`/`get_db` from `auth.router` instead of a shared
-  dependency module.
 
-Do not use these as precedent for new code — they are the exceptions being
-tracked down, not the pattern to copy.
+Do not use this as precedent for new code — it's the exception being tracked
+down, not the pattern to copy.
