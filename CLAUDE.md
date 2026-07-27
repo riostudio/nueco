@@ -70,10 +70,9 @@ reach back into them.
   `AsyncIOMotorDatabase` directly — acceptable short-term, but don't add more
   direct driver usage in new services without discussing a repository seam.
 - `attachments/router.py`, `canva/router.py`, `dailybrew/router.py`,
-  `textai/router.py` import `get_current_user`/`get_db` from `auth.router`
-  instead of a shared dependency module.
-- `frontend/src/recurrence.ts` imports `DAY_NAMES`/`MONTH_NAMES` from the UI
-  `theme.ts`.
+  `textai/router.py`, `notes/router.py`, `events/router.py` import
+  `get_current_user`/`get_db` from `auth.router` instead of a shared
+  dependency module.
 
 Do not use these as precedent for new code — they are the exceptions being
 tracked down, not the pattern to copy.
