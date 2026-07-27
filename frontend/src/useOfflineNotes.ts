@@ -15,20 +15,18 @@ import { useAuth } from './auth/context/AuthContext';
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
-import uuid from 'react-native-uuid';
 import {
   getLocalNotes,
   saveLocalNotes,
   getLocalEvents,
-  saveLocalEvents,
-  upsertLocalNote,
-  upsertLocalEvent,
   deleteLocalNote,
-  deleteLocalEvent,
   enqueueOperation,
   processSyncQueue,
   createNoteOffline,
   updateNoteOffline,
+  createEventOffline,
+  updateEventOffline,
+  deleteEventOffline,
   fullSync,
   startBackgroundSync,
   stopBackgroundSync,
@@ -215,99 +213,25 @@ export function useOfflineEvents() {
     syncAndReload();
   }, [syncAndReload]);
 
+  // Local-first create/update/delete (temp-id assignment, sync-queue enqueue, immediate push
+  // when online) is offlineSync.ts's job - createEventOffline/updateEventOffline/
+  // deleteEventOffline, the same functions events.tsx and event-editor.tsx call directly. This
+  // hook used to reimplement that logic inline, which had already drifted from the canonical
+  // version (missing createEventOffline's synchronous-server-id special case that
+  // event-editor.tsx relies on to link a new note to a newly-created event in one action).
   const createEvent = useCallback(async (data: Omit<LocalEvent, 'id' | 'created_at' | '_isLocal'>): Promise<LocalEvent> => {
-    const now = new Date().toISOString();
-    const tempId = `local_${uuid.v4()}`;
-    const event: LocalEvent = {
-      ...data,
-      id: tempId,
-      created_at: now,
-      _isLocal: true,
-    };
-
-    // Always save locally first
-    await upsertLocalEvent(event);
+    const event = await createEventOffline(data);
     await loadEvents();
-
-    await enqueueOperation({
-      id: tempId,
-      entity: 'event',
-      operation: 'create',
-      payload: data,
-      timestamp: now,
-    });
-
-    const online = await checkOnline();
-    if (online) {
-      try {
-        await processSyncQueue();
-      } catch (e) {
-        // Sync failed but event is already saved locally
-      }
-      await loadEvents();
-    }
-
     return event;
   }, [loadEvents]);
 
   const updateEvent = useCallback(async (id: string, data: Partial<LocalEvent>): Promise<void> => {
-    const events = await getLocalEvents();
-    const existing = events.find(e => e.id === id);
-    if (!existing) return;
-
-    const updated: LocalEvent = { ...existing, ...data };
-    await upsertLocalEvent(updated);
+    await updateEventOffline(id, data);
     await loadEvents();
-
-    await enqueueOperation({
-      id,
-      entity: 'event',
-      operation: existing._isLocal ? 'create' : 'update',
-      payload: data,
-      timestamp: new Date().toISOString(),
-    });
-
-    const online = await checkOnline();
-    if (online) {
-      try {
-        await processSyncQueue();
-      } catch (e) {
-        // Sync failed but event is already saved locally
-      }
-      await loadEvents();
-    }
   }, [loadEvents]);
 
   const deleteEvent = useCallback(async (id: string): Promise<void> => {
-    const events = await getLocalEvents();
-    const existing = events.find(e => e.id === id);
-
-    if (existing?._isLocal) {
-      await deleteLocalEvent(id);
-    } else {
-      const updated = events.map(e =>
-        e.id === id ? { ...e, _pendingDelete: true } : e
-      );
-      await saveLocalEvents(updated);
-
-      await enqueueOperation({
-        id,
-        entity: 'event',
-        operation: 'delete',
-        timestamp: new Date().toISOString(),
-      });
-
-      const online = await checkOnline();
-      if (online) {
-        try {
-          await processSyncQueue();
-        } catch (e) {
-          // Sync failed but delete is queued locally
-        }
-        await deleteLocalEvent(id);
-      }
-    }
-
+    await deleteEventOffline(id);
     await loadEvents();
   }, [loadEvents]);
 

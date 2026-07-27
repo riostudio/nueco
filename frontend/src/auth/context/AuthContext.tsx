@@ -13,6 +13,7 @@ import { UNDECRYPTABLE_PLACEHOLDER } from '../../crypto/accountCrypto';
 import { loadDek } from '../../crypto/keystore';
 import { resetCalendarSyncState } from '../../calendarSync';
 import { clearCachedBrew } from '../../dailyBrew/dailyBrew';
+import { runLoginWorkflow } from '../loginWorkflow';
 
 // Account name E2EE (Stage 5) reversed: push the already-decrypted plaintext name (every
 // place `User` reaches app code has already run it through decryptAccountFromServer) back to
@@ -148,82 +149,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Set user first so auth state is ready
     setUser(result.user);
     setIsSyncReady(false);
-    requestCalendarSyncPermission();
 
-    // E2EE key bootstrap (Stage 3): establish the DEK in the device keystore now
-    // that we have both a session and the password. Gated by feature flag.
-    let bootstrap: BootstrapResult | null = null;
-    if (E2EE_KEYS_ENABLED) {
-      try {
-        bootstrap = await bootstrapKeyOnLogin(password);
-        if (bootstrap.status === 'created') {
-          setRecoveryCode(bootstrap.recoveryCode);
-        } else if (bootstrap.status === 'needs_recovery') {
-          // Hold the new password to complete the recovery re-wrap.
-          pendingPasswordRef.current = password;
-        }
-      } catch (e) {
-        // Don't block login on a key-bootstrap failure (e.g. transient network);
-        // it will be retried on the next login. Notes aren't encrypted yet (Stage 4).
-        console.warn('E2EE key bootstrap failed:', e);
-      }
+    // Sequencing/branching (what runs when, and why) lives in loginWorkflow.ts, framework-free
+    // and independently testable. This callback just wires it to React state + the real deps.
+    const { bootstrap, pendingPassword } = await runLoginWorkflow(password, result.user, {
+      e2eeKeysEnabled: E2EE_KEYS_ENABLED,
+      bootstrapKeyOnLogin,
+      fullSync,
+      migrateNotesToEncrypted,
+      migrateEventsToEncrypted,
+      getMe: () => authApi.getMe(),
+      pushBackPlaintextName,
+      requestCalendarSyncPermission,
+      onSyncReadyChange: setIsSyncReady,
+      onUserRefetched: setUser,
+      warn: (message, err) => console.warn(message, err),
+    });
+
+    if (bootstrap?.status === 'created') {
+      setRecoveryCode(bootstrap.recoveryCode);
     }
-
-    // Run the post-login sync (and the gated one-time E2EE migration) in the BACKGROUND so login
-    // returns immediately and the app appears at once - the notes screen shows cached notes and
-    // refreshes when isSyncReady flips. Previously login awaited fullSync, blocking the whole UI on
-    // the network. The E2EE key bootstrap above is still awaited (needed to decrypt notes).
-    (async () => {
-      try {
-        await fullSync({ force: true });
-      } catch (e) {
-        console.warn('Post-login sync failed:', e);
-      } finally {
-        // Signal that sync is complete so the notes screen can reload from AsyncStorage.
-        setIsSyncReady(true);
-      }
-      // One-time eager migration of legacy plaintext notes/events -> ciphertext (Stage 4/5).
-      // Gated OFF by default (no-op unless explicitly enabled + an Atlas snapshot); safe to
-      // run after sync.
-      if (E2EE_KEYS_ENABLED && bootstrap?.status !== 'needs_recovery') {
-        try {
-          const m = await migrateNotesToEncrypted(result.user?.id);
-          if (m.status === 'done') {
-            console.log(`E2EE migration: ${m.migrated}/${m.total} notes encrypted, ${m.failed} failed`);
-          }
-        } catch (e) {
-          console.warn('E2EE note migration failed (will retry next login):', e);
-        }
-        try {
-          const m = await migrateEventsToEncrypted(result.user?.id);
-          if (m.status === 'done') {
-            console.log(`E2EE migration: ${m.migrated}/${m.total} events encrypted, ${m.failed} failed`);
-          }
-        } catch (e) {
-          console.warn('E2EE event migration failed (will retry next login):', e);
-        }
-      }
-
-      // result.user was decrypted back at the top of login(), before bootstrapKeyOnLogin above
-      // had loaded a DEK - on a fresh device (empty SecureStore) that decrypt is a no-op, so
-      // result.user.name can still be ciphertext here even though pushBackPlaintextName's own
-      // guards all pass: they check that a DEK exists NOW, not that this specific object was
-      // actually decrypted with it. Pushing that stale object back would permanently bake the
-      // ciphertext in as the "plaintext" name. Re-fetch with the DEK now in place instead, and
-      // update the in-memory user too so the UI doesn't show ciphertext in the meantime.
-      let userForPushBack: User | null = result.user;
-      if (E2EE_KEYS_ENABLED && result.user?.enc_version) {
-        try {
-          const fresh = await authApi.getMe();
-          userForPushBack = fresh;
-          setUser(fresh);
-        } catch (e) {
-          console.warn('Post-bootstrap user refresh failed (name push-back skipped):', e);
-          userForPushBack = null; // don't risk pushing back a possibly-still-stale name
-        }
-      }
-      await pushBackPlaintextName(userForPushBack);
-    })();
+    if (pendingPassword) {
+      pendingPasswordRef.current = pendingPassword;
+    }
 
     return bootstrap;
   }, []);
