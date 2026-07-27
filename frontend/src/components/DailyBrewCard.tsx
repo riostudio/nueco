@@ -23,7 +23,8 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect, type Href } from 'expo-router';
-import { C, radius, borderWidth, DAY_NAMES, MONTH_NAMES } from '../theme';
+import { C, radius, borderWidth } from '../theme';
+import { DAY_NAMES, MONTH_NAMES } from '../dateNames';
 import { useAuth } from '../auth';
 import { getVerseForDate } from '../dailyBrew/verses';
 import {

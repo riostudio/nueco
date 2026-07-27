@@ -12,7 +12,8 @@ import { decryptEventFromServer } from '../src/crypto/eventCrypto';
 import { createEventOffline, updateEventOffline, deleteEventOffline, getLocalEvents, setLocalEventNotificationId, processSyncQueue } from '../src/offlineSync';
 import { bumpDeviceCalendarSync } from '../src/deviceCalendarSync';
 import { nextOccurrenceOnOrAfter } from '../src/recurrence';
-import { MONTH_NAMES, DAY_NAMES, C, radius, borderWidth } from '../src/theme';
+import { C, radius, borderWidth } from '../src/theme';
+import { MONTH_NAMES, DAY_NAMES } from '../src/dateNames';
 import { ReminderMinutes, Recurrence, RecurrenceFreq, CalendarEvent } from '../src/types';
 import { Button } from '../src/components';
 

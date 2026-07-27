@@ -9,7 +9,8 @@ import { useIsFocused } from '@react-navigation/native';
 import { eventsApi } from '../../src/api';
 import { getLocalEvents } from '../../src/offlineSync';
 import { CalendarEvent } from '../../src/types';
-import { MONTH_NAMES, DAY_NAMES, C, radius, borderWidth } from '../../src/theme';
+import { C, radius, borderWidth } from '../../src/theme';
+import { MONTH_NAMES, DAY_NAMES } from '../../src/dateNames';
 import { UserAvatar } from '../../src/auth';
 import { eventOccursOnDay } from '../../src/recurrence';
 

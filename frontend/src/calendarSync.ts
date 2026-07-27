@@ -20,6 +20,7 @@ import { eventsApi } from './api';
 import { encryptEventForServer } from './crypto/eventCrypto';
 import { deleteEventOffline } from './offlineSync';
 import { bumpDeviceCalendarSync } from './deviceCalendarSync';
+import { isCalendarSelectionUnchanged, planCalendarSync, type DeviceEvent } from './calendarSyncCore';
 
 let ExpoCalendar: typeof import('expo-calendar') | null = null;
 if (Platform.OS !== 'web') {
@@ -83,10 +84,6 @@ export async function getAllDeviceCalendars(): Promise<{ id: string; title: stri
   return all.map((c: any) => ({ id: c.id as string, title: c.title as string, source: c.source?.name as string | undefined }));
 }
 
-function hashDeviceEvent(e: { title: string; location: string; notes: string; startDate: string | Date; endDate: string | Date }): string {
-  return [e.title, e.location, e.notes, new Date(e.startDate).toISOString(), new Date(e.endDate).toISOString()].join('|');
-}
-
 async function readHashes(): Promise<Record<string, string>> {
   try {
     const raw = await AsyncStorage.getItem(KEYS.EVENT_HASHES);
@@ -140,66 +137,27 @@ export async function runCalendarSync(opts: { force?: boolean } = {}): Promise<v
       }
 
       const hashes = await readHashes();
-      const nextHashes: Record<string, string> = {};
       const currentIdsKey = JSON.stringify([...calendarIds].sort());
       const storedIdsKey = await AsyncStorage.getItem(KEYS.LAST_CALENDAR_IDS);
-      // storedIdsKey is null both for a brand-new sync setup and for a user upgrading from a build
-      // that predates this tracking key. Tell those apart via the hash map: if it already has
-      // entries, a sync ran before under the old code with whatever selection produced them - trust
-      // that baseline instead of forcing one skipped run before deletions can ever be detected.
-      const calendarSelectionUnchanged = storedIdsKey === null
-        ? Object.keys(hashes).length > 0
-        : storedIdsKey === currentIdsKey;
+      const selectionUnchanged = isCalendarSelectionUnchanged(storedIdsKey, currentIdsKey, Object.keys(hashes).length > 0);
 
-      for (const de of deviceEvents as any[]) {
-        const hash = hashDeviceEvent({
-          title: de.title || 'Untitled',
-          location: de.location || '',
-          notes: de.notes || '',
-          startDate: de.startDate,
-          endDate: de.endDate,
-        });
-        nextHashes[de.id] = hash;
-        if (hashes[de.id] === hash) continue; // unchanged since last sync
+      const { nextHashes, actions } = planCalendarSync(deviceEvents as DeviceEvent[], byDeviceId, hashes, selectionUnchanged);
 
-        const match = byDeviceId.get(de.id);
-        const payload = {
-          title: de.title || 'Untitled',
-          description: de.notes || '',
-          location: de.location || '',
-          start_time: new Date(de.startDate).toISOString(),
-          end_time: new Date(de.endDate).toISOString(),
-        };
+      for (const action of actions) {
         try {
-          if (match) {
-            // Deliberately not sending reminder_minutes/linked_note_ids, so a user's MemoPad-side
-            // customizations on this event survive a resync.
-            await eventsApi.update(match.id, await encryptEventForServer(payload));
+          if (action.kind === 'update') {
+            await eventsApi.update(action.memoId, await encryptEventForServer(action.payload));
+          } else if (action.kind === 'create') {
+            await eventsApi.create(await encryptEventForServer(action.payload));
           } else {
-            await eventsApi.create(await encryptEventForServer({ ...payload, linked_note_ids: [], reminder_minutes: null, device_calendar_event_id: de.id }));
+            await deleteEventOffline(action.memoId, { push: true });
           }
         } catch (e) {
-          console.error('Calendar sync: failed to sync event', de.id, e);
-          // Don't mark this as "seen" - keep (or drop) the prior hash so it's retried next run.
-          if (hashes[de.id]) nextHashes[de.id] = hashes[de.id];
-          else delete nextHashes[de.id];
-        }
-      }
-      // Device events that disappeared since last sync: delete their MemoPad copy, but only when
-      // both safety conditions from the file header hold (unchanged calendar selection, non-empty
-      // fetch) - otherwise just let the hash map re-baseline from this run's results, so a real
-      // deletion is still caught on a later, safe-to-act-on run.
-      if (calendarSelectionUnchanged && deviceEvents.length > 0) {
-        for (const [deviceId, prevHash] of Object.entries(hashes)) {
-          if (deviceId in nextHashes) continue; // still present at the source
-          const match = byDeviceId.get(deviceId);
-          if (!match) continue; // no MemoPad copy (already deleted, or never matched)
-          try {
-            await deleteEventOffline(match.id, { push: true });
-          } catch (e) {
-            console.error('Calendar sync: failed to delete event for removed device event', deviceId, e);
-            nextHashes[deviceId] = prevHash; // retry next run
-          }
+          console.error('Calendar sync: failed to apply action', action, e);
+          // Don't mark this device event as "seen" - keep (or drop) the prior hash so the
+          // create/update/delete is retried next run.
+          if (hashes[action.deviceId]) nextHashes[action.deviceId] = hashes[action.deviceId];
+          else delete nextHashes[action.deviceId];
         }
       }
 

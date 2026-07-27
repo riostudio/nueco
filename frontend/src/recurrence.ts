@@ -18,7 +18,7 @@
  * right at a DST boundary, which is acceptable for a display-only helper.
  */
 import type { CalendarEvent, Recurrence } from './types';
-import { DAY_NAMES, MONTH_NAMES } from './theme';
+import { DAY_NAMES, MONTH_NAMES } from './dateNames';
 
 // Cap the day-stepping search so a no-`until` daily/weekly rule can't loop forever.
 // Mirrors the spirit of the backend's `count=3650` cap (~10 years); we search a
@@ -234,11 +234,11 @@ export function formatRecurrenceSummary(recurrence: Recurrence | null): string {
   return base;
 }
 
-// `theme.ts`'s DAY_NAMES is abbreviated only ('Sun'..'Sat', matching the Calendar tab's
+// `dateNames.ts`'s DAY_NAMES is abbreviated only ('Sun'..'Sat', matching the Calendar tab's
 // grid header) - there's no full-name list anywhere in the codebase to reuse for the
 // "Repeats every Monday" single-day case. Rather than either (a) also abbreviating the
 // single-day case, losing the common calendar-app convention the plan called out with
-// an explicit example, or (b) growing theme.ts's DAY_NAMES into a shape other callers
+// an explicit example, or (b) growing DAY_NAMES into a shape other callers
 // (the grid header) don't want, this keeps a small local full-name list scoped to this
 // one summary line. DAY_NAMES is still reused as-is for the multi-day/abbreviated case.
 const FULL_DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
