@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
 } from 'react-native';
@@ -21,6 +21,16 @@ function formatEventTime(iso: string): string {
   const ampm = h >= 12 ? 'PM' : 'AM';
   const hour = h % 12 || 12;
   return `${hour}:${m.toString().padStart(2, '0')} ${ampm}`;
+}
+
+// Time-of-day, not raw start_time epoch: every event passed in already occurs on the target
+// day (eventOccursOnDay already filtered for that), so for a recurring event start_time's
+// *date* is just whenever the series was originally created - comparing full epochs could sort
+// a months-old recurring 3pm meeting before today's 9am one-off, even though 9am should render
+// first. Only the local hour/minute-of-day is meaningful for ordering within a single day.
+function timeOfDayMinutes(iso: string): number {
+  const d = new Date(iso);
+  return d.getHours() * 60 + d.getMinutes();
 }
 
 export default function CalendarScreen() {
@@ -82,8 +92,21 @@ export default function CalendarScreen() {
   const selMonth = selectedDate.getMonth();
   const selYear = selectedDate.getFullYear();
 
-  const hasEvents = (day: number) =>
-    events.some((e) => eventOccursOnDay(e, year, month, day));
+  // Precomputes which days have an event once per [events, year, month] change instead of
+  // rescanning the full events array (via eventOccursOnDay, which for recurring events does a
+  // bounded day-stepping search) once per grid cell on every render - including renders
+  // triggered by unrelated state changes like selecting a day or the 30s sync poll ticking
+  // with no actual event changes.
+  const daysWithEvents = useMemo(() => {
+    const set = new Set<number>();
+    for (let day = 1; day <= daysInMonth; day++) {
+      if (events.some((e) => eventOccursOnDay(e, year, month, day))) {
+        set.add(day);
+      }
+    }
+    return set;
+  }, [events, year, month, daysInMonth]);
+  const hasEvents = (day: number) => daysWithEvents.has(day);
 
   const today = new Date();
   const isToday = (day: number) =>
@@ -95,18 +118,13 @@ export default function CalendarScreen() {
   const nextMonth = () => setCurrentDate(new Date(year, month + 1, 1));
   const selectDay = (day: number) => setSelectedDate(new Date(year, month, day));
 
-  // Time-of-day, not raw start_time epoch: every event here already occurs on the selected day
-  // (eventOccursOnDay already filtered for that), so for a recurring event start_time's *date*
-  // is just whenever the series was originally created - comparing full epochs could sort a
-  // months-old recurring 3pm meeting before today's 9am one-off, even though 9am should render
-  // first. Only the local hour/minute-of-day is meaningful for ordering within a single day.
-  const timeOfDayMinutes = (iso: string): number => {
-    const d = new Date(iso);
-    return d.getHours() * 60 + d.getMinutes();
-  };
-  const selectedDayEvents = events
-    .filter((e) => eventOccursOnDay(e, selYear, selMonth, selDay))
-    .sort((a, b) => timeOfDayMinutes(a.start_time) - timeOfDayMinutes(b.start_time));
+  const selectedDayEvents = useMemo(
+    () =>
+      events
+        .filter((e) => eventOccursOnDay(e, selYear, selMonth, selDay))
+        .sort((a, b) => timeOfDayMinutes(a.start_time) - timeOfDayMinutes(b.start_time)),
+    [events, selYear, selMonth, selDay]
+  );
 
   const rows: (number | null)[][] = [];
   for (let i = 0; i < days.length; i += 7) {

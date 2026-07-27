@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   FlatList, RefreshControl, ActivityIndicator, Modal, Animated, Alert, Platform,
@@ -284,20 +284,28 @@ export default function NotesScreen() {
     return () => clearInterval(pollInterval);
   }, [loadNotes, refreshing, loading, isFocused]);
 
-  const filteredNotes = debouncedSearch
-    ? notes.filter((n) => {
-        const q = debouncedSearch.toLowerCase();
-        return (
-          n.title?.toLowerCase().includes(q) ||
-          plainTextFromContent(n.content || '').toLowerCase().includes(q) ||
-          n.tags?.some((tag) => tag.name?.toLowerCase().includes(q))
-        );
-      })
-    : notes;
-  const pinnedNotes = filteredNotes.filter((n) => n.is_pinned);
-  const otherNotes = filteredNotes.filter((n) => !n.is_pinned);
+  // Memoized: filtering/splitting the notes array (plus, for a search, running
+  // plainTextFromContent over every note's HTML content) reran on every render otherwise -
+  // including renders from unrelated state changes (glow animation, modal visibility, feedback
+  // toast state) that have nothing to do with the notes list or the search query.
+  const filteredNotes = useMemo(
+    () =>
+      debouncedSearch
+        ? notes.filter((n) => {
+            const q = debouncedSearch.toLowerCase();
+            return (
+              n.title?.toLowerCase().includes(q) ||
+              plainTextFromContent(n.content || '').toLowerCase().includes(q) ||
+              n.tags?.some((tag) => tag.name?.toLowerCase().includes(q))
+            );
+          })
+        : notes,
+    [notes, debouncedSearch]
+  );
+  const pinnedNotes = useMemo(() => filteredNotes.filter((n) => n.is_pinned), [filteredNotes]);
+  const otherNotes = useMemo(() => filteredNotes.filter((n) => !n.is_pinned), [filteredNotes]);
 
-  const handleTogglePin = async (noteId: string) => {
+  const handleTogglePin = useCallback(async (noteId: string) => {
     // Goes through the same offline-first path every other write on this screen uses (delete,
     // edit, create) instead of calling notesApi directly - the direct call silently no-op'd
     // while offline (network error swallowed into a console.error, is_pinned never flipped
@@ -309,12 +317,12 @@ export default function NotesScreen() {
     } catch (e) {
       console.error('Toggle pin failed:', e);
     }
-  };
+  }, [notes, updateNote]);
 
-  const handleDeletePress = (noteId: string, noteTitle: string) => {
+  const handleDeletePress = useCallback((noteId: string, noteTitle: string) => {
     setNoteToDelete({ id: noteId, title: noteTitle || 'Untitled Note' });
     setDeleteModalVisible(true);
-  };
+  }, []);
 
   const confirmDelete = async () => {
     if (!noteToDelete) return;
@@ -338,7 +346,7 @@ export default function NotesScreen() {
     setNoteToDelete(null);
   };
 
-  const renderCard = (note: LocalNote) => {
+  const renderCard = useCallback((note: LocalNote) => {
     const linkedEvent = note.linked_event_id ? eventsMap[note.linked_event_id] : null;
     // A shared social post has no title/body of its own - surface its platform + caption so
     // the list entry isn't blank.
@@ -439,7 +447,13 @@ export default function NotesScreen() {
         </View>
       </CardTag>
     );
-  };
+  }, [eventsMap, glowNoteId, glowAnim, router, handleTogglePin, handleDeletePress]);
+
+  const renderListItem = useCallback(({ item }: { item: LocalNote }) => {
+    // Skip pinned notes as they're rendered in the header.
+    if (item.is_pinned) return null;
+    return renderCard(item);
+  }, [renderCard]);
 
   // Only block on a spinner when there's genuinely nothing cached yet; otherwise render the cached
   // notes instantly (offline-first) and let the background sync refresh them.
@@ -519,11 +533,7 @@ export default function NotesScreen() {
             )}
           </View>
         }
-        renderItem={({ item }) => {
-          // Skip pinned notes as they're rendered in header
-          if (item.is_pinned) return null;
-          return renderCard(item);
-        }}
+        renderItem={renderListItem}
         ListFooterComponent={<View style={{ height: 100 }} />}
       />
 

@@ -10,6 +10,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { useAudioRecorder, AudioModule, RecordingPresets, setAudioModeAsync } from 'expo-audio';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as WebBrowser from 'expo-web-browser';
@@ -58,6 +59,38 @@ const EXT_MIME: Record<string, string> = {
   xls: 'application/vnd.ms-excel', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   ppt: 'application/vnd.ms-powerpoint', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
 };
+
+// Caps the longest edge of a picked/captured photo before it's inlined as base64 into the note.
+// ImagePicker's `quality: 0.7` only applies JPEG compression - it doesn't downscale pixel
+// dimensions, so a modern phone camera can still produce a multi-MB base64 string regardless of
+// that setting. 1600px is comfortably larger than any size a note image is ever displayed at in
+// this app (card preview, editor inline), while cutting a typical 12MP+ photo down dramatically -
+// that base64 blob is what gets synced to the server and rewritten into the local notes.json
+// file on every autosave, so its size matters well beyond just this one image.
+const MAX_NOTE_IMAGE_DIMENSION = 1600;
+
+// Returns a resized+compressed base64 string, or null if resizing wasn't needed/failed - callers
+// fall back to the picker's own base64 in either case, so a resize failure never blocks attaching
+// the image, just skips the size optimization for that one image.
+async function resizeImageForNote(uri: string, width: number, height: number): Promise<string | null> {
+  const longestEdge = Math.max(width, height);
+  // width/height can be 0 if the OS didn't report them (documented ImagePicker behavior) - can't
+  // compute a target dimension without them, so skip resizing rather than guess.
+  if (longestEdge <= 0 || longestEdge <= MAX_NOTE_IMAGE_DIMENSION) return null;
+
+  const resize = width >= height ? { width: MAX_NOTE_IMAGE_DIMENSION } : { height: MAX_NOTE_IMAGE_DIMENSION };
+  try {
+    const result = await ImageManipulator.manipulateAsync(uri, [{ resize }], {
+      compress: 0.7,
+      format: ImageManipulator.SaveFormat.JPEG,
+      base64: true,
+    });
+    return result.base64 ?? null;
+  } catch (e) {
+    console.warn('Note image resize failed, using original:', e);
+    return null;
+  }
+}
 
 // Imperative handle the parent uses to drive the editor (voice/AI insert + toolbar buttons).
 type EditorApi = {
@@ -986,8 +1019,12 @@ export default function EditorScreen() {
     });
 
     if (!result.canceled && result.assets[0]) {
-      // Store as base64 data URI for persistence
-      const base64Data = result.assets[0].base64;
+      const asset = result.assets[0];
+      // Downscale before inlining if the capture is larger than a note image ever needs to be -
+      // see resizeImageForNote's comment. Falls back to the picker's own base64 if resizing
+      // wasn't needed or failed.
+      const resized = await resizeImageForNote(asset.uri, asset.width, asset.height);
+      const base64Data = resized ?? asset.base64;
       if (base64Data) {
         const dataUri = `data:image/jpeg;base64,${base64Data}`;
         const newImages = [...images, dataUri];
@@ -1019,10 +1056,16 @@ export default function EditorScreen() {
     });
 
     if (!result.canceled && result.assets.length > 0) {
-      // Store as base64 data URIs for persistence
-      const newImageUris = result.assets
-        .filter(asset => asset.base64)
-        .map(asset => `data:image/jpeg;base64,${asset.base64}`);
+      // Downscale each asset before inlining, same as takePhoto - see resizeImageForNote.
+      const newImageUris = (
+        await Promise.all(
+          result.assets.map(async (asset) => {
+            const resized = await resizeImageForNote(asset.uri, asset.width, asset.height);
+            const base64Data = resized ?? asset.base64;
+            return base64Data ? `data:image/jpeg;base64,${base64Data}` : null;
+          })
+        )
+      ).filter((uri): uri is string => uri !== null);
       if (newImageUris.length > 0) {
         const newImages = [...images, ...newImageUris];
         setImages(newImages);

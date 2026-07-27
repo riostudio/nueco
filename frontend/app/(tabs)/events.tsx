@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList,
   RefreshControl, ActivityIndicator, Alert, Animated, Platform,
@@ -240,11 +240,21 @@ export default function EventsScreen() {
   // directly against "today" silently drops any series created before today from the default
   // Upcoming view, even though it clearly still occurs again. Use the same effectiveEventDate
   // (next occurrence) groupEventsByDate already computes for exactly this reason.
-  const filteredEvents = filter === 'upcoming'
-    ? events.filter((e) => isEventUpcoming(effectiveEventDate(e).toISOString()))
-    : events;
+  //
+  // Memoized: groupEventsByDate does an O(n) pass computing each event's effective (recurrence-
+  // aware) date plus a sort, and this screen re-renders on state changes that have nothing to
+  // do with the event data - notably handleScroll's FAB-expand/collapse toggling during normal
+  // list scrolling (scrollEventThrottle=16). Without memoization every one of those re-renders
+  // redid the full filter+group+sort pass.
+  const filteredEvents = useMemo(
+    () =>
+      filter === 'upcoming'
+        ? events.filter((e) => isEventUpcoming(effectiveEventDate(e).toISOString()))
+        : events,
+    [events, filter]
+  );
 
-  const grouped = groupEventsByDate(filteredEvents);
+  const grouped = useMemo(() => groupEventsByDate(filteredEvents), [filteredEvents]);
 
   // Only block on a spinner when there's nothing cached yet; otherwise render cached events instantly.
   if (loading && events.length === 0) {
