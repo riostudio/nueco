@@ -1,4 +1,5 @@
 
+import asyncio
 import os
 import secrets
 import bcrypt
@@ -46,11 +47,18 @@ class AuthService:
             return "there"
         return user.get("name") or "there"
 
-    def _hash_password(self, password: str) -> str:
-        return bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
+    async def _hash_password(self, password: str) -> str:
+        # bcrypt at cost-12 is deliberately slow (~250ms, measured) - that's the point for
+        # password hashing, but run synchronously it blocks this single-worker deployment's
+        # entire event loop for that whole window, stalling every other in-flight request from
+        # every other user. asyncio.to_thread moves the CPU-bound work off the loop, matching
+        # the existing to_thread pattern used for boto3 calls elsewhere in the backend.
+        return await asyncio.to_thread(
+            lambda: bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
+        )
 
-    def _verify_password(self, password: str, hashed: str) -> bool:
-        return bcrypt.checkpw(password.encode(), hashed.encode())
+    async def _verify_password(self, password: str, hashed: str) -> bool:
+        return await asyncio.to_thread(bcrypt.checkpw, password.encode(), hashed.encode())
 
     def _create_access_token(self, user_id: str, session_id: Optional[str] = None) -> str:
         expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -117,7 +125,7 @@ class AuthService:
 
         # Create user
         user_id = str(uuid4())
-        password_hash = self._hash_password(password)
+        password_hash = await self._hash_password(password)
         verification_token = secrets.token_urlsafe(32)
         
         user_doc = create_user_doc(user_id, email, name, password_hash)
@@ -210,7 +218,7 @@ class AuthService:
             return False, f"Account is locked. Try again in {remaining} minutes.", None
 
         # Verify password
-        if not self._verify_password(password, user["password"]):
+        if not await self._verify_password(password, user["password"]):
             # Increment failed attempts
             failed_attempts = user.get("failed_login_attempts", 0) + 1
             updates = {"failed_login_attempts": failed_attempts}
@@ -316,7 +324,7 @@ class AuthService:
         if user.get("reset_token_expiry") and user["reset_token_expiry"] < datetime.utcnow():
             return False, "Reset link has expired. Please request a new one."
 
-        password_hash = self._hash_password(new_password)
+        password_hash = await self._hash_password(new_password)
         user_id = self._get_user_id(user)
         
         # Update password and invalidate all sessions (force re-login)
@@ -340,10 +348,10 @@ class AuthService:
         if not user:
             return False, "User not found"
 
-        if not self._verify_password(current_password, user["password"]):
+        if not await self._verify_password(current_password, user["password"]):
             return False, "Current password is incorrect"
 
-        password_hash = self._hash_password(new_password)
+        password_hash = await self._hash_password(new_password)
         await self.users.update_one(
             {"id": user_id},
             {"$set": {"password": password_hash, "updated_at": datetime.utcnow()}}

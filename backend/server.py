@@ -330,15 +330,29 @@ app.add_middleware(
 async def create_indexes():
     """Create database indexes for optimal query performance"""
     try:
-        # Drop problematic indexes first
+        # Drop problematic/superseded indexes first
         try:
             await db.users.drop_index("email_1")
         except:
             pass
+        # Superseded by the (user_id, is_pinned, updated_at) compound index below - a
+        # create_index() call for a superseded index disappearing from this function doesn't
+        # drop it from an already-deployed database, so it must be dropped explicitly or it
+        # lingers forever (dead weight on every notes write).
+        for stale_index in ("user_id_1_updated_at_-1", "user_id_1_is_pinned_-1"):
+            try:
+                await db.notes.drop_index(stale_index)
+            except:
+                pass
 
         # Notes indexes
-        await db.notes.create_index([("user_id", 1), ("updated_at", -1)])
-        await db.notes.create_index([("user_id", 1), ("is_pinned", -1)])
+        # Matches notes/service.py's list() query+sort exactly (filter on user_id, sort by
+        # is_pinned desc then updated_at desc) so pagination is fully index-covered instead of
+        # falling back to a blocking in-memory sort. Replaces the two separate single-purpose
+        # (user_id, updated_at) and (user_id, is_pinned) indexes this superseded - neither was
+        # used by any other query, and a compound index's prefix (user_id, is_pinned) already
+        # covers what a user_id+is_pinned-only query would need.
+        await db.notes.create_index([("user_id", 1), ("is_pinned", -1), ("updated_at", -1)])
         await db.notes.create_index([("user_id", 1), ("id", 1)])
         await db.notes.create_index([("user_id", 1), ("has_attachments", 1)])
         

@@ -35,7 +35,11 @@ class AccountsService:
         user = await self.db.users.find_one({"id": user_id})
         if not user:
             raise UserNotFoundError()
-        if not password or not bcrypt.checkpw(password.encode(), user.get("password", "").encode()):
+        # asyncio.to_thread: bcrypt is CPU-bound and deliberately slow (~250ms) - run
+        # synchronously it would block this single-worker deployment's entire event loop for
+        # that whole window on every account-deletion request. Same pattern as
+        # auth/service.py's _verify_password.
+        if not password or not await asyncio.to_thread(bcrypt.checkpw, password.encode(), user.get("password", "").encode()):
             raise IncorrectPasswordError()
 
         # Wipe object storage first (attachments), then every DB record tied to the user.
