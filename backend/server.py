@@ -177,11 +177,14 @@ from auth.reset_password_page import router as reset_password_router
 api_router.include_router(auth_router)
 app.include_router(reset_password_router)
 
-# Include notes/events routers (the core domain - see backend/notes/ and backend/events/)
+# Include notes/events/trips routers (the core domain - see backend/notes/, backend/events/,
+# backend/trips/)
 from notes.router import router as notes_router
 from events.router import router as events_router
+from trips.router import router as trips_router
 api_router.include_router(notes_router)
 api_router.include_router(events_router)
+api_router.include_router(trips_router)
 
 # Include reminders/accounts/feedback routers (extracted out of server.py - see
 # backend/reminders/, backend/accounts/, backend/feedback/)
@@ -366,6 +369,13 @@ async def create_indexes():
             [("reminder_status", 1), ("reminder_fire_at", 1)],
             partialFilterExpression={"reminder_status": "pending"},
         )
+        # Trip timeline lookups (an event's own trip_id) and the cascade-unset on trip delete
+        # (trips/service.py's delete()) both filter on this pair.
+        await db.events.create_index([("trip_id", 1), ("user_id", 1)])
+
+        # Trips indexes
+        await db.trips.create_index([("user_id", 1), ("created_at", -1)])
+        await db.trips.create_index([("user_id", 1), ("id", 1)])
 
         # Push token indexes (reminder fire looks up the owner's active tokens on every send)
         await db.push_tokens.create_index([("user_id", 1), ("active", 1)])

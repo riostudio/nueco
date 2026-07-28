@@ -162,6 +162,7 @@ class EventsService:
             "created_at": datetime.now(timezone.utc).isoformat(),
             "recurrence": event.recurrence.model_dump() if event.recurrence else None,
             "timezone": event.timezone,
+            "trip_id": event.trip_id,
             **compute_reminder_fields(event.start_time, event.reminder_minutes),
         }
         await self.db.events.insert_one(doc)
@@ -192,7 +193,8 @@ class EventsService:
             "enc_version": 1,
             "created_at": 1,
             "recurrence": 1,
-            "timezone": 1
+            "timezone": 1,
+            "trip_id": 1,
         }).sort("start_time", 1).to_list(100)  # Reduced limit
 
     async def get(self, user_id: str, event_id: str) -> dict:
@@ -221,11 +223,12 @@ class EventsService:
         for k, v in update.model_dump(exclude_unset=True).items():
             if v is None:
                 # Only allow explicitly clearing these fields ("No reminder" / "turn off
-                # recurrence"). Without this, an explicit null on an autosaved full-object
-                # PUT is silently dropped instead of clearing the field - see the bug this
-                # fixes: turning off an existing event's reminder/recurrence via edit was
-                # previously a no-op.
-                if k in ("reminder_minutes", "recurrence"):
+                # recurrence" / "remove from trip"). Without this, an explicit null on an
+                # autosaved full-object PUT is silently dropped instead of clearing the field -
+                # see the bug this fixes: turning off an existing event's reminder/recurrence
+                # via edit was previously a no-op. trip_id follows the same rule so
+                # PUT /events/{id} {"trip_id": null} actually removes it from its trip.
+                if k in ("reminder_minutes", "recurrence", "trip_id"):
                     updates[k] = None
                 continue
             updates[k] = v

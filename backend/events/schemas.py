@@ -20,6 +20,7 @@ class EventCreate(BaseModel):
     enc_version: Optional[int] = None  # E2EE: when set, title/description/location are client-side ciphertext (AES-256-GCM). None/absent means legacy plaintext.
     recurrence: Optional[Recurrence] = None
     timezone: Optional[str] = None  # IANA name (e.g. "Australia/Sydney"); anchors recurrence math to wall-clock time across DST
+    trip_id: Optional[str] = None  # Groups this event under a Trip (backend/trips/) - opaque id, no validation here.
 
 
 class EventUpdate(BaseModel):
@@ -34,6 +35,7 @@ class EventUpdate(BaseModel):
     enc_version: Optional[int] = None
     recurrence: Optional[Recurrence] = None
     timezone: Optional[str] = None
+    trip_id: Optional[str] = None
 
 
 class EventResponse(BaseModel):
@@ -51,6 +53,7 @@ class EventResponse(BaseModel):
     created_at: str
     recurrence: Optional[Recurrence] = None
     timezone: Optional[str] = None
+    trip_id: Optional[str] = None
 
 
 class PaginatedEventsResponse(BaseModel):

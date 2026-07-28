@@ -19,7 +19,9 @@ foundation package - see docs plan for "multiple, independently-recurring
 reminders per note").
 """
 import asyncio
+import json
 import sys
+import types
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -41,6 +43,7 @@ import harness  # noqa: E402
 # over HTTP via api_client, not by calling these directly.
 from events.schemas import Recurrence  # noqa: E402
 from events.service import next_occurrence_on_or_after  # noqa: E402
+import textai.service as textai_service  # noqa: E402
 
 PASSWORD = "TestPass0rd!"
 
@@ -806,3 +809,361 @@ class TestPushTickRecurrenceAdvance:
             f"got {actual_next.isoformat()} (drift {drift}s) - looks like a "
             f"double-advance (would land ~24h later)"
         )
+
+
+# ---------------------------------------------------------------------------
+# Voice intent classification (POST /api/classify-voice-intent) - the note editor's mic button
+# routes every transcript through this before deciding whether to dictate into the note body or
+# hand off to event/trip creation. No live OpenAI call - a fake client stands in for
+# get_openai_client() so these tests run offline/without an API key, following the same
+# chat.completions.create(...).choices[0].message.content shape the real SDK returns.
+# ---------------------------------------------------------------------------
+
+def _fake_openai_client(content: str):
+    """A minimal stand-in for AsyncOpenAI exposing only client.chat.completions.create(...),
+    returning an object shaped like a real ChatCompletion response (choices[0].message.content)."""
+    async def create(**kwargs):
+        message = types.SimpleNamespace(content=content)
+        choice = types.SimpleNamespace(message=message)
+        return types.SimpleNamespace(choices=[choice])
+
+    completions = types.SimpleNamespace(create=create)
+    chat = types.SimpleNamespace(completions=completions)
+    return types.SimpleNamespace(chat=chat)
+
+
+class TestVoiceIntentClassification:
+
+    async def test_note_intent_returns_no_events(self, api_client, monkeypatch):
+        fake_json = json.dumps({"intent": "note", "trip_name": None, "events": []})
+        monkeypatch.setattr(textai_service, "get_openai_client", lambda: _fake_openai_client(fake_json))
+
+        r = await api_client.post("/api/classify-voice-intent", json={
+            "transcript": "Remember to buy milk, eggs, and bread for the week",
+            "reference_date": "2026-07-28",
+            "timezone": "UTC",
+        })
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["intent"] == "note"
+        assert data["events"] == []
+        assert data["trip_name"] is None
+
+    async def test_single_event_intent_extracts_recurring_event(self, api_client, monkeypatch):
+        """Confirms the full shape round-trips, including the 0=Sunday byweekday convention
+        (Monday = 1 here) - this must match events/schemas.py's Recurrence exactly, not
+        dateutil's own Monday=0 convention."""
+        fake_json = json.dumps({
+            "intent": "single_event",
+            "trip_name": None,
+            "events": [{
+                "title": "Take out the trash",
+                "start_time": "2026-08-03T09:00:00+00:00",
+                "end_time": None,
+                "location": "",
+                "recurrence": {"freq": "weekly", "byweekday": [1], "until": None},
+                "confidence": "high",
+            }],
+        })
+        monkeypatch.setattr(textai_service, "get_openai_client", lambda: _fake_openai_client(fake_json))
+
+        r = await api_client.post("/api/classify-voice-intent", json={
+            "transcript": "Remind me every Monday at 9am to take out the trash",
+            "reference_date": "2026-07-28",
+            "timezone": "UTC",
+        })
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["intent"] == "single_event"
+        assert len(data["events"]) == 1
+        ev = data["events"][0]
+        assert ev["title"] == "Take out the trash"
+        assert ev["start_time"] == "2026-08-03T09:00:00+00:00"
+        assert ev["confidence"] == "high"
+        assert ev["recurrence"] == {"freq": "weekly", "byweekday": [1], "until": None}
+
+    async def test_extracted_recurring_event_creates_and_computes_correctly(self, api_client, monkeypatch):
+        """Classification itself does no date-math (by design - see classify_voice_intent's
+        docstring). This confirms an LLM-shaped payload, once confirmed by the user and POSTed
+        through the normal event-creation path, produces a real event whose recurrence actually
+        computes the expected next occurrence - exercising the already-tested
+        next_occurrence_on_or_after path against realistic AI output instead of trusting the
+        live model in CI."""
+        fake_json = json.dumps({
+            "intent": "single_event",
+            "trip_name": None,
+            "events": [{
+                "title": "Standup",
+                "start_time": "2026-08-03T09:00:00+00:00",  # a Monday
+                "end_time": "2026-08-03T09:30:00+00:00",
+                "location": "",
+                "recurrence": {"freq": "weekly", "byweekday": [1], "until": None},
+                "confidence": "high",
+            }],
+        })
+        monkeypatch.setattr(textai_service, "get_openai_client", lambda: _fake_openai_client(fake_json))
+
+        classify = await api_client.post("/api/classify-voice-intent", json={
+            "transcript": "Standup every Monday at 9am",
+            "reference_date": "2026-07-28",
+            "timezone": "UTC",
+        })
+        assert classify.status_code == 200, classify.text
+        extracted = classify.json()["events"][0]
+
+        create = await api_client.post("/api/events", json={
+            "title": extracted["title"],
+            "start_time": extracted["start_time"],
+            "end_time": extracted["end_time"],
+            "location": extracted["location"],
+            "recurrence": extracted["recurrence"],
+            "timezone": "UTC",
+        })
+        assert create.status_code == 200, create.text
+        event_id = create.json()["id"]
+
+        recurrence = Recurrence(**extracted["recurrence"])
+        expected_next = next_occurrence_on_or_after(
+            extracted["start_time"], recurrence, "UTC",
+            datetime(2026, 8, 10, 0, 0, 0, tzinfo=timezone.utc),
+        )
+        assert expected_next is not None
+        assert expected_next.date().isoformat() == "2026-08-10"  # the following Monday
+
+        got = await api_client.get(f"/api/events/{event_id}")
+        assert got.status_code == 200, got.text
+        assert got.json()["recurrence"] == {"freq": "weekly", "byweekday": [1], "until": None}
+
+    async def test_multiple_events_intent_returns_all_events(self, api_client, monkeypatch):
+        fake_json = json.dumps({
+            "intent": "multiple_events",
+            "trip_name": None,
+            "events": [
+                {"title": "Dentist", "start_time": "2026-08-04T14:00:00+00:00", "end_time": None, "location": "", "recurrence": None, "confidence": "high"},
+                {"title": "Haircut", "start_time": "2026-08-06T10:00:00+00:00", "end_time": None, "location": "", "recurrence": None, "confidence": "high"},
+            ],
+        })
+        monkeypatch.setattr(textai_service, "get_openai_client", lambda: _fake_openai_client(fake_json))
+
+        r = await api_client.post("/api/classify-voice-intent", json={
+            "transcript": "Schedule a dentist appointment Tuesday at 2 and a haircut Thursday at 10",
+            "reference_date": "2026-07-28",
+            "timezone": "UTC",
+        })
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["intent"] == "multiple_events"
+        assert [e["title"] for e in data["events"]] == ["Dentist", "Haircut"]
+        assert data["trip_name"] is None
+
+    async def test_itinerary_intent_returns_trip_name_and_events(self, api_client, monkeypatch):
+        fake_json = json.dumps({
+            "intent": "itinerary",
+            "trip_name": "Tokyo Trip",
+            "events": [
+                {"title": "Flight to Tokyo", "start_time": "2026-09-01T09:00:00+00:00", "end_time": None, "location": "", "recurrence": None, "confidence": "high"},
+                {"title": "Hotel check-in", "start_time": "2026-09-01T15:00:00+00:00", "end_time": None, "location": "", "recurrence": None, "confidence": "high"},
+                {"title": "Dinner reservation", "start_time": "2026-09-01T19:00:00+00:00", "end_time": None, "location": "", "recurrence": None, "confidence": "low"},
+            ],
+        })
+        monkeypatch.setattr(textai_service, "get_openai_client", lambda: _fake_openai_client(fake_json))
+
+        r = await api_client.post("/api/classify-voice-intent", json={
+            "transcript": "Plan my Tokyo trip: flight Friday at 9am, hotel check-in at 3pm, dinner reservation at 7",
+            "reference_date": "2026-07-28",
+            "timezone": "UTC",
+        })
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["intent"] == "itinerary"
+        assert data["trip_name"] == "Tokyo Trip"
+        assert len(data["events"]) == 3
+
+    async def test_itinerary_intent_with_missing_trip_name_gets_fallback(self, api_client, monkeypatch):
+        fake_json = json.dumps({
+            "intent": "itinerary",
+            "trip_name": None,
+            "events": [
+                {"title": "Flight", "start_time": "2026-09-01T09:00:00+00:00", "end_time": None, "location": "", "recurrence": None, "confidence": "low"},
+                {"title": "Hotel", "start_time": "2026-09-01T15:00:00+00:00", "end_time": None, "location": "", "recurrence": None, "confidence": "low"},
+            ],
+        })
+        monkeypatch.setattr(textai_service, "get_openai_client", lambda: _fake_openai_client(fake_json))
+
+        r = await api_client.post("/api/classify-voice-intent", json={
+            "transcript": "Flight Friday morning then hotel in the afternoon",
+            "reference_date": "2026-07-28",
+            "timezone": "UTC",
+        })
+        assert r.status_code == 200, r.text
+        assert r.json()["trip_name"] == "New Trip"
+
+    async def test_malformed_llm_json_returns_500(self, api_client, monkeypatch):
+        monkeypatch.setattr(textai_service, "get_openai_client", lambda: _fake_openai_client("not valid json"))
+
+        r = await api_client.post("/api/classify-voice-intent", json={
+            "transcript": "Lunch with Sam tomorrow at noon",
+            "reference_date": "2026-07-28",
+            "timezone": "UTC",
+        })
+        assert r.status_code == 500, r.text
+
+    async def test_non_note_intent_with_no_usable_events_returns_500(self, api_client, monkeypatch):
+        fake_json = json.dumps({
+            "intent": "single_event",
+            "trip_name": None,
+            "events": [{"title": "", "start_time": "2026-07-29T12:00:00+00:00", "end_time": None, "location": "", "recurrence": None, "confidence": "low"}],
+        })
+        monkeypatch.setattr(textai_service, "get_openai_client", lambda: _fake_openai_client(fake_json))
+
+        r = await api_client.post("/api/classify-voice-intent", json={
+            "transcript": "mumble mumble",
+            "reference_date": "2026-07-28",
+            "timezone": "UTC",
+        })
+        assert r.status_code == 500, r.text
+
+    async def test_malformed_recurrence_is_dropped_not_fatal(self, api_client, monkeypatch):
+        """An unrecognized freq must not fail the whole extraction - the event still comes
+        back (as a one-off), matching smart_format's 'unrecognized note_type -> general'
+        fallback style rather than erroring on one bad sub-field."""
+        fake_json = json.dumps({
+            "intent": "single_event",
+            "trip_name": None,
+            "events": [{
+                "title": "Dentist",
+                "start_time": "2026-08-01T10:00:00+00:00",
+                "end_time": None,
+                "location": "",
+                "recurrence": {"freq": "fortnightly", "byweekday": None, "until": None},
+                "confidence": "low",
+            }],
+        })
+        monkeypatch.setattr(textai_service, "get_openai_client", lambda: _fake_openai_client(fake_json))
+
+        r = await api_client.post("/api/classify-voice-intent", json={
+            "transcript": "Dentist appointment August 1st at 10am",
+            "reference_date": "2026-07-28",
+            "timezone": "UTC",
+        })
+        assert r.status_code == 200, r.text
+        assert r.json()["events"][0]["recurrence"] is None
+
+    async def test_unrecognized_intent_falls_back_to_note(self, api_client, monkeypatch):
+        fake_json = json.dumps({"intent": "something_else", "trip_name": None, "events": []})
+        monkeypatch.setattr(textai_service, "get_openai_client", lambda: _fake_openai_client(fake_json))
+
+        r = await api_client.post("/api/classify-voice-intent", json={
+            "transcript": "whatever",
+            "reference_date": "2026-07-28",
+            "timezone": "UTC",
+        })
+        assert r.status_code == 200, r.text
+        assert r.json()["intent"] == "note"
+
+
+# ---------------------------------------------------------------------------
+# Trips (itinerary / trip grouping for events) - backend/trips/.
+# ---------------------------------------------------------------------------
+
+class TestTripsCRUD:
+
+    async def test_create_list_get_update_delete(self, api_client):
+        create = await api_client.post("/api/trips", json={"name": "TEST_Tokyo", "description": "Team offsite"})
+        assert create.status_code == 200, create.text
+        trip = create.json()
+        assert trip["name"] == "TEST_Tokyo"
+        assert trip["description"] == "Team offsite"
+        assert "id" in trip and "created_at" in trip
+        trip_id = trip["id"]
+
+        listed = await api_client.get("/api/trips")
+        assert listed.status_code == 200, listed.text
+        assert any(t["id"] == trip_id for t in listed.json())
+
+        got = await api_client.get(f"/api/trips/{trip_id}")
+        assert got.status_code == 200, got.text
+        assert got.json()["name"] == "TEST_Tokyo"
+
+        updated = await api_client.put(f"/api/trips/{trip_id}", json={"name": "TEST_Tokyo Renamed"})
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["name"] == "TEST_Tokyo Renamed"
+        assert updated.json()["description"] == "Team offsite"  # untouched field preserved
+
+        deleted = await api_client.delete(f"/api/trips/{trip_id}")
+        assert deleted.status_code == 200, deleted.text
+
+        gone = await api_client.get(f"/api/trips/{trip_id}")
+        assert gone.status_code == 404, gone.text
+
+    async def test_get_nonexistent_trip_returns_404(self, api_client):
+        r = await api_client.get("/api/trips/does-not-exist")
+        assert r.status_code == 404, r.text
+
+    async def test_update_nonexistent_trip_returns_404(self, api_client):
+        r = await api_client.put("/api/trips/does-not-exist", json={"name": "X"})
+        assert r.status_code == 404, r.text
+
+    async def test_delete_nonexistent_trip_returns_404(self, api_client):
+        r = await api_client.delete("/api/trips/does-not-exist")
+        assert r.status_code == 404, r.text
+
+    async def test_event_can_be_created_with_trip_id_and_read_back(self, api_client):
+        trip = await api_client.post("/api/trips", json={"name": "TEST_Bali"})
+        trip_id = trip.json()["id"]
+
+        event = await api_client.post("/api/events", json={
+            "title": "TEST_Flight",
+            "start_time": "2026-09-01T09:00:00Z",
+            "end_time": "2026-09-01T11:00:00Z",
+            "linked_note_ids": [],
+            "trip_id": trip_id,
+        })
+        assert event.status_code == 200, event.text
+        assert event.json()["trip_id"] == trip_id
+        event_id = event.json()["id"]
+
+        got = await api_client.get(f"/api/events/{event_id}")
+        assert got.status_code == 200, got.text
+        assert got.json()["trip_id"] == trip_id
+
+    async def test_event_trip_id_can_be_set_via_update_and_cleared(self, api_client):
+        trip = await api_client.post("/api/trips", json={"name": "TEST_Kyoto"})
+        trip_id = trip.json()["id"]
+
+        event = await api_client.post("/api/events", json={
+            "title": "TEST_Standalone",
+            "start_time": "2026-09-02T09:00:00Z",
+            "end_time": "2026-09-02T10:00:00Z",
+            "linked_note_ids": [],
+        })
+        event_id = event.json()["id"]
+        assert event.json()["trip_id"] is None
+
+        linked = await api_client.put(f"/api/events/{event_id}", json={"trip_id": trip_id})
+        assert linked.status_code == 200, linked.text
+        assert linked.json()["trip_id"] == trip_id
+
+        unlinked = await api_client.put(f"/api/events/{event_id}", json={"trip_id": None})
+        assert unlinked.status_code == 200, unlinked.text
+        assert unlinked.json()["trip_id"] is None
+
+    async def test_deleting_trip_unsets_trip_id_on_its_events(self, api_client):
+        trip = await api_client.post("/api/trips", json={"name": "TEST_Osaka"})
+        trip_id = trip.json()["id"]
+
+        event = await api_client.post("/api/events", json={
+            "title": "TEST_Hotel Checkin",
+            "start_time": "2026-09-03T15:00:00Z",
+            "end_time": "2026-09-03T15:30:00Z",
+            "linked_note_ids": [],
+            "trip_id": trip_id,
+        })
+        event_id = event.json()["id"]
+
+        deleted = await api_client.delete(f"/api/trips/{trip_id}")
+        assert deleted.status_code == 200, deleted.text
+
+        got = await api_client.get(f"/api/events/{event_id}")
+        assert got.status_code == 200, got.text
+        assert got.json()["trip_id"] is None, "event must not be left pointing at a deleted trip"

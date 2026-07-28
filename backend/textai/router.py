@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from core.deps import get_current_user
 from . import service
 from .service import AIEmptyResponseError, AIResponseParseError, InvalidTextActionError
-from .schemas import TextProcessRequest, TranscribeBase64Request
+from .schemas import TextProcessRequest, TranscribeBase64Request, VoiceIntentClassifyRequest, VoiceIntentClassifyResponse
 
 logger = logging.getLogger(__name__)
 
@@ -79,3 +79,16 @@ async def process_text_route(request: TextProcessRequest, current_user: dict = D
     except Exception as e:
         logger.error(f"Text processing error: {e}")
         raise HTTPException(status_code=500, detail=f"Text processing failed: {str(e)}")
+
+
+@router.post("/classify-voice-intent", response_model=VoiceIntentClassifyResponse)
+async def classify_voice_intent_route(request: VoiceIntentClassifyRequest, current_user: dict = Depends(get_current_user)):
+    """Classify a note-editor voice-memo transcript as dictation vs. one/many events vs. an
+    itinerary, extracting structured events for the non-dictation cases (requires authentication)"""
+    try:
+        return await service.classify_voice_intent(request.transcript, request.reference_date, request.timezone)
+    except (AIEmptyResponseError, AIResponseParseError) as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.error(f"Voice intent classification error: {e}")
+        raise HTTPException(status_code=500, detail=f"Voice intent classification failed: {str(e)}")
