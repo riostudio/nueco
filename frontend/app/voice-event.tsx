@@ -21,7 +21,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { takePendingVoiceExtraction, type PendingVoiceExtraction } from '../src/pendingVoiceEvents';
+import { setPendingLinkedEventIds } from '../src/pendingLinkedEvents';
 import { createEventOffline, createTripOffline } from '../src/offlineSync';
+import { writeEventToDeviceCalendar } from '../src/deviceCalendarWrite';
 import { formatRecurrenceSummary } from '../src/recurrence';
 import { ExtractedEvent } from '../src/types';
 import { C, radius, borderWidth } from '../src/theme';
@@ -103,7 +105,12 @@ export default function VoiceEventScreen() {
   const editManually = () => {
     // Only offered for a single extracted event - a per-item deep-edit for a batch would need
     // its own full recurrence UI, which event-editor.tsx already owns; keep this simple.
-    router.replace({ pathname: '/event-editor', params: { date: drafts[0].startDate.toISOString() } });
+    // noteId (same 'new' sentinel convention editor.tsx's own "Schedule New Event" entry point
+    // uses) lets event-editor.tsx link the event it creates back to this note on save.
+    router.replace({
+      pathname: '/event-editor',
+      params: { date: drafts[0].startDate.toISOString(), noteId: staged.noteId || 'new' },
+    });
   };
 
   const saveAll = async () => {
@@ -125,21 +132,46 @@ export default function VoiceEventScreen() {
         tripId = trip.id;
       }
 
+      // A real (already-created) note the user was dictating in - link every event created here
+      // back to it. Empty for a brand-new note that hadn't been created yet; that case is still
+      // handled (see pendingLinkedEvents.ts below), just without this best-effort dual-write.
+      const noteId = staged.noteId || null;
+      const createdEventIds: string[] = [];
+
       for (const draft of drafts) {
         const endTime = draft.end_time
           ? new Date(draft.end_time)
           : new Date(draft.startDate.getTime() + 30 * 60 * 1000);
 
-        await createEventOffline(
+        // Write to the device's native calendar (Google/Apple/Outlook) first, same order
+        // event-editor.tsx uses, so the MemoPad event record can store the resulting id from the
+        // start. Best-effort: no device calendar access/permission just means no device-calendar
+        // counterpart, never a failure of the actual save.
+        let deviceEventId: string | null = null;
+        try {
+          deviceEventId = await writeEventToDeviceCalendar({
+            title: draft.title.trim(),
+            description: '',
+            location: draft.location || '',
+            startDate: draft.startDate,
+            endDate: endTime,
+            recurrence: draft.recurrence,
+            recurrenceTimezone: draft.recurrence ? timezone : null,
+          });
+        } catch (e) {
+          console.error('Device calendar write failed for voice event, continuing:', e);
+        }
+
+        const created = await createEventOffline(
           {
             title: draft.title.trim(),
             description: '',
             location: draft.location || '',
             start_time: draft.startDate.toISOString(),
             end_time: endTime.toISOString(),
-            linked_note_ids: [],
+            linked_note_ids: noteId ? [noteId] : [],
             reminder_minutes: null,
-            device_calendar_event_id: null,
+            device_calendar_event_id: deviceEventId,
             recurrence: draft.recurrence,
             // Same convention event-editor.tsx's buildEventData uses: only stamp timezone when
             // there's a recurrence to anchor it to.
@@ -148,9 +180,20 @@ export default function VoiceEventScreen() {
           },
           { push: true },
         );
+        createdEventIds.push(created.id);
       }
 
-      router.replace(isItinerary && tripId ? { pathname: '/trip-editor', params: { tripId } } : '/(tabs)/events');
+      // Stage these for editor.tsx to pick up and display as linked-event cards once it regains
+      // focus (see pendingLinkedEvents.ts) - works whether or not the note existed yet, since
+      // editor.tsx applies this to its own live state rather than requiring a server round-trip.
+      if (createdEventIds.length > 0) {
+        setPendingLinkedEventIds(createdEventIds);
+      }
+
+      // Always return to the note being dictated in, so the user sees the event(s) they just
+      // asked for show up right there as linked events - not off in the Events tab or a trip
+      // timeline they'd have to navigate to separately.
+      router.back();
     } catch (e) {
       console.error('Save voice event(s) failed:', e);
       Alert.alert('Save Failed', 'Could not save. Please try again.');

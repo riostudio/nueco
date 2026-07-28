@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo, forwardRef, u
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   ScrollView, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
-  Keyboard, Share, Modal, Image, Animated, Easing,
+  Keyboard, Share, Modal, Image, Animated, Easing, Dimensions,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -17,7 +17,9 @@ import * as WebBrowser from 'expo-web-browser';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { notesApi, eventsApi, transcribeApi, textProcessApi, voiceIntentApi, attachmentsApi, uploadAttachmentWithProgress, type UploadFile } from '../src/api';
 import { setPendingVoiceExtraction } from '../src/pendingVoiceEvents';
+import { parseChecklistFromSpeech, buildChecklistHtml } from '../src/checklistFromSpeech';
 import { takePendingSketch } from '../src/pendingSketch';
+import { takePendingLinkedEventIds } from '../src/pendingLinkedEvents';
 import { decryptEventsFromServer } from '../src/crypto/eventCrypto';
 import { RadialProgress, SharedPostCard, Button } from '../src/components';
 import { decryptNoteFromServer } from '../src/crypto/noteCrypto';
@@ -111,6 +113,7 @@ type EditorApi = {
   deleteColumn: () => void;
   deleteRow: () => void;
   deleteTable: () => void;
+  insertImage: (src: string) => void;
   undo: () => void;
   redo: () => void;
 };
@@ -135,6 +138,16 @@ type EditorUiState = {
 // bodyHeight is a plain pixel number, immune to both: it doesn't depend on the (broken)
 // WebView resize signal, and it doesn't participate in flex distribution with its siblings.
 const BODY_SANITY_MAX_HEIGHT = 20000;
+
+// Every inline <img> currently in a note's body comes from sketch.tsx (photo/gallery picks go
+// into the separate images[] gallery instead, not inline) - see insertImage in NoteBodyEditor's
+// useImperativeHandle. sketch.tsx bounds its canvas to a fixed 4:3 (width:height) aspect ratio
+// specifically so this is knowable ahead of time: once the image is scaled down to the note
+// body's own width (img { max-width: 100%; height: auto } - see ImageBridge's extendCSS), its
+// rendered height is just that width * 3/4. 48 subtracted for scrollContent's
+// paddingHorizontal (24 each side) - see the `scrollContent` style below.
+const ESTIMATED_NOTE_BODY_WIDTH = Dimensions.get('window').width - 48;
+const ESTIMATED_SKETCH_IMAGE_HEIGHT = Math.round(ESTIMATED_NOTE_BODY_WIDTH * (3 / 4)) + 16;
 
 function escapeHtml(t: string): string {
   return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -214,11 +227,21 @@ const NoteBodyEditor = forwardRef<EditorApi, {
   // is only a backstop against a degenerate estimate.
   const bodyHeight = useMemo(() => {
     const h = html || initialContent || '';
-    const blocks = (h.match(/<\/(p|div|h[1-6]|li|blockquote)>|<br\s*\/?>/gi) || []).length;
+    // `tr` counted the same way textContent.ts's plain-text preview treats it (one row per
+    // line). Images are stripped out along with every other tag by the plain-text pass below, so
+    // without accounting for them here explicitly they'd silently add zero height - an inserted
+    // sketch/photo could render entirely below the box's visible bounds, invisible until the
+    // user manually scrolled the WebView's own internal scroll area to find it.
+    const blocks = (h.match(/<\/(p|div|h[1-6]|li|blockquote|tr)>|<br\s*\/?>/gi) || []).length;
+    const imageCount = (h.match(/<img\b/gi) || []).length;
     const text = h.replace(/<[^>]+>/g, ' ').replace(/&[a-z#0-9]+;/gi, ' ');
     const wrapped = Math.ceil((text.trim().length || 1) / 36); // ~36 chars/line at the editor width
     const lines = Math.max(blocks + 1, wrapped);
-    return Math.min(BODY_SANITY_MAX_HEIGHT, lines * 26 + 28);
+    // ESTIMATED_SKETCH_IMAGE_HEIGHT (module-level, above) is derived from sketch.tsx's fixed 4:3
+    // canvas aspect ratio - see its comment for why this is knowable precisely rather than a
+    // guess.
+    const imagesHeight = imageCount * ESTIMATED_SKETCH_IMAGE_HEIGHT;
+    return Math.min(BODY_SANITY_MAX_HEIGHT, lines * 26 + 28 + imagesHeight);
   }, [html, initialContent]);
 
   useImperativeHandle(ref, () => ({
@@ -234,6 +257,7 @@ const NoteBodyEditor = forwardRef<EditorApi, {
     deleteColumn: () => editor.deleteColumn(),
     deleteRow: () => editor.deleteRow(),
     deleteTable: () => editor.deleteTable(),
+    insertImage: (src: string) => editor.setImage(src),
     undo: () => editor.undo(),
     redo: () => editor.redo(),
   }), [editor]);
@@ -636,18 +660,24 @@ export default function EditorScreen() {
   useFocusEffect(
     useCallback(() => {
       const refreshData = async () => {
-        // Check for pending event ID from AsyncStorage (for new notes)
+        // Check for pending event id(s) staged elsewhere: a single id via AsyncStorage (the
+        // older event-editor.tsx "Schedule New Event" flow) or several via pendingLinkedEvents.ts
+        // (voice-event.tsx, which can create multiple events at once for a multi-event/itinerary
+        // voice request). Either source must win over the "reload from server" branch below,
+        // since the server's copy of this note doesn't know about these ids yet - only this
+        // component's own state (and its next autosave) does.
         try {
           const pendingEventId = await AsyncStorage.getItem('pendingLinkedEventId');
-          if (pendingEventId) {
-            // Clear it immediately
-            await AsyncStorage.removeItem('pendingLinkedEventId');
-            // Track event scheduling if this is a new linked event
-            if (!linkedEventIdsRef.current.includes(pendingEventId)) {
+          const pendingEventIds = takePendingLinkedEventIds();
+          const newIds = [...(pendingEventId ? [pendingEventId] : []), ...(pendingEventIds || [])];
+          if (newIds.length > 0) {
+            if (pendingEventId) await AsyncStorage.removeItem('pendingLinkedEventId');
+            // Track event scheduling for each newly-linked id (skip ones already present).
+            if (newIds.some((id) => !linkedEventIdsRef.current.includes(id))) {
               trackNoteEventScheduled();
             }
-            // Append the newly scheduled event id (never replace - a note can carry many).
-            const nextIds = Array.from(new Set([...linkedEventIdsRef.current, pendingEventId]));
+            // Append the newly scheduled event id(s) - never replace, a note can carry many.
+            const nextIds = Array.from(new Set([...linkedEventIdsRef.current, ...newIds]));
             setLinkedEventIds(nextIds);
             // Fetch all linked events' details in one batch.
             const events = await decryptEventsFromServer<CalendarEvent>(await eventsApi.getBatch(nextIds));
@@ -702,16 +732,23 @@ export default function EditorScreen() {
 
   // Pick up a sketch staged by /sketch (see pendingSketch.ts) once this screen regains focus -
   // same "can't fit in route params" handoff pattern the share-intent draft and voice-event
-  // extraction already use. Same three-step sequence takePhoto/pickFromGallery use to attach an
-  // image: append to images, track it, autosave.
+  // extraction already use. Unlike takePhoto/pickFromGallery (which attach to the separate
+  // images[] gallery below the note body), a sketch is inserted inline into the note's rich text,
+  // right where the user was writing, not off in a thumbnail row.
+  //
+  // Uses the editor bridge's own insertImage (ImageBridge's setImage command) rather than
+  // appendHtmlToEditor's getHTML()+setContent() full-document-replace approach: setImage inserts
+  // at the current cursor position and moves the cursor to just after the image on its own
+  // (editor.chain().focus().setImage(...).setTextSelection(selection.to + 1).run() - see
+  // node_modules/@10play/tentap-editor/src/bridges/image.ts), which is both more reliable right
+  // after returning from another screen (no async webview round-trip to race against) and gives
+  // the "cursor lands right below the drawing" behavior for free.
   useFocusEffect(
     useCallback(() => {
       const dataUri = takePendingSketch();
       if (dataUri) {
-        const newImages = [...imagesRef.current, dataUri];
-        setImages(newImages);
-        trackNoteImageAttached(newImages.length);
-        triggerAutoSave();
+        editorApiRef.current?.insertImage(dataUri);
+        triggerAutoSave(); // also flips userEditedRef, same as every other editor mutation
       }
     }, []) // eslint-disable-line react-hooks/exhaustive-deps
   );
@@ -817,14 +854,28 @@ export default function EditorScreen() {
   };
 
   // Insert plain text (voice transcription / AI output) into the rich editor as new paragraphs.
-  const appendToEditor = async (text: string) => {
+  const appendToEditor = (text: string) => {
     const clean = (text || '').trim();
     if (!clean) return;
     const paras = clean.split(/\n{2,}/).map(p => `<p>${escapeHtml(p).replace(/\n/g, '<br>')}</p>`).join('');
-    let current = '';
-    try { current = (await editorApiRef.current?.getHTML()) || ''; } catch {}
-    const base = current.replace(/<p><\/p>\s*$/i, ''); // drop a trailing empty paragraph
+    // contentRef.current (kept fresh by the onChange handler passed to <NoteBodyEditor>, see its
+    // declaration above) rather than an editorApiRef.current.getHTML() round-trip: getHTML asks
+    // the webview bridge and can silently hang if it isn't ready yet (see syncLatestContent's
+    // comment on the exact same hazard) - a real risk right after returning from another screen
+    // (e.g. /sketch), not just while already focused on this one.
+    const base = contentRef.current.replace(/<p><\/p>\s*$/i, ''); // drop a trailing empty paragraph
     editorApiRef.current?.setContent(base + paras);
+    userEditedRef.current = true;
+    triggerAutoSave();
+  };
+
+  // Same append-at-the-end behavior as appendToEditor, but for content that's already real,
+  // trusted markup (e.g. buildChecklistHtml's output) rather than plain text that needs
+  // HTML-escaping - used by the voice checklist shortcut.
+  const appendHtmlToEditor = (html: string) => {
+    if (!html) return;
+    const base = contentRef.current.replace(/<p><\/p>\s*$/i, ''); // drop a trailing empty paragraph
+    editorApiRef.current?.setContent(base + html);
     userEditedRef.current = true;
     triggerAutoSave();
   };
@@ -1009,6 +1060,18 @@ export default function EditorScreen() {
       console.log('Transcription result:', result);
       setTranscribedText(result.text);
 
+      // "Create me a checklist: buy milk, walk the dog" - recognized locally (no AI call) and
+      // inserted as MemoPad's real interactive checklist, not run through the organize/summarize
+      // AI flow (which would only produce plain "☐ item" bullet text, not real checkboxes).
+      const checklistMatch = parseChecklistFromSpeech(result.text);
+      if (checklistMatch.isChecklist) {
+        setIsTranscribing(false);
+        appendHtmlToEditor(buildChecklistHtml(checklistMatch.items));
+        const wordCount = result.text.split(/\s+/).filter(Boolean).length;
+        trackVoiceTranscriptionInserted(lastRecordingDuration.current, wordCount);
+        return;
+      }
+
       // Before offering the usual dictation flow, ask whether this transcript is actually a
       // scheduling request ("Set a reminder to take medication every Monday", "Plan my Tokyo
       // trip: flight Friday...") - if so, hand off to the voice-event confirm screen instead of
@@ -1021,7 +1084,7 @@ export default function EditorScreen() {
           const classification = await voiceIntentApi.classify(result.text, referenceDate, timezone);
           if (classification.intent !== 'note' && classification.events.length > 0) {
             setIsTranscribing(false);
-            setPendingVoiceExtraction({ transcript: result.text, ...classification });
+            setPendingVoiceExtraction({ transcript: result.text, noteId: noteIdRef.current, ...classification });
             router.push('/voice-event');
             return;
           }
@@ -1052,7 +1115,7 @@ export default function EditorScreen() {
     
     if (action === 'keep') {
       // Just add the transcribed text as-is
-      await appendToEditor(transcribedText);
+      appendToEditor(transcribedText);
       insertTranscription(transcribedText);
       return;
     }
@@ -1060,13 +1123,13 @@ export default function EditorScreen() {
     try {
       setIsProcessingText(true);
       const result = await textProcessApi.processText(transcribedText, action);
-      await appendToEditor(result.text);
+      appendToEditor(result.text);
       insertTranscription(result.text);
     } catch (e) {
       console.error('Text processing failed:', e);
       Alert.alert('Error', 'AI processing failed. Adding original text.');
       // Fallback to original text
-      await appendToEditor(transcribedText);
+      appendToEditor(transcribedText);
       insertTranscription(transcribedText);
     } finally {
       setIsProcessingText(false);

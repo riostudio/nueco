@@ -10,6 +10,10 @@ import type { VoiceIntentResult } from './types';
 
 export interface PendingVoiceExtraction extends VoiceIntentResult {
   transcript: string;
+  // The note the user was dictating in when they triggered this extraction - empty for a
+  // brand-new note that hasn't been created locally yet. voice-event.tsx uses this to link the
+  // event(s) it creates back to that note (see pendingLinkedEvents.ts).
+  noteId: string;
 }
 
 let pending: PendingVoiceExtraction | null = null;
