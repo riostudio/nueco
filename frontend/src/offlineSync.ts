@@ -13,16 +13,17 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import NetInfo, { NetInfoState } from '@react-native-community/netinfo';
 import uuid from 'react-native-uuid';
-import { notesApi, eventsApi } from './api';
+import { notesApi, eventsApi, tripsApi } from './api';
 import { encryptNoteForServer, decryptNoteFromServer, decryptNotesFromServer } from './crypto/noteCrypto';
 import { encryptEventForServer, decryptEventsFromServer } from './crypto/eventCrypto';
+import { encryptTripForServer, decryptTripsFromServer } from './crypto/tripCrypto';
 import { incrementNoteCreatedCount } from './feedbackToast';
 import type { Recurrence } from './types';
 
 // ---- Types ----
 
 export type SyncOperation = 'create' | 'update' | 'delete';
-export type SyncEntity = 'note' | 'event';
+export type SyncEntity = 'note' | 'event' | 'trip';
 
 export interface SyncQueueItem {
   id: string;               // local temp ID (for creates) or server ID
@@ -63,6 +64,7 @@ export interface LocalEvent {
   device_calendar_event_id?: string | null;
   recurrence?: Recurrence | null;
   timezone?: string | null;
+  trip_id?: string | null; // Groups this event under a Trip - see LocalTrip below.
   // Local-only: the id returned by `Notifications.scheduleNotificationAsync` for this
   // event's reminder. Meaningful only on the device that scheduled it - never sent to or
   // read from the server (see `event-editor.tsx`'s `scheduleReminder`/`cancelLocalNotification`,
@@ -75,11 +77,22 @@ export interface LocalEvent {
   _pendingDelete?: boolean;
 }
 
+export interface LocalTrip {
+  id: string;
+  name: string;
+  description: string;
+  user_id?: string;
+  created_at: string;
+  _isLocal?: boolean;
+  _pendingDelete?: boolean;
+}
+
 // ---- Storage Keys ----
 
 const KEYS = {
   NOTES: 'offline:notes',
   EVENTS: 'offline:events',
+  TRIPS: 'offline:trips',
   SYNC_QUEUE: 'offline:syncQueue',
   LAST_SYNC: 'offline:lastSync',
 };
@@ -95,6 +108,7 @@ const FILE_DIR = `${FileSystem.documentDirectory}memopad/`;
 const FILES = {
   NOTES: `${FILE_DIR}notes.json`,
   EVENTS: `${FILE_DIR}events.json`,
+  TRIPS: `${FILE_DIR}trips.json`,
   SYNC_QUEUE: `${FILE_DIR}syncQueue.json`,
 };
 
@@ -118,6 +132,7 @@ export async function clearLocalData(): Promise<void> {
   _dirReady = false;
   _notesCache = null;
   _eventsCache = null;
+  _tripsCache = null;
 }
 
 // Reads a JSON file, falling back to (and migrating from) a legacy AsyncStorage
@@ -178,6 +193,7 @@ function isNewer(incoming: string, existing: string): boolean {
 // account's notes.
 let _notesCache: LocalNote[] | null = null;
 let _eventsCache: LocalEvent[] | null = null;
+let _tripsCache: LocalTrip[] | null = null;
 
 export async function getLocalNotes(): Promise<LocalNote[]> {
   if (_notesCache) return [..._notesCache];
@@ -201,6 +217,18 @@ export async function getLocalEvents(): Promise<LocalEvent[]> {
 export async function saveLocalEvents(events: LocalEvent[]): Promise<void> {
   _eventsCache = [...events];
   await writeJsonFile(FILES.EVENTS, events);
+}
+
+export async function getLocalTrips(): Promise<LocalTrip[]> {
+  if (_tripsCache) return [..._tripsCache];
+  const trips = await readJsonFile<LocalTrip[]>(FILES.TRIPS, [], KEYS.TRIPS);
+  _tripsCache = trips;
+  return [...trips];
+}
+
+export async function saveLocalTrips(trips: LocalTrip[]): Promise<void> {
+  _tripsCache = [...trips];
+  await writeJsonFile(FILES.TRIPS, trips);
 }
 
 // ---- Sync Queue ----
@@ -345,6 +373,24 @@ export async function deleteLocalEvent(id: string): Promise<void> {
   await saveLocalEvents(events.filter(e => e.id !== id));
 }
 
+// ---- Trip Operations (Offline-aware) ----
+
+export async function upsertLocalTrip(trip: LocalTrip): Promise<void> {
+  const trips = await getLocalTrips();
+  const idx = trips.findIndex(t => t.id === trip.id);
+  if (idx >= 0) {
+    trips[idx] = trip;
+  } else {
+    trips.push(trip);
+  }
+  await saveLocalTrips(trips);
+}
+
+export async function deleteLocalTrip(id: string): Promise<void> {
+  const trips = await getLocalTrips();
+  await saveLocalTrips(trips.filter(t => t.id !== id));
+}
+
 // Local-only patch: merges `local_notification_id` into the stored event without
 // enqueueing a sync-queue entry or touching the network - this field is never sent to
 // the server (see LocalEvent's comment above). Used by `event-editor.tsx` right after a
@@ -460,6 +506,89 @@ export async function deleteEventOffline(id: string, opts: { push?: boolean } = 
   }
 }
 
+// Offline-first trip create/update/delete - same local-write-then-enqueue-then-push-if-online
+// shape as notes/events above. Unlike createEventOffline, no caller needs the real server id
+// back synchronously (nothing links to a brand-new trip in the same action the way a note links
+// to a newly-created event), so this uses the simpler processSyncQueue()-based push createNoteOffline
+// uses rather than createEventOffline's inline immediate-push special case.
+
+export async function createTripOffline(
+  data: Omit<LocalTrip, 'id' | 'created_at' | '_isLocal'>,
+  opts: { push?: boolean } = {},
+): Promise<LocalTrip> {
+  const now = new Date().toISOString();
+  const tempId = `local_${uuid.v4()}`;
+  const trip: LocalTrip = { ...data, id: tempId, created_at: now, _isLocal: true };
+
+  await upsertLocalTrip(trip);
+  await enqueueOperation({ id: tempId, entity: 'trip', operation: 'create', payload: data, timestamp: now });
+
+  if (opts.push !== false && (await isOnline())) {
+    try {
+      await processSyncQueue();
+    } catch {
+      // Sync failed - trip is already saved locally and stays queued.
+    }
+  }
+  return trip;
+}
+
+export async function updateTripOffline(
+  id: string,
+  data: Partial<LocalTrip>,
+  opts: { push?: boolean } = {},
+): Promise<void> {
+  const now = new Date().toISOString();
+  const trips = await getLocalTrips();
+  const existing = trips.find(t => t.id === id);
+  if (!existing) return;
+
+  const updated: LocalTrip = { ...existing, ...data };
+  await upsertLocalTrip(updated);
+
+  await enqueueOperation({
+    id,
+    entity: 'trip',
+    operation: existing._isLocal ? 'create' : 'update',
+    payload: { ...existing, ...data },
+    timestamp: now,
+  });
+
+  if (opts.push !== false && (await isOnline())) {
+    try {
+      await processSyncQueue();
+    } catch {
+      // Sync failed - update is saved locally and stays queued.
+    }
+  }
+}
+
+export async function deleteTripOffline(id: string, opts: { push?: boolean } = {}): Promise<void> {
+  const trips = await getLocalTrips();
+  const existing = trips.find(t => t.id === id);
+
+  if (existing?._isLocal) {
+    await deleteLocalTrip(id);
+    const queue = await getSyncQueue();
+    await saveSyncQueue(queue.filter(q => !(q.id === id && q.entity === 'trip')));
+    return;
+  }
+
+  const updated = trips.map(t => (t.id === id ? { ...t, _pendingDelete: true } : t));
+  await saveLocalTrips(updated);
+
+  await enqueueOperation({ id, entity: 'trip', operation: 'delete', timestamp: new Date().toISOString() });
+
+  if (opts.push !== false && (await isOnline())) {
+    try {
+      await processSyncQueue();
+    } catch {
+      // Sync failed - delete stays queued, will retry via background sync.
+    }
+    await deleteLocalTrip(id);
+  }
+}
+
 // ---- Sync Engine ----
 
 let _isSyncing = false;
@@ -492,6 +621,8 @@ export async function processSyncQueue(): Promise<void> {
           await processNoteOperation(item);
         } else if (item.entity === 'event') {
           await processEventOperation(item);
+        } else if (item.entity === 'trip') {
+          await processTripOperation(item);
         }
       } catch (e) {
         console.warn(`Sync failed for ${item.entity} ${item.id}:`, e);
@@ -573,6 +704,29 @@ async function processEventOperation(item: SyncQueueItem): Promise<void> {
   }
 }
 
+async function processTripOperation(item: SyncQueueItem): Promise<void> {
+  switch (item.operation) {
+    case 'create': {
+      const created = await tripsApi.create(await encryptTripForServer(item.payload));
+      const trips = await getLocalTrips();
+      const idx = trips.findIndex(t => t.id === item.id);
+      if (idx >= 0) {
+        trips[idx] = { ...trips[idx], id: created.id, _isLocal: false };
+        await saveLocalTrips(trips);
+      }
+      break;
+    }
+    case 'update': {
+      await tripsApi.update(item.id, await encryptTripForServer(item.payload));
+      break;
+    }
+    case 'delete': {
+      await tripsApi.delete(item.id);
+      break;
+    }
+  }
+}
+
 // ---- Full Sync (pull from server + merge local) ----
 
 export async function fullSync(opts: { force?: boolean } = {}): Promise<void> {
@@ -583,11 +737,12 @@ export async function fullSync(opts: { force?: boolean } = {}): Promise<void> {
     // 1. Push pending local changes first
     await processSyncQueue();
 
-    // 2. Pull latest from server - notes and events are independent; don't let
-    //    a broken events response block notes from being saved.
-    const [notesResult, eventsResult] = await Promise.allSettled([
+    // 2. Pull latest from server - notes, events and trips are independent; don't let
+    //    a broken response for one block the others from being saved.
+    const [notesResult, eventsResult, tripsResult] = await Promise.allSettled([
       notesApi.getAll(),
       eventsApi.getAll(),
+      tripsApi.getAll(),
     ]);
 
     // 3. Merge server notes with local (timestamp wins)
@@ -640,6 +795,25 @@ export async function fullSync(opts: { force?: boolean } = {}): Promise<void> {
       await saveLocalEvents(mergedEvents);
     } else {
       console.warn('fullSync: events fetch failed:', eventsResult.reason);
+    }
+
+    // 5. Merge server trips (independently - a failure here won't lose notes/events)
+    if (tripsResult.status === 'fulfilled') {
+      const decryptedTrips = await decryptTripsFromServer(tripsResult.value);
+      const localTrips = await getLocalTrips();
+      const mergedTrips: LocalTrip[] = decryptedTrips.map((t: any) => ({ ...t, _isLocal: false }));
+
+      for (const local of localTrips) {
+        if (local._pendingDelete) continue;
+        if (local._isLocal) {
+          mergedTrips.push(local);
+          continue;
+        }
+      }
+
+      await saveLocalTrips(mergedTrips);
+    } else {
+      console.warn('fullSync: trips fetch failed:', tripsResult.reason);
     }
 
   } catch (e) {

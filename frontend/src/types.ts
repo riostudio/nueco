@@ -51,4 +51,34 @@ export interface CalendarEvent {
   created_at: string;
   recurrence: Recurrence | null;
   timezone: string | null;
+  trip_id: string | null; // Groups this event under a Trip (itinerary view) - see Trip below.
+}
+
+export interface Trip {
+  id: string;
+  name: string;
+  description: string;
+  created_at: string;
+}
+
+// One event as extracted by the backend's voice-intent classifier - see
+// backend/textai/schemas.py's VoiceEventOut. Not yet saved: the user confirms/edits before
+// this becomes a real CalendarEvent via createEventOffline.
+export interface ExtractedEvent {
+  title: string;
+  start_time: string;
+  end_time: string | null;
+  location: string;
+  recurrence: Recurrence | null;
+  confidence: 'high' | 'low';
+}
+
+export type VoiceIntent = 'note' | 'single_event' | 'multiple_events' | 'itinerary';
+
+// What the note editor's mic button gets back from POST /classify-voice-intent, before the
+// user has confirmed anything.
+export interface VoiceIntentResult {
+  intent: VoiceIntent;
+  trip_name: string | null;
+  events: ExtractedEvent[];
 }

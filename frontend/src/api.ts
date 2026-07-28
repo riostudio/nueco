@@ -3,7 +3,7 @@ import { authStorage } from './auth/storage/authStorage';
 import { BACKEND_API_BASE_URL, BACKEND_BASE_URL } from './backendBaseUrl';
 import { decryptAccountFromServer } from './crypto/accountCrypto';
 import { decryptEventsFromServer } from './crypto/eventCrypto';
-import type { CalendarEvent } from './types';
+import type { CalendarEvent, VoiceIntentResult } from './types';
 import type { NewsItem } from './dailyBrew/dailyBrew';
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
@@ -159,6 +159,17 @@ export const eventsApi = {
   // Batch fetch to fix N+1 query issue
   getBatch: (eventIds: string[]) =>
     fetchApi('/events/batch', { method: 'POST', body: JSON.stringify({ event_ids: eventIds }) }),
+};
+
+export const tripsApi = {
+  getAll: () => fetchApi('/trips'),
+  get: (id: string) => fetchApi(`/trips/${id}`),
+  create: (data: any) =>
+    fetchApi('/trips', { method: 'POST', body: JSON.stringify(data) }),
+  update: (id: string, data: any) =>
+    fetchApi(`/trips/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  delete: (id: string) =>
+    fetchApi(`/trips/${id}`, { method: 'DELETE' }),
 };
 
 export const accountApi = {
@@ -362,6 +373,34 @@ export const textProcessApi = {
     const result = await response.json();
     console.log('Text processing result length:', result.text.length);
     return result;
+  },
+};
+
+export const voiceIntentApi = {
+  /** Classifies a note-editor voice-memo transcript as plain dictation vs. one/many calendar
+   * events vs. an itinerary, extracting structured events for the non-dictation cases. Does no
+   * date-math or validation of its own - the caller (editor.tsx / voice-event.tsx) must let the
+   * user confirm/edit the result before actually creating anything through the normal
+   * createEventOffline/createTripOffline paths. */
+  classify: async (transcript: string, referenceDate: string, timezone: string): Promise<VoiceIntentResult> => {
+    const authHeaders = await getAuthHeaders();
+
+    const response = await fetch(`${BACKEND_API_BASE_URL}/classify-voice-intent`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...authHeaders,
+      },
+      body: JSON.stringify({ transcript, reference_date: referenceDate, timezone }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Voice intent classification error:', errorText);
+      throw new Error(`Voice intent classification failed: ${response.status}`);
+    }
+
+    return response.json();
   },
 };
 

@@ -49,6 +49,9 @@ function AppWithAnalytics() {
         <Stack.Screen name="editor" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="share-target" options={{ presentation: 'modal' }} />
         <Stack.Screen name="event-editor" options={{ presentation: 'modal' }} />
+        <Stack.Screen name="trips" options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="trip-editor" options={{ presentation: 'modal' }} />
+        <Stack.Screen name="sketch" options={{ presentation: 'modal' }} />
         <Stack.Screen name="daily-verse" options={{ presentation: 'modal' }} />
         <Stack.Screen name="settings" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="change-password" options={{ animation: 'slide_from_right' }} />
