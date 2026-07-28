@@ -272,7 +272,17 @@ export default function EventsScreen() {
     <SafeAreaView style={s.container} edges={['top']}>
       <View style={s.header}>
         <Text style={s.headerTitle}>Events</Text>
-        <UserAvatar size={36} />
+        <View style={s.headerActions}>
+          <TouchableOpacity
+            testID="trips-btn"
+            style={s.headerIconBtn}
+            onPress={() => router.push('/trips')}
+            activeOpacity={0.7}
+          >
+            <MaterialIcons name="luggage" size={24} color={C.text} />
+          </TouchableOpacity>
+          <UserAvatar size={36} />
+        </View>
       </View>
 
       {/* Filter Toggle */}
@@ -446,6 +456,12 @@ const s = StyleSheet.create({
     paddingBottom: 12 
   },
   headerTitle: { fontSize: 34, fontWeight: '700', color: C.text },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  headerIconBtn: {
+    width: 40, height: 40, borderRadius: 20,
+    justifyContent: 'center', alignItems: 'center',
+    backgroundColor: C.surface, borderWidth: borderWidth.regular, borderColor: C.border,
+  },
   filterRow: { marginHorizontal: 20, marginBottom: 12 },
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 20 },

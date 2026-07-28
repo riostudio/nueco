@@ -15,7 +15,9 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as WebBrowser from 'expo-web-browser';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { notesApi, eventsApi, transcribeApi, textProcessApi, attachmentsApi, uploadAttachmentWithProgress, type UploadFile } from '../src/api';
+import { notesApi, eventsApi, transcribeApi, textProcessApi, voiceIntentApi, attachmentsApi, uploadAttachmentWithProgress, type UploadFile } from '../src/api';
+import { setPendingVoiceExtraction } from '../src/pendingVoiceEvents';
+import { takePendingSketch } from '../src/pendingSketch';
 import { decryptEventsFromServer } from '../src/crypto/eventCrypto';
 import { RadialProgress, SharedPostCard, Button } from '../src/components';
 import { decryptNoteFromServer } from '../src/crypto/noteCrypto';
@@ -25,6 +27,9 @@ import { parseSourcePost, serializeSourcePost, type SourcePost } from '../src/sh
 import { unfurl, needsUnfurl } from '../src/share/unfurl';
 import { plainTextFromContent } from '../src/textContent';
 import { RichText, useEditorBridge, useEditorContent, useBridgeState, TenTapStartKit, PlaceholderBridge } from '@10play/tentap-editor';
+import { TableBridge } from '../src/editor/tableBridge';
+import { NotePlaceholderBridge } from '../src/editor/placeholderBridge';
+import { customEditorHtml } from '../src/editor/customEditorHtml';
 import { Tag, CalendarEvent, Attachment } from '../src/types';
 import { TAG_COLORS, C, radius } from '../src/theme';
 import { formatRecurrenceSummary } from '../src/recurrence';
@@ -99,11 +104,19 @@ type EditorApi = {
   toggleBold: () => void;
   toggleItalic: () => void;
   toggleBulletList: () => void;
+  toggleTaskList: () => void;
+  insertTable: () => void;
+  addColumnAfter: () => void;
+  addRowAfter: () => void;
+  deleteColumn: () => void;
+  deleteRow: () => void;
+  deleteTable: () => void;
   undo: () => void;
   redo: () => void;
 };
 type EditorUiState = {
   isFocused: boolean; isBoldActive: boolean; isItalicActive: boolean; isBulletListActive: boolean;
+  isTaskListActive: boolean; isTableActive: boolean;
   isReady: boolean; canUndo: boolean; canRedo: boolean;
 };
 
@@ -139,18 +152,33 @@ function animateSheet(backdrop: Animated.Value, translateY: Animated.Value, open
   ]).start();
 }
 
-// Same default extension set TenTap ships (bold/lists/links/etc.), with the placeholder text
-// configured - the default kit includes PlaceholderBridge already, just unconfigured (blank).
-const noteBridgeExtensions = TenTapStartKit.map((ext) =>
-  ext === PlaceholderBridge ? ext.configureExtension({ placeholder: 'What do you have in mind' }) : ext
-);
+// Same default extension set TenTap ships (bold/lists/links/etc.), with the stock
+// PlaceholderBridge swapped for NotePlaceholderBridge - the stock one (plain string, unconfigured
+// here) shows its ghost text on any empty node the cursor sits in, including a freshly-toggled
+// checklist's empty item, not just a blank note. See src/editor/placeholderBridgeConfig.ts.
+const noteBridgeExtensions = [
+  ...TenTapStartKit.filter((ext) => ext !== PlaceholderBridge),
+  TableBridge,
+  NotePlaceholderBridge,
+];
 
 const NoteBodyEditor = forwardRef<EditorApi, {
   initialContent: string;
   onChange: (html: string) => void;
   onStateChange: (s: EditorUiState) => void;
 }>(function NoteBodyEditor({ initialContent, onChange, onStateChange }, ref) {
-  const editor = useEditorBridge({ autofocus: false, avoidIosKeyboard: true, initialContent, bridgeExtensions: noteBridgeExtensions });
+  const editor = useEditorBridge({
+    autofocus: false,
+    avoidIosKeyboard: true,
+    initialContent,
+    bridgeExtensions: noteBridgeExtensions,
+    // The default bundled web editor only knows TenTapStartKit's own built-in bridges - it has
+    // no idea TableBridge (a custom extension, see src/editor/tableBridge.ts) exists, so
+    // `insertTable()` etc. would silently no-op without this. customEditorHtml is our own build
+    // of the web-side editor (webEditor/) that includes it too - see
+    // scripts/buildWebEditorHtml.js; re-run `npm run build:web-editor` after editing tableBridge.ts.
+    customSource: customEditorHtml,
+  });
   const state = useBridgeState(editor);
   const html = useEditorContent(editor, { type: 'html', debounceInterval: 400 });
 
@@ -199,6 +227,13 @@ const NoteBodyEditor = forwardRef<EditorApi, {
     toggleBold: () => editor.toggleBold(),
     toggleItalic: () => editor.toggleItalic(),
     toggleBulletList: () => editor.toggleBulletList(),
+    toggleTaskList: () => editor.toggleTaskList(),
+    insertTable: () => editor.insertTable(),
+    addColumnAfter: () => editor.addColumnAfter(),
+    addRowAfter: () => editor.addRowAfter(),
+    deleteColumn: () => editor.deleteColumn(),
+    deleteRow: () => editor.deleteRow(),
+    deleteTable: () => editor.deleteTable(),
     undo: () => editor.undo(),
     redo: () => editor.redo(),
   }), [editor]);
@@ -210,11 +245,13 @@ const NoteBodyEditor = forwardRef<EditorApi, {
       isBoldActive: state.isBoldActive,
       isItalicActive: state.isItalicActive,
       isBulletListActive: state.isBulletListActive,
+      isTaskListActive: state.isTaskListActive,
+      isTableActive: state.isTableActive,
       isReady: bridgeReady,
       canUndo: state.canUndo,
       canRedo: state.canRedo,
     });
-  }, [state.isFocused, state.isBoldActive, state.isItalicActive, state.isBulletListActive, state.canUndo, state.canRedo, bridgeReady]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [state.isFocused, state.isBoldActive, state.isItalicActive, state.isBulletListActive, state.isTaskListActive, state.isTableActive, state.canUndo, state.canRedo, bridgeReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <View style={s.richTextWrap}>
@@ -289,7 +326,8 @@ export default function EditorScreen() {
   // (below). We drive it imperatively via editorApiRef and mirror its UI state for the toolbar.
   const editorApiRef = useRef<EditorApi | null>(null);
   const [editorUi, setEditorUi] = useState<EditorUiState>({
-    isFocused: false, isBoldActive: false, isItalicActive: false, isBulletListActive: false,
+    isFocused: false, isBoldActive: false, isItalicActive: false, isBulletListActive: false, isTaskListActive: false,
+    isTableActive: false,
     isReady: false, canUndo: false, canRedo: false,
   });
   // HTML to load into the editor once the note is available (null until loaded - editor waits).
@@ -662,6 +700,22 @@ export default function EditorScreen() {
     }, [])
   );
 
+  // Pick up a sketch staged by /sketch (see pendingSketch.ts) once this screen regains focus -
+  // same "can't fit in route params" handoff pattern the share-intent draft and voice-event
+  // extraction already use. Same three-step sequence takePhoto/pickFromGallery use to attach an
+  // image: append to images, track it, autosave.
+  useFocusEffect(
+    useCallback(() => {
+      const dataUri = takePendingSketch();
+      if (dataUri) {
+        const newImages = [...imagesRef.current, dataUri];
+        setImages(newImages);
+        trackNoteImageAttached(newImages.length);
+        triggerAutoSave();
+      }
+    }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  );
+
   // Pull the newest HTML straight from the editor bridge. The reactive contentRef lags by the
   // editor's debounce, so persisting without this could write stale content. Raced against a
   // short timeout: if the webview bridge isn't ready yet, getHTML's message is silently dropped
@@ -953,9 +1007,30 @@ export default function EditorScreen() {
       console.log('Starting transcription for:', uri);
       const result = await transcribeApi.transcribe(uri);
       console.log('Transcription result:', result);
-      
-      // Store the transcribed text and show AI suggestion modal
       setTranscribedText(result.text);
+
+      // Before offering the usual dictation flow, ask whether this transcript is actually a
+      // scheduling request ("Set a reminder to take medication every Monday", "Plan my Tokyo
+      // trip: flight Friday...") - if so, hand off to the voice-event confirm screen instead of
+      // inserting the words into the note. A classification failure (network hiccup, etc.) must
+      // never block ordinary dictation, so it just falls through to the existing flow below.
+      if (result.text.trim()) {
+        try {
+          const referenceDate = new Date().toISOString().slice(0, 10); // device's local "today"
+          const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+          const classification = await voiceIntentApi.classify(result.text, referenceDate, timezone);
+          if (classification.intent !== 'note' && classification.events.length > 0) {
+            setIsTranscribing(false);
+            setPendingVoiceExtraction({ transcript: result.text, ...classification });
+            router.push('/voice-event');
+            return;
+          }
+        } catch (e) {
+          console.error('Voice intent classification failed, falling back to dictation:', e);
+        }
+      }
+
+      // Show AI suggestion modal for ordinary dictation
       setIsTranscribing(false);
       setShowAiSuggestion(true);
     } catch (e) {
@@ -1708,30 +1783,53 @@ export default function EditorScreen() {
               editorUi.isFocused is unusable here (see plainInputFocused's declaration for why) -
               keyboard-visible-but-not-a-plain-input is the reliable signal instead. */}
           {isKeyboardVisible && !plainInputFocused && Platform.OS !== 'web' && (
-            <View style={s.formatBar}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={s.formatBar}
+              contentContainerStyle={s.formatBarContent}
+            >
               <TouchableOpacity
                 testID="fmt-bold"
                 style={[s.fmtBtn, editorUi.isBoldActive && s.fmtBtnActive]}
                 onPress={() => editorApiRef.current?.toggleBold()}
               >
-                <Text style={[s.fmtBold, editorUi.isBoldActive && s.fmtTextActive]}>B</Text>
-                <Text style={[s.fmtLabel, editorUi.isBoldActive && s.fmtLabelActive]}>Bold</Text>
+                <MaterialIcons name="format-bold" size={24} color={editorUi.isBoldActive ? C.primaryFg : C.text} />
               </TouchableOpacity>
               <TouchableOpacity
                 testID="fmt-italic"
                 style={[s.fmtBtn, editorUi.isItalicActive && s.fmtBtnActive]}
                 onPress={() => editorApiRef.current?.toggleItalic()}
               >
-                <Text style={[s.fmtItalic, editorUi.isItalicActive && s.fmtTextActive]}>I</Text>
-                <Text style={[s.fmtLabel, editorUi.isItalicActive && s.fmtLabelActive]}>Italic</Text>
+                <MaterialIcons name="format-italic" size={24} color={editorUi.isItalicActive ? C.primaryFg : C.text} />
               </TouchableOpacity>
               <TouchableOpacity
                 testID="fmt-bullet"
                 style={[s.fmtBtn, editorUi.isBulletListActive && s.fmtBtnActive]}
                 onPress={() => editorApiRef.current?.toggleBulletList()}
               >
-                <MaterialIcons name="format-list-bulleted" size={22} color={editorUi.isBulletListActive ? C.primary : C.text} />
-                <Text style={[s.fmtLabel, editorUi.isBulletListActive && s.fmtLabelActive]}>List</Text>
+                <MaterialIcons name="format-list-bulleted" size={24} color={editorUi.isBulletListActive ? C.primaryFg : C.text} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="fmt-checklist"
+                style={[s.fmtBtn, editorUi.isTaskListActive && s.fmtBtnActive]}
+                onPress={() => editorApiRef.current?.toggleTaskList()}
+              >
+                <MaterialIcons name="checklist" size={24} color={editorUi.isTaskListActive ? C.primaryFg : C.text} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="fmt-table"
+                style={[s.fmtBtn, editorUi.isTableActive && s.fmtBtnActive]}
+                onPress={() => editorApiRef.current?.insertTable()}
+              >
+                <MaterialIcons name="table-chart" size={24} color={editorUi.isTableActive ? C.primaryFg : C.text} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="fmt-draw"
+                style={s.fmtBtn}
+                onPress={() => router.push('/sketch')}
+              >
+                <MaterialIcons name="draw" size={24} color={C.text} />
               </TouchableOpacity>
               <TouchableOpacity
                 testID="fmt-undo"
@@ -1739,8 +1837,7 @@ export default function EditorScreen() {
                 onPress={() => editorApiRef.current?.undo()}
                 disabled={!editorUi.canUndo}
               >
-                <MaterialIcons name="undo" size={22} color={C.text} />
-                <Text style={s.fmtLabel}>Undo</Text>
+                <MaterialIcons name="undo" size={24} color={C.text} />
               </TouchableOpacity>
               <TouchableOpacity
                 testID="fmt-redo"
@@ -1748,12 +1845,45 @@ export default function EditorScreen() {
                 onPress={() => editorApiRef.current?.redo()}
                 disabled={!editorUi.canRedo}
               >
-                <MaterialIcons name="redo" size={22} color={C.text} />
-                <Text style={s.fmtLabel}>Redo</Text>
+                <MaterialIcons name="redo" size={24} color={C.text} />
               </TouchableOpacity>
-            </View>
+            </ScrollView>
           )}
-          
+
+          {/* Table row/column controls - only meaningful with the cursor inside a table, so
+              there's no other affordance for these once the "Table" button above has inserted
+              one. Horizontally scrollable (unlike the fixed-width format bar above) since these
+              are supplementary and don't need to all be visible without scrolling. */}
+          {isKeyboardVisible && !plainInputFocused && editorUi.isTableActive && Platform.OS !== 'web' && (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={s.tableControlsBar}
+              contentContainerStyle={s.tableControlsBarContent}
+            >
+              <TouchableOpacity testID="fmt-table-add-row" style={s.tableCtrlBtn} onPress={() => editorApiRef.current?.addRowAfter()}>
+                <MaterialIcons name="table-rows" size={20} color={C.text} />
+                <Text style={s.tableCtrlLabel}>Add Row</Text>
+              </TouchableOpacity>
+              <TouchableOpacity testID="fmt-table-add-col" style={s.tableCtrlBtn} onPress={() => editorApiRef.current?.addColumnAfter()}>
+                <MaterialIcons name="view-column" size={20} color={C.text} />
+                <Text style={s.tableCtrlLabel}>Add Col</Text>
+              </TouchableOpacity>
+              <TouchableOpacity testID="fmt-table-delete-row" style={s.tableCtrlBtn} onPress={() => editorApiRef.current?.deleteRow()}>
+                <MaterialIcons name="table-rows" size={20} color={C.error} />
+                <Text style={[s.tableCtrlLabel, { color: C.error }]}>Del Row</Text>
+              </TouchableOpacity>
+              <TouchableOpacity testID="fmt-table-delete-col" style={s.tableCtrlBtn} onPress={() => editorApiRef.current?.deleteColumn()}>
+                <MaterialIcons name="view-column" size={20} color={C.error} />
+                <Text style={[s.tableCtrlLabel, { color: C.error }]}>Del Col</Text>
+              </TouchableOpacity>
+              <TouchableOpacity testID="fmt-table-delete" style={s.tableCtrlBtn} onPress={() => editorApiRef.current?.deleteTable()}>
+                <MaterialIcons name="delete-outline" size={20} color={C.error} />
+                <Text style={[s.tableCtrlLabel, { color: C.error }]}>Delete Table</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          )}
+
           {/* Icon action row - Attachment, Add Tag, Schedule, Link Event, Pin, Image, Share, Delete
               (once saved). Icon-only, spread across the full row width; still horizontally
               scrollable so all of them stay reachable if they don't all fit on a narrow screen.
@@ -1934,6 +2064,15 @@ export default function EditorScreen() {
               <TouchableOpacity style={s.imagePickerOption} onPress={pickFromGallery}>
                 <MaterialIcons name="photo-library" size={28} color={C.secondary} />
                 <Text style={s.imagePickerOptionText}>Choose from Gallery</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                testID="draw-sketch-btn"
+                style={s.imagePickerOption}
+                onPress={() => { setShowImagePicker(false); router.push('/sketch'); }}
+              >
+                <MaterialIcons name="draw" size={28} color={C.secondary} />
+                <Text style={s.imagePickerOptionText}>Draw</Text>
               </TouchableOpacity>
             </TouchableOpacity>
           </Animated.View>
@@ -2254,14 +2393,20 @@ const s = StyleSheet.create({
     borderTopWidth: 1, borderTopColor: C.borderSub + '40',
     backgroundColor: C.bg,
   },
+  // Icon-only, max width 100% (never wider than the screen) - scrolls horizontally on narrow
+  // screens or when more icons are added, rather than squeezing/wrapping.
   formatBar: {
-    flexDirection: 'row', backgroundColor: C.surface,
+    maxWidth: '100%', backgroundColor: C.surface,
     borderBottomWidth: 1, borderBottomColor: C.borderSub + '40',
   },
+  formatBarContent: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 8, gap: 4,
+  },
+  // 44x44 tap target around a 24x24 icon.
   fmtBtn: {
-    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    paddingVertical: 10, gap: 4,
-    borderRightWidth: 1, borderRightColor: C.borderSub + '20',
+    width: 44, height: 44, borderRadius: 8,
+    alignItems: 'center', justifyContent: 'center',
   },
   fmtBtnActive: {
     backgroundColor: C.primary,
@@ -2269,11 +2414,17 @@ const s = StyleSheet.create({
   fmtBtnDisabled: {
     opacity: 0.35,
   },
-  fmtBold: { fontSize: 18, fontWeight: '900', color: C.text },
-  fmtItalic: { fontSize: 18, fontStyle: 'italic', fontWeight: '600', color: C.text },
-  fmtLabel: { fontSize: 14, color: C.textSec },
-  fmtTextActive: { color: C.primaryFg },
-  fmtLabelActive: { color: C.primaryFg },
+  tableControlsBar: {
+    backgroundColor: C.surface,
+    borderBottomWidth: 1, borderBottomColor: C.borderSub + '40',
+  },
+  tableControlsBarContent: { paddingHorizontal: 8, paddingVertical: 8, gap: 8 },
+  tableCtrlBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingVertical: 6, paddingHorizontal: 10, borderRadius: 8,
+    backgroundColor: C.bg, borderWidth: 1, borderColor: C.borderSub + '30',
+  },
+  tableCtrlLabel: { fontSize: 12, color: C.text },
   voiceBar: {
     paddingHorizontal: 24, paddingVertical: 12,
     backgroundColor: C.bg,

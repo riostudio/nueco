@@ -54,7 +54,9 @@ export function textToHtml(text: string): string {
 export function plainTextFromContent(content: string): string {
   let s = stripSourceMarker(content || '');
   // Block boundaries → newlines so words don't run together.
-  s = s.replace(/<\/(p|div|h[1-6]|li|blockquote)>/gi, '\n').replace(/<br\s*\/?>/gi, '\n');
+  // `tr` gives one table row per line (`td`/`th` deliberately excluded - fragmenting individual
+  // cells onto their own lines would be finer-grained than any other block boundary here).
+  s = s.replace(/<\/(p|div|h[1-6]|li|blockquote|tr)>/gi, '\n').replace(/<br\s*\/?>/gi, '\n');
   // Drop all remaining tags (and any stray HTML comments).
   s = s.replace(/<[^>]+>/g, '');
   s = decodeEntities(s);

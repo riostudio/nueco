@@ -34,6 +34,11 @@ function main() {
     ok('multi <p> → newlines', plainTextFromContent('<p>one</p><p>two</p>') === 'one\ntwo');
     ok('entities decoded', plainTextFromContent('<p>Caf&#233; &amp; tea &#128512;</p>') === 'Café & tea 😀', plainTextFromContent('<p>Caf&#233; &amp; tea &#128512;</p>'));
     ok('nbsp → space, collapsed', plainTextFromContent('<p>a&nbsp;&nbsp;b</p>') === 'a b');
+    ok(
+      'table → one row per line',
+      plainTextFromContent('<table><tbody><tr><th>Item</th><th>Qty</th></tr><tr><td>Eggs</td><td>12</td></tr></tbody></table>') === 'ItemQty\nEggs12',
+      plainTextFromContent('<table><tbody><tr><th>Item</th><th>Qty</th></tr><tr><td>Eggs</td><td>12</td></tr></tbody></table>'),
+    );
   }
 
   console.log('plainTextFromContent - legacy plain text:');
