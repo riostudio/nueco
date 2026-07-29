@@ -647,7 +647,15 @@ export default function EditorScreen() {
     if (missingIds.length === 0) return;
     eventsApi.getBatch(missingIds)
       .then(decryptEventsFromServer<CalendarEvent>)
-      .then(fetched => setLinkedEvents(prev => [...prev.filter(ev => linkedEventIds.includes(ev.id)), ...fetched]))
+      .then(fetched => setLinkedEvents(prev => {
+        // Dedupe against `prev` by id: another in-flight fetch (e.g. the focus-effect handler's
+        // own getBatch for the same newly-added id) can resolve and set `linkedEvents` in between
+        // this effect starting and this .then() running, so `fetched` may already be in `prev` -
+        // without this, the same event was appended twice ("2 linked events" for one save).
+        const keep = prev.filter(ev => linkedEventIds.includes(ev.id));
+        const keepIds = new Set(keep.map(ev => ev.id));
+        return [...keep, ...fetched.filter(ev => !keepIds.has(ev.id))];
+      }))
       .catch(e => console.error('Failed to load event:', e));
     // `linkedEvents` intentionally excluded from deps below: this effect only needs to react to
     // `linkedEventIds` changing, and reads the current `linkedEvents` value each run via closure -
