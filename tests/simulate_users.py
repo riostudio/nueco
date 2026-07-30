@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-MemoPad synthetic-user simulation + evaluation runner (local-isolated mode).
+Nueco synthetic-user simulation + evaluation runner (local-isolated mode).
 
 Covers:
   Agent 1 - generates 20 synthetic users across 8 personas (fixtures).
@@ -80,7 +80,7 @@ def generate_fixtures() -> list[dict]:
                 "id": uid,
                 "persona": persona,
                 "name": f"{persona.title()} User {uid}",
-                "email": f"testuser_{uid}@memopad-sim.com",
+                "email": f"testuser_{uid}@nueco-sim.com",
                 "forwarded_for": f"10.{(uid // 256) % 256}.{uid % 256}.{rng.randint(1, 254)}",
                 "sample_kind": kind,
                 "sample_content": rng.choice(POOLS[kind]),
@@ -366,9 +366,9 @@ async def security_pass():
                          "observed": observed, "status": status, "severity": severity, "detail": detail})
 
     m = []
-    ua = {"id": 901, "name": "Alice", "email": "testuser_sec_a@memopad-sim.com",
+    ua = {"id": 901, "name": "Alice", "email": "testuser_sec_a@nueco-sim.com",
           "forwarded_for": "172.16.0.1"}
-    ub = {"id": 902, "name": "Bob", "email": "testuser_sec_b@memopad-sim.com",
+    ub = {"id": 902, "name": "Bob", "email": "testuser_sec_b@nueco-sim.com",
           "forwarded_for": "172.16.0.2"}
     ca, ha, uida, refresh_a = await auth_flow(ua, m)
     cb, hb, uidb, _ = await auth_flow(ub, m)
@@ -410,7 +410,7 @@ async def security_pass():
           f"status={r.status_code}", "PASS" if r.status_code == exp else "FAIL", "high")
 
     # brute force -> account lock after 5 failures
-    bf = {"id": 903, "name": "Carol", "email": "testuser_sec_c@memopad-sim.com", "forwarded_for": "172.16.0.3"}
+    bf = {"id": 903, "name": "Carol", "email": "testuser_sec_c@nueco-sim.com", "forwarded_for": "172.16.0.3"}
     cc, _, _, _ = await auth_flow(bf, m)  # verified user
     statuses, bodies = [], []
     for _ in range(6):
@@ -455,7 +455,7 @@ async def security_pass():
       "Cannot be validated in-process; verify on Railway (HSTS / no http listener).")
 
     # password requirements at registration
-    weak = await ca.post("/api/auth/signup", json={"name": "w", "email": "weakpw@memopad-sim.com",
+    weak = await ca.post("/api/auth/signup", json={"name": "w", "email": "weakpw@nueco-sim.com",
                                                     "password": "short", "confirm_password": "short"})
     f("AUTH-09", "Password Policy", "Password < 8 chars rejected at signup",
       f"status={weak.status_code}", "PASS" if weak.status_code == 400 else "FAIL", "medium")

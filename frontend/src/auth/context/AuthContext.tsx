@@ -24,7 +24,7 @@ import { runLoginWorkflow } from '../loginWorkflow';
 // no-op pass-through, so `user.name` is still ciphertext - pushing that back as "plaintext"
 // would permanently bake the ciphertext in as the display name with no way to recover it.
 // Front-loads the calendar permission prompt right after login instead of waiting for the user
-// to first create/edit an event - so event-editor's device-calendar write and MemoPad's own
+// to first create/edit an event - so event-editor's device-calendar write and Nueco's own
 // sync queue both have access from the start. Safe to call on every login: if permission was
 // already granted (or permanently denied), requestCalendarPermissionsAsync resolves immediately
 // with no UI, same as the OS does for any repeat request.

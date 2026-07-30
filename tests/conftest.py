@@ -1,5 +1,5 @@
 """
-pytest configuration + fixtures for the MemoPad simulation suite.
+pytest configuration + fixtures for the Nueco simulation suite.
 
 Boots the real backend in-process against an in-memory Mongo (see harness.py) and
 exposes the simulation results to the eval suites. Connection concurrency is capped

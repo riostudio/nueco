@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Minimal LAN host for the MemoPad staging APK.
+Minimal LAN host for the Nueco staging APK.
 
 Serves ONE apk file at a fixed path (no directory listing, so nothing else in the
 repo — secrets, node_modules — is exposed). Lets a phone on the same network
@@ -10,14 +10,14 @@ Usage:
   python serve_apk.py                      # serves frontend/build-staging-192-168-20-32.apk on 0.0.0.0:8765
   python serve_apk.py --apk path/to.apk --port 8765 --host 0.0.0.0
 
-Then on the device's browser:  http://192.168.20.32:8765/memopad-staging.apk
+Then on the device's browser:  http://192.168.20.32:8765/nueco-staging.apk
 """
 import argparse
 import os
 import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-DOWNLOAD_PATH = "/memopad-staging.apk"
+DOWNLOAD_PATH = "/nueco-staging.apk"
 APK_MIME = "application/vnd.android.package-archive"
 
 
@@ -25,16 +25,16 @@ def make_handler(apk_path: str):
     apk_name = os.path.basename(apk_path)
 
     class Handler(BaseHTTPRequestHandler):
-        server_version = "memopad-apk-host"
+        server_version = "nueco-apk-host"
 
         def _send_index(self):
             size_mb = os.path.getsize(apk_path) / (1024 * 1024)
             body = (
                 "<!doctype html><meta name='viewport' content='width=device-width,initial-scale=1'>"
-                "<title>MemoPad staging</title>"
+                "<title>Nueco staging</title>"
                 "<div style='font-family:-apple-system,sans-serif;max-width:480px;margin:48px auto;"
                 "padding:0 20px;text-align:center'>"
-                "<h1 style='color:#D84315'>MemoPad — staging build</h1>"
+                "<h1 style='color:#D84315'>Nueco — staging build</h1>"
                 f"<p>{apk_name} · {size_mb:.0f} MB</p>"
                 f"<p><a href='{DOWNLOAD_PATH}' style='display:inline-block;padding:16px 32px;"
                 "background:#D84315;color:#fff;text-decoration:none;border-radius:12px;"
@@ -94,7 +94,7 @@ def lan_ip() -> str:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--apk", default="frontend/memopad-staging.apk")
+    ap.add_argument("--apk", default="frontend/nueco-staging.apk")
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8765)
     args = ap.parse_args()

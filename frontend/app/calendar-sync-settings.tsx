@@ -39,7 +39,7 @@ export default function CalendarSyncSettingsScreen() {
   const showSyncInfo = useCallback(() => {
     Alert.alert(
       'About Calendar Sync',
-      "New, changed, and deleted events sync in whenever you open MemoPad. A best-effort background sync also runs periodically, but the OS doesn't guarantee exact timing - opening the app (or tapping Sync Now below) is what reliably keeps things up to date.\n\nIf a synced calendar includes events other people created or invited you to (for example a shared work calendar or a meeting invite), those event details are copied into MemoPad too.",
+      "New, changed, and deleted events sync in whenever you open Nueco. A best-effort background sync also runs periodically, but the OS doesn't guarantee exact timing - opening the app (or tapping Sync Now below) is what reliably keeps things up to date.\n\nIf a synced calendar includes events other people created or invited you to (for example a shared work calendar or a meeting invite), those event details are copied into Nueco too.",
     );
   }, []);
 

@@ -1,12 +1,12 @@
 /**
  * calendarSync.ts
  * Opt-in background + foreground sync of device calendar events (Apple/Google/Outlook - whatever
- * the OS Calendar app knows about) into MemoPad, layered on top of the manual "Import from
+ * the OS Calendar app knows about) into Nueco, layered on top of the manual "Import from
  * Calendar" picker in event-editor.tsx. Disabled and empty-selection by default.
  *
- * Matching a device event to a MemoPad event reuses the existing `device_calendar_event_id` field
+ * Matching a device event to a Nueco event reuses the existing `device_calendar_event_id` field
  * (the same one the manual import + device-calendar export paths already populate). A device event
- * that disappears at the source has its MemoPad copy deleted too (via the offline queue, so it
+ * that disappears at the source has its Nueco copy deleted too (via the offline queue, so it
  * survives being offline) - but only when we're confident the disappearance is real:
  *  - the selected-calendar set must be unchanged since the last run (otherwise a user deselecting
  *    a calendar in settings would look identical to every one of its events being deleted), and
@@ -96,7 +96,7 @@ async function readHashes(): Promise<Record<string, string>> {
 /**
  * Pull in new/changed events from the selected device calendars. Safe to call often - it's a
  * no-op unless sync is enabled with at least one calendar selected, and throttles to once per
- * `THROTTLE_MS` unless `force` is passed. Never deletes a MemoPad event.
+ * `THROTTLE_MS` unless `force` is passed. Never deletes a Nueco event.
  */
 export async function runCalendarSync(opts: { force?: boolean } = {}): Promise<void> {
   if (!ExpoCalendar || Platform.OS === 'web') return;
@@ -127,7 +127,7 @@ export async function runCalendarSync(opts: { force?: boolean } = {}): Promise<v
       const rangeEnd = new Date(); rangeEnd.setDate(rangeEnd.getDate() + WINDOW_FUTURE_DAYS);
       const deviceEvents = await ExpoCalendar.getEventsAsync(calendarIds, rangeStart, rangeEnd);
 
-      // Existing MemoPad events, keyed by the device event id they were created/synced from.
+      // Existing Nueco events, keyed by the device event id they were created/synced from.
       // getAll() is capped at 100 server-side (pre-existing limit, not addressed here) - a user
       // with more than 100 real events could see an already-imported device event re-created.
       const memoEvents: any[] = await eventsApi.getAll();

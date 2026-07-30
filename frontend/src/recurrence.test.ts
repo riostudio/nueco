@@ -5,7 +5,7 @@
  * These deliberately test day-granularity behavior only (see recurrence.ts's
  * top-of-file comment) - this is not a test of exact reminder-firing instants,
  * that's covered server-side against `next_occurrence_on_or_after` in
- * backend/tests/test_memopad_apis.py.
+ * backend/tests/test_nueco_apis.py.
  */
 import { nextOccurrenceOnOrAfter, occursOnDay, formatRecurrenceSummary } from './recurrence.ts';
 import type { CalendarEvent, Recurrence } from './types.ts';

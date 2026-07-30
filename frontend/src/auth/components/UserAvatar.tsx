@@ -7,7 +7,7 @@ import { useAuth } from '../context/AuthContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const C = {
-  primary: '#D84315',
+  primary: '#0A5443',
   primaryFg: '#FFFFFF',
   success: '#4CAF50',
   successFg: '#FFFFFF',

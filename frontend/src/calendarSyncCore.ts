@@ -1,6 +1,6 @@
 /**
  * Pure decision logic for calendarSync.ts: given the current device-calendar read and the
- * previously-recorded sync state, decides which MemoPad events to create/update/delete. No
+ * previously-recorded sync state, decides which Nueco events to create/update/delete. No
  * AsyncStorage/ExpoCalendar/network calls in this file, so the sync rules - including the
  * conservative-deletion safety check - are unit-testable without a device SDK or backend.
  */
@@ -93,7 +93,7 @@ export function planCalendarSync(
       end_time: new Date(de.endDate).toISOString(),
     };
     if (match) {
-      // Deliberately not sending reminder_minutes/linked_note_ids, so a user's MemoPad-side
+      // Deliberately not sending reminder_minutes/linked_note_ids, so a user's Nueco-side
       // customizations on this event survive a resync.
       actions.push({ kind: 'update', memoId: match.id, deviceId: de.id, payload });
     } else {
@@ -105,7 +105,7 @@ export function planCalendarSync(
     }
   }
 
-  // Device events that disappeared since last sync: delete their MemoPad copy, but only when both
+  // Device events that disappeared since last sync: delete their Nueco copy, but only when both
   // safety conditions hold (unchanged calendar selection, non-empty fetch) - otherwise just let the
   // hash map re-baseline from this run's results, so a real deletion is still caught on a later,
   // safe-to-act-on run. Assumed-successful deletes are simply absent from `nextHashes` (the caller
@@ -114,7 +114,7 @@ export function planCalendarSync(
     for (const deviceId of Object.keys(prevHashes)) {
       if (deviceId in nextHashes) continue; // still present at the source
       const match = memoEventsByDeviceId.get(deviceId);
-      if (!match) continue; // no MemoPad copy (already deleted, or never matched)
+      if (!match) continue; // no Nueco copy (already deleted, or never matched)
       actions.push({ kind: 'delete', memoId: match.id, deviceId });
     }
   }

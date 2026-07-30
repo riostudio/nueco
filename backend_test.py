@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Comprehensive Backend API Testing for MemoPad
+Comprehensive Backend API Testing for Nueco
 Tests all backend endpoints including the new JWT authentication system
 """
 
@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 # Use the production URL from frontend/.env
 BASE_URL = "https://web-production-a3258.up.railway.app/api"
 
-class MemoPadTester:
+class NuecoTester:
     def __init__(self):
         self.base_url = BASE_URL
         self.session = requests.Session()
@@ -367,7 +367,7 @@ class MemoPadTester:
     
     def run_all_tests(self):
         """Run all tests and return summary"""
-        self.log(f"Starting comprehensive backend testing for MemoPad")
+        self.log(f"Starting comprehensive backend testing for Nueco")
         self.log(f"Backend URL: {self.base_url}")
         
         tests = [
@@ -406,5 +406,5 @@ class MemoPadTester:
         return results
 
 if __name__ == "__main__":
-    tester = MemoPadTester()
+    tester = NuecoTester()
     results = tester.run_all_tests()

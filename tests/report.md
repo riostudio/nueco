@@ -1,4 +1,4 @@
-# MemoPad — Notetaking Performance Report
+# Nueco — Notetaking Performance Report
 
 _Generated: 2026-06-23T09:16:44.545274+00:00_
 _Mode: **local-isolated (in-memory mongomock, in-process ASGI)**_
@@ -77,9 +77,9 @@ _Mode: **local-isolated (in-memory mongomock, in-process ASGI)**_
 - New user reaches first saved note within ≤3 interactions.
 
 ## 4. Churned-user abandonment (UX signal)
-- `testuser_6@memopad-sim.com`: viewed empty note list, closed app before first note
-- `testuser_7@memopad-sim.com`: viewed empty note list, closed app before first note
-- `testuser_8@memopad-sim.com`: viewed empty note list, closed app before first note
+- `testuser_6@nueco-sim.com`: viewed empty note list, closed app before first note
+- `testuser_7@nueco-sim.com`: viewed empty note list, closed app before first note
+- `testuser_8@nueco-sim.com`: viewed empty note list, closed app before first note
 
 ## 5. Benchmarks NOT testable at this layer (marked N/A, not passed)
 
@@ -97,9 +97,9 @@ These targets are **client-side or infrastructure** concerns with no backend end
 For real latency / cold-start / transport numbers, run the staging runner against a **staging** URL (never prod):
 
 ```bash
-export MEMOPAD_API_URL="https://<staging-host>"
-export MEMOPAD_TEST_EMAIL="<pre-verified account>"   # optional: enables note-CRUD latency
-export MEMOPAD_TEST_PASSWORD="..."
+export NUECO_API_URL="https://<staging-host>"
+export NUECO_TEST_EMAIL="<pre-verified account>"   # optional: enables note-CRUD latency
+export NUECO_TEST_PASSWORD="..."
 python tests/run_staging.py        # -> tests/report_staging.md
 ```
 

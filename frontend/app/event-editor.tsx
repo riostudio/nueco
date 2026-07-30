@@ -191,7 +191,7 @@ export default function EventEditorScreen() {
   const [calendars, setCalendars] = useState<DeviceCalendar[]>([]);
   const [preferredCalendarId, setPreferredCalendarId] = useState<string | null>(null);
   const [showCalendarPicker, setShowCalendarPicker] = useState(false);
-  // Import-from-device picker: browse existing device calendar events to prefill a new MemoPad event.
+  // Import-from-device picker: browse existing device calendar events to prefill a new Nueco event.
   const [showImportPicker, setShowImportPicker] = useState(false);
   const [importLoading, setImportLoading] = useState(false);
   const [importEvents, setImportEvents] = useState<DeviceEventLite[]>([]);
@@ -216,6 +216,26 @@ export default function EventEditorScreen() {
   const recurrenceUntilRef = useRef(recurrenceUntil);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSavedDataRef = useRef<string>(''); // Track last saved data to avoid duplicate saves
+  // Serializes triggerAutoSave's debounced save against handleBack's on-exit save so they can't
+  // BOTH observe isCreatedRef.current === false at the same time and each create a separate
+  // event record. Both paths await several things (writeToDeviceCalendar, scheduleReminder)
+  // before reaching createEventOffline, so "fill in a title, immediately tap back" can leave the
+  // just-fired autosave timer's callback still mid-flight when handleBack also starts - without
+  // this lock, both observe "not created yet" and each create their own event, then each link
+  // their own copy to the note (2 linked events for what looks like one save to the user).
+  const saveLockRef = useRef<Promise<void> | null>(null);
+  const withSaveLock = useCallback(async (fn: () => Promise<void>) => {
+    while (saveLockRef.current) {
+      await saveLockRef.current.catch(() => {});
+    }
+    const p = fn();
+    saveLockRef.current = p;
+    try {
+      await p;
+    } finally {
+      saveLockRef.current = null;
+    }
+  }, []);
   const calendarsRef = useRef<DeviceCalendar[]>([]); // cached writable calendars
   const preferredCalendarIdRef = useRef<string | null>(null);
 
@@ -386,7 +406,7 @@ export default function EventEditorScreen() {
   };
 
   // Browse device calendar events (all calendars, not just writable ones) so the user can pick one
-  // to prefill a new MemoPad event from - the reverse of writeToDeviceCalendar's export direction.
+  // to prefill a new Nueco event from - the reverse of writeToDeviceCalendar's export direction.
   const openImportPicker = async () => {
     if (!ExpoCalendar || isWeb) return;
     setShowImportPicker(true);
@@ -680,71 +700,73 @@ export default function EventEditorScreen() {
 
       setSaveStatus('Saving...');
       try {
-        // Write straight into the device calendar (iOS = Apple Calendar, Android = the Google-synced
-        // calendar) natively - no browser redirect. The OS handles syncing to Google/iCloud.
-        let newDeviceCalEventId = deviceCalendarEventIdRef.current;
-        if (addToDeviceCal && !isWeb) {
-          const recurrence = getRecurrenceValue();
-          newDeviceCalEventId = await writeToDeviceCalendar(
-            titleRef.current.trim(),
-            descriptionRef.current.trim(),
-            locationRef.current.trim(),
-            st, et,
-            deviceCalendarEventIdRef.current,
-            recurrence,
-            recurrence ? Intl.DateTimeFormat().resolvedOptions().timeZone : null,
-          );
-          if (newDeviceCalEventId) {
-            deviceCalendarEventIdRef.current = newDeviceCalEventId;
-            setDeviceCalendarEventId(newDeviceCalEventId);
-          }
-        }
-
-        let newNotificationId = localNotificationIdRef.current;
-        if (!isWeb) {
-          if (reminderMinutesRef.current) {
-            const reminderRecurrence = getRecurrenceValue();
-            newNotificationId = await scheduleReminder(
-              titleRef.current.trim(), st, reminderMinutesRef.current,
-              reminderRecurrence, reminderRecurrence ? Intl.DateTimeFormat().resolvedOptions().timeZone : null,
+        await withSaveLock(async () => {
+          // Write straight into the device calendar (iOS = Apple Calendar, Android = the Google-synced
+          // calendar) natively - no browser redirect. The OS handles syncing to Google/iCloud.
+          let newDeviceCalEventId = deviceCalendarEventIdRef.current;
+          if (addToDeviceCal && !isWeb) {
+            const recurrence = getRecurrenceValue();
+            newDeviceCalEventId = await writeToDeviceCalendar(
+              titleRef.current.trim(),
+              descriptionRef.current.trim(),
+              locationRef.current.trim(),
+              st, et,
+              deviceCalendarEventIdRef.current,
+              recurrence,
+              recurrence ? Intl.DateTimeFormat().resolvedOptions().timeZone : null,
             );
-          } else if (localNotificationIdRef.current) {
-            newNotificationId = await cancelLocalNotification();
+            if (newDeviceCalEventId) {
+              deviceCalendarEventIdRef.current = newDeviceCalEventId;
+              setDeviceCalendarEventId(newDeviceCalEventId);
+            }
           }
-        }
 
-        // Local-first + a durable retry queue (offlineSync.ts) instead of a direct API call -
-        // encryption happens inside these, callers pass plaintext.
-        const eventData = buildEventData(st, et, newDeviceCalEventId, !isCreatedRef.current);
-
-        if (!isCreatedRef.current) {
-          const created = await createEventOffline({ ...eventData, linked_note_ids: eventData.linked_note_ids ?? [] }, { push: true });
-          eventIdRef.current = created.id;
-          isCreatedRef.current = true;
-          setEventExists(true);
-
-          if (params.noteId && params.noteId !== 'new') {
-            try { await linkEventToExistingNote(params.noteId, created.id); } catch {}
-          } else if (params.noteId === 'new') {
-            // Bare `else` here used to also catch the events-tab entry point (no noteId at
-            // all), writing a marker that the next unrelated note opened would silently pick
-            // up and self-link to. Only the "created inside a brand-new note" flow needs this.
-            try {
-              const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-              await AsyncStorage.setItem('pendingLinkedEventId', created.id);
-            } catch {}
+          let newNotificationId = localNotificationIdRef.current;
+          if (!isWeb) {
+            if (reminderMinutesRef.current) {
+              const reminderRecurrence = getRecurrenceValue();
+              newNotificationId = await scheduleReminder(
+                titleRef.current.trim(), st, reminderMinutesRef.current,
+                reminderRecurrence, reminderRecurrence ? Intl.DateTimeFormat().resolvedOptions().timeZone : null,
+              );
+            } else if (localNotificationIdRef.current) {
+              newNotificationId = await cancelLocalNotification();
+            }
           }
-        } else {
-          await updateEventOffline(eventIdRef.current, eventData, { push: true });
-        }
 
-        // `local_notification_id` is device-local-only (see LocalEvent's comment in
-        // offlineSync.ts) - persisted separately from `eventData` above so it's never sent to
-        // the server. Done after create/update so `eventIdRef.current` holds the real id (for a
-        // brand-new event this is empty until `createEventOffline` resolves above).
-        if (eventIdRef.current) {
-          try { await setLocalEventNotificationId(eventIdRef.current, newNotificationId); } catch {}
-        }
+          // Local-first + a durable retry queue (offlineSync.ts) instead of a direct API call -
+          // encryption happens inside these, callers pass plaintext.
+          const eventData = buildEventData(st, et, newDeviceCalEventId, !isCreatedRef.current);
+
+          if (!isCreatedRef.current) {
+            const created = await createEventOffline({ ...eventData, linked_note_ids: eventData.linked_note_ids ?? [] }, { push: true });
+            eventIdRef.current = created.id;
+            isCreatedRef.current = true;
+            setEventExists(true);
+
+            if (params.noteId && params.noteId !== 'new') {
+              try { await linkEventToExistingNote(params.noteId, created.id); } catch {}
+            } else if (params.noteId === 'new') {
+              // Bare `else` here used to also catch the events-tab entry point (no noteId at
+              // all), writing a marker that the next unrelated note opened would silently pick
+              // up and self-link to. Only the "created inside a brand-new note" flow needs this.
+              try {
+                const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+                await AsyncStorage.setItem('pendingLinkedEventId', created.id);
+              } catch {}
+            }
+          } else {
+            await updateEventOffline(eventIdRef.current, eventData, { push: true });
+          }
+
+          // `local_notification_id` is device-local-only (see LocalEvent's comment in
+          // offlineSync.ts) - persisted separately from `eventData` above so it's never sent to
+          // the server. Done after create/update so `eventIdRef.current` holds the real id (for a
+          // brand-new event this is empty until `createEventOffline` resolves above).
+          if (eventIdRef.current) {
+            try { await setLocalEventNotificationId(eventIdRef.current, newNotificationId); } catch {}
+          }
+        });
 
         lastSavedDataRef.current = dataHash;
         setSaveStatus('All changes saved');
@@ -753,7 +775,7 @@ export default function EventEditorScreen() {
         console.error('Save error:', e);
       }
     }, 2000);
-  }, [addToDeviceCal, params.noteId]);
+  }, [addToDeviceCal, params.noteId, withSaveLock]);
 
   // ---- Back handler ----
 
@@ -769,34 +791,36 @@ export default function EventEditorScreen() {
 
       if (et > st) {
         try {
-          // Write to the device calendar natively (both platforms) before persisting, so a quick
-          // back-out still lands the event on the calendar. Idempotent via the stored event id.
-          let devId = deviceCalendarEventIdRef.current;
-          if (addToDeviceCal && !isWeb) {
-            const recurrence = getRecurrenceValue();
-            const written = await writeToDeviceCalendar(
-              titleRef.current.trim(), descriptionRef.current.trim(), locationRef.current.trim(), st, et, devId,
-              recurrence,
-              recurrence ? Intl.DateTimeFormat().resolvedOptions().timeZone : null,
-            );
-            if (written) { devId = written; deviceCalendarEventIdRef.current = written; }
-          }
-          const eventData = buildEventData(st, et, devId, !isCreatedRef.current);
-          if (!isCreatedRef.current) {
-            const created = await createEventOffline({ ...eventData, linked_note_ids: eventData.linked_note_ids ?? [] }, { push: true });
-            if (params.noteId && params.noteId !== 'new') {
-              try { await linkEventToExistingNote(params.noteId, created.id); } catch {}
-            } else if (params.noteId === 'new') {
-              const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-              await AsyncStorage.setItem('pendingLinkedEventId', created.id);
+          await withSaveLock(async () => {
+            // Write to the device calendar natively (both platforms) before persisting, so a quick
+            // back-out still lands the event on the calendar. Idempotent via the stored event id.
+            let devId = deviceCalendarEventIdRef.current;
+            if (addToDeviceCal && !isWeb) {
+              const recurrence = getRecurrenceValue();
+              const written = await writeToDeviceCalendar(
+                titleRef.current.trim(), descriptionRef.current.trim(), locationRef.current.trim(), st, et, devId,
+                recurrence,
+                recurrence ? Intl.DateTimeFormat().resolvedOptions().timeZone : null,
+              );
+              if (written) { devId = written; deviceCalendarEventIdRef.current = written; }
             }
-          } else {
-            // Local-only and awaited, network push fire-and-forget after: unlike the create path
-            // above, an update doesn't need the server round-trip's result for anything here, so
-            // there's no reason for it to block the tap that triggered this back navigation.
-            await updateEventOffline(eventIdRef.current, eventData, { push: false });
-            processSyncQueue().catch(() => {});
-          }
+            const eventData = buildEventData(st, et, devId, !isCreatedRef.current);
+            if (!isCreatedRef.current) {
+              const created = await createEventOffline({ ...eventData, linked_note_ids: eventData.linked_note_ids ?? [] }, { push: true });
+              if (params.noteId && params.noteId !== 'new') {
+                try { await linkEventToExistingNote(params.noteId, created.id); } catch {}
+              } else if (params.noteId === 'new') {
+                const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+                await AsyncStorage.setItem('pendingLinkedEventId', created.id);
+              }
+            } else {
+              // Local-only and awaited, network push fire-and-forget after: unlike the create path
+              // above, an update doesn't need the server round-trip's result for anything here, so
+              // there's no reason for it to block the tap that triggered this back navigation.
+              await updateEventOffline(eventIdRef.current, eventData, { push: false });
+              processSyncQueue().catch(() => {});
+            }
+          });
         } catch (e) {
           console.error('Final save on back failed:', e);
         }
@@ -808,7 +832,7 @@ export default function EventEditorScreen() {
     } else {
       router.replace('/(tabs)/events');
     }
-  }, [params.noteId, router, addToDeviceCal]);
+  }, [params.noteId, router, addToDeviceCal, withSaveLock]);
 
   // ---- Delete ----
 

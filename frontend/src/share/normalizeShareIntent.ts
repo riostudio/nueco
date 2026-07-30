@@ -1,5 +1,5 @@
 /**
- * Turn an OS share payload (from expo-share-intent) into a MemoPad note draft.
+ * Turn an OS share payload (from expo-share-intent) into a Nueco note draft.
  *
  * Pure + portable: the one side effect (reading a small image to base64) is INJECTED via
  * `ShareDeps`, so this maps cleanly and unit-tests in Node without React Native. Files that

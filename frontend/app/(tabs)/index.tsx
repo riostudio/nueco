@@ -89,7 +89,7 @@ export default function NotesScreen() {
   const [noteToDelete, setNoteToDelete] = useState<{ id: string; title: string } | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  // "Enjoying MemoPad?" feedback toast (fires after the 5th note ever created; if left
+  // "Enjoying Nueco?" feedback toast (fires after the 5th note ever created; if left
   // unanswered, retries once 5 notes later and that retry stays up until dismissed).
   const [showFeedbackToast, setShowFeedbackToast] = useState(false);
   const [isFeedbackRetry, setIsFeedbackRetry] = useState(false);
@@ -231,7 +231,7 @@ export default function NotesScreen() {
     markFeedbackToastSeen().catch(() => {});
     trackEvent('feedback_toast_response', { value: 'positive' });
     setTimeout(() => {
-      Alert.alert('Would you rate us?', 'A quick rating helps other people find MemoPad.', [
+      Alert.alert('Would you rate us?', 'A quick rating helps other people find Nueco.', [
         { text: 'Not now', style: 'cancel' },
         {
           text: 'Yes',
@@ -648,7 +648,7 @@ const s = StyleSheet.create({
   cardPreview: { fontSize: 15, color: C.textSec, lineHeight: 20, marginBottom: 8 },
   // Event info in card
   eventInfo: {
-    backgroundColor: '#E3F2FD',
+    backgroundColor: C.secondaryTint,
     padding: 8,
     borderRadius: 8,
     marginBottom: 8,

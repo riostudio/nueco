@@ -1,4 +1,4 @@
-# MemoPad
+# Nueco
 
 React Native app (Expo SDK 55, expo-router) + FastAPI backend (Railway) + MongoDB.
 

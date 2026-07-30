@@ -3,17 +3,17 @@
 // each kept their own local `const C = {...}` instead, and those copies drifted (some had `danger`,
 // some `error`; some had `surfaceHi`, some didn't). This is the one to import from now.
 export const C = {
-  primary: '#D84315',
+  primary: '#0A5443',
   primaryFg: '#FFFFFF',
-  primaryLight: '#FF7043',
-  secondary: '#1565C0',
+  primaryLight: '#1D9E75',
+  secondary: '#0F6E56',
   secondaryFg: '#FFFFFF',
   // Pale fill for a selected/active state (e.g. a segmented control), paired with `secondary` as
   // the text/icon color on top of it - distinct from `primary`'s solid-fill CTA treatment.
-  secondaryTint: '#DCEAFB',
+  secondaryTint: '#B3EFDC',
   // Lighter accent for a border/outline on top of `secondaryTint` - visible against the pale fill
   // without the harder contrast of full-strength `secondary`.
-  secondaryLight: '#64B5F6',
+  secondaryLight: '#34B292',
   bg: '#FDFBF7',
   surface: '#FFFFFF',
   surfaceHi: '#FFF8E1',

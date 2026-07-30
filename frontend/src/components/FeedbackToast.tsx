@@ -1,6 +1,6 @@
 /**
  * FeedbackToast.tsx
- * One-time "Enjoying MemoPad?" bottom toast (see src/feedbackToast.ts for the trigger logic and
+ * One-time "Enjoying Nueco?" bottom toast (see src/feedbackToast.ts for the trigger logic and
  * app/(tabs)/index.tsx for where this is shown). Presentational + its own animation/auto-dismiss
  * timer, structurally similar to OfflineBanner.tsx but bottom-anchored and interactive.
  */
@@ -49,7 +49,7 @@ export default function FeedbackToast({ visible, onThumbsUp, onThumbsDown, onDis
       <TouchableOpacity testID="feedback-toast-dismiss" onPress={onDismiss} style={s.closeBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
         <MaterialIcons name="close" size={18} color={C.textSec} />
       </TouchableOpacity>
-      <Text style={s.message}>Enjoying MemoPad so far?</Text>
+      <Text style={s.message}>Enjoying Nueco so far?</Text>
       <View style={s.actions}>
         <TouchableOpacity testID="feedback-thumbs-up" style={s.actionBtn} onPress={onThumbsUp} activeOpacity={0.7}>
           <MaterialIcons name="thumb-up" size={22} color={C.success} />

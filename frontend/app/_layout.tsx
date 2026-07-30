@@ -69,7 +69,7 @@ function AppWithAnalytics() {
 export default function RootLayout() {
   return (
     <ErrorBoundary>
-      <ShareIntentProvider options={{ debug: false, resetOnBackground: true, scheme: 'memopad' }}>
+      <ShareIntentProvider options={{ debug: false, resetOnBackground: true, scheme: 'nueco' }}>
         <GestureHandlerRootView style={{ flex: 1 }}>
           <SafeAreaProvider initialMetrics={initialWindowMetrics}>
             <AuthProvider>

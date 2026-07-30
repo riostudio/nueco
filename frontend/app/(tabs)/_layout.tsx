@@ -12,6 +12,7 @@ import { registerForPushNotifications, unregisterPushNotifications, refreshRecur
 import { runCalendarSync } from '../../src/calendarSync';
 import { registerCalendarSyncTaskAsync } from '../../src/calendarSyncTask';
 import { refreshRecurringDeviceCalendarEntries } from '../../src/deviceCalendarSync';
+import { C } from '../../src/theme';
 
 // The WebView pre-warm below is specifically an Android System WebView cold-start workaround -
 // iOS's WKWebView doesn't need it, and react-native-webview doesn't officially support web at
@@ -22,15 +23,6 @@ let WebView: typeof import('react-native-webview').WebView | null = null;
 if (Platform.OS === 'android') {
   try { WebView = require('react-native-webview').WebView; } catch {}
 }
-
-const C = {
-  primary: '#D84315',
-  inactiveTab: '#757575',
-  surface: '#FFFFFF',
-  border: '#121212',
-  bg: '#FDFBF7',
-  text: '#121212',
-};
 
 function NotesIcon({ color }: { color: string }) {
   return <MaterialIcons name="description" size={22} color={color} />;

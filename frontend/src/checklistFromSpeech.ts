@@ -1,6 +1,6 @@
 /**
  * Recognizes a spoken "create me a checklist/to-do list: ..." request and turns it directly
- * into MemoPad's native interactive checklist markup (the same `<ul data-type="taskList">`
+ * into Nueco's native interactive checklist markup (the same `<ul data-type="taskList">`
  * shape TenTap's TaskList/TaskItem extensions expect - see node_modules/@tiptap/extension-list/
  * src/task-list/task-list.ts and task-item/task-item.ts's renderHTML for the exact tag shape
  * this must match).

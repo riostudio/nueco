@@ -1,7 +1,7 @@
-# MemoPad - Product Requirements Document
+# Nueco - Product Requirements Document
 
 ## Overview
-MemoPad is a senior-friendly note-taking mobile app built with Expo React Native, FastAPI backend, and MongoDB. Designed for Google Play Store deployment.
+Nueco is a senior-friendly note-taking mobile app built with Expo React Native, FastAPI backend, and MongoDB. Designed for Google Play Store deployment.
 
 ## Core Features (MVP)
 1. **Note CRUD** - Create, read, update, delete notes with auto-save (2s debounce)
@@ -51,7 +51,7 @@ MemoPad is a senior-friendly note-taking mobile app built with Expo React Native
 5. **Event Editor** (event-editor) - Title, date picker, time pickers, description
 
 ## Future Enhancements
-- AI-powered recall ("Ask MemoPad")
+- AI-powered recall ("Ask Nueco")
 - Authentication (passkeys, email magic link)
 - Device calendar sync (expo-calendar)
 - Note sharing & collaboration

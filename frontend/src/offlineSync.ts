@@ -1,6 +1,6 @@
 /**
  * offlineSync.ts
- * MemoPad Offline Sync Manager
+ * Nueco Offline Sync Manager
  *
  * Handles:
  * - Local storage of notes, events, and images via AsyncStorage
@@ -104,7 +104,7 @@ const KEYS = {
 // SQLiteBlobTooBigException, silently yielding an empty list. We persist the
 // large collections to plain JSON files instead - files have no row-size limit.
 
-const FILE_DIR = `${FileSystem.documentDirectory}memopad/`;
+const FILE_DIR = `${FileSystem.documentDirectory}nueco/`;
 const FILES = {
   NOTES: `${FILE_DIR}notes.json`,
   EVENTS: `${FILE_DIR}events.json`,
@@ -750,16 +750,28 @@ export async function fullSync(opts: { force?: boolean } = {}): Promise<void> {
       // Decrypt server notes to plaintext before they enter the (plaintext) local store.
       const serverNotes = await decryptNotesFromServer(notesResult.value);
       const localNotes = await getLocalNotes();
-      const mergedNotes: LocalNote[] = [...serverNotes.map((n: any) => ({ ...n, _isLocal: false }))];
+      const mergedById = new Map<string, LocalNote>(
+        serverNotes.map((n: any) => [n.id, { ...n, _isLocal: false }]),
+      );
 
       for (const local of localNotes) {
         if (local._pendingDelete) continue;
         if (local._isLocal) {
-          mergedNotes.push(local);
+          mergedById.set(local.id, local);
           continue;
+        }
+        // Timestamp actually wins here now: a local edit (e.g. a pin toggle) newer than the
+        // server's copy hasn't landed there yet - push still in flight, or racing this same
+        // fullSync's own pull - so keep it. Previously this branch did nothing, meaning the
+        // server's copy (spread into mergedNotes above) always won regardless of timestamp,
+        // silently reverting any local change not yet reflected server-side.
+        const server = mergedById.get(local.id);
+        if (server && isNewer(local.updated_at, server.updated_at)) {
+          mergedById.set(local.id, local);
         }
       }
 
+      const mergedNotes = Array.from(mergedById.values());
       await saveLocalNotes(mergedNotes);
       console.log('fullSync saved notes count:', mergedNotes.length);
     } else {
@@ -771,27 +783,36 @@ export async function fullSync(opts: { force?: boolean } = {}): Promise<void> {
       const decryptedEvents = await decryptEventsFromServer(eventsResult.value);
       const localEvents = await getLocalEvents();
       const localEventsById = new Map(localEvents.map((e) => [e.id, e]));
-      const mergedEvents: LocalEvent[] = decryptedEvents.map((e: any) => ({
-        ...e,
-        _isLocal: false,
-        // `local_notification_id` is device-local-only and never round-trips through the
-        // server - without carrying it over from the previous local copy, this fullSync
-        // would silently wipe it and orphan the still-scheduled OS notification (nothing
-        // would be able to find its id to cancel/reschedule it again).
-        local_notification_id: localEventsById.get(e.id)?.local_notification_id ?? null,
-      }));
+      const mergedById = new Map<string, LocalEvent>(
+        decryptedEvents.map((e: any) => [e.id, {
+          ...e,
+          _isLocal: false,
+          // `local_notification_id` is device-local-only and never round-trips through the
+          // server - without carrying it over from the previous local copy, this fullSync
+          // would silently wipe it and orphan the still-scheduled OS notification (nothing
+          // would be able to find its id to cancel/reschedule it again).
+          local_notification_id: localEventsById.get(e.id)?.local_notification_id ?? null,
+        }]),
+      );
 
       // Same preservation as the notes merge above - without this, an event created/edited
       // offline (still queued, not yet on the server) would get silently wiped the next time
       // fullSync() runs, since the server's response wouldn't include it yet.
+      //
+      // Unlike notes, LocalEvent has no `updated_at` to compare (only `created_at`, which
+      // doesn't change on edit), so this can't apply the same "timestamp wins" fix as the notes
+      // merge above for an already-synced event edited locally but not yet pushed - that's a
+      // real gap (same bug class as the notes one this fullSync fixes), just not fixable here
+      // without adding a real per-write timestamp field to LocalEvent first.
       for (const local of localEvents) {
         if (local._pendingDelete) continue;
         if (local._isLocal) {
-          mergedEvents.push(local);
+          mergedById.set(local.id, local);
           continue;
         }
       }
 
+      const mergedEvents = Array.from(mergedById.values());
       await saveLocalEvents(mergedEvents);
     } else {
       console.warn('fullSync: events fetch failed:', eventsResult.reason);

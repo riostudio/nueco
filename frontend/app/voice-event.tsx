@@ -12,7 +12,7 @@
  * to the existing "Edit manually" path into event-editor.tsx rather than duplicating its full
  * recurrence-editing UI here.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   ActivityIndicator, Alert, Platform, Modal, ScrollView,
@@ -53,6 +53,20 @@ function toDraft(ev: ExtractedEvent): DraftEvent {
   return { ...ev, startDate: new Date(ev.start_time) };
 }
 
+// Defensive: collapse events the classifier extracted more than once for what was really a
+// single spoken request (same title + same start time) before they ever reach a draft the user
+// could save - cheap insurance against an LLM-side duplicate extraction, independent of the
+// double-tap reentrancy guard below (which covers app-side duplication, not model output).
+function dedupeEvents(events: ExtractedEvent[]): ExtractedEvent[] {
+  const seen = new Set<string>();
+  return events.filter((ev) => {
+    const key = `${ev.title.trim().toLowerCase()}|${ev.start_time}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export default function VoiceEventScreen() {
   const router = useRouter();
 
@@ -63,6 +77,13 @@ export default function VoiceEventScreen() {
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
+  // Synchronous reentrancy guard for saveAll - `saving` state disables the Save button too, but
+  // that's a React state update (not instant), so a fast double-tap can invoke saveAll() a
+  // second time before the button visually disables. That second call would create its own
+  // duplicate copy of every event and separately stage its own ids to link to the note, and both
+  // batches eventually get linked - exactly "2 linked events for one voice request." A ref is
+  // checked and set synchronously, before any async work starts, so it can't race like state can.
+  const isSavingRef = useRef(false);
 
   useEffect(() => {
     const data = takePendingVoiceExtraction();
@@ -72,7 +93,7 @@ export default function VoiceEventScreen() {
       return;
     }
     setStaged(data);
-    setDrafts(data.events.map(toDraft));
+    setDrafts(dedupeEvents(data.events).map(toDraft));
     setTripName(data.trip_name || '');
   }, [router]);
 
@@ -114,6 +135,7 @@ export default function VoiceEventScreen() {
   };
 
   const saveAll = async () => {
+    if (isSavingRef.current) return; // already in flight - see isSavingRef's comment above
     if (drafts.some((d) => !d.title.trim())) {
       Alert.alert('Title needed', 'Give every event a title before saving.');
       return;
@@ -123,6 +145,7 @@ export default function VoiceEventScreen() {
       return;
     }
 
+    isSavingRef.current = true;
     setSaving(true);
     try {
       const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -144,7 +167,7 @@ export default function VoiceEventScreen() {
           : new Date(draft.startDate.getTime() + 30 * 60 * 1000);
 
         // Write to the device's native calendar (Google/Apple/Outlook) first, same order
-        // event-editor.tsx uses, so the MemoPad event record can store the resulting id from the
+        // event-editor.tsx uses, so the Nueco event record can store the resulting id from the
         // start. Best-effort: no device calendar access/permission just means no device-calendar
         // counterpart, never a failure of the actual save.
         let deviceEventId: string | null = null;
@@ -197,6 +220,7 @@ export default function VoiceEventScreen() {
     } catch (e) {
       console.error('Save voice event(s) failed:', e);
       Alert.alert('Save Failed', 'Could not save. Please try again.');
+      isSavingRef.current = false; // allow a retry tap after a failure
       setSaving(false);
     }
   };
@@ -436,7 +460,7 @@ const s = StyleSheet.create({
   confirmBody: { flex: 1, paddingHorizontal: 20, paddingTop: 8 },
   lowConfidenceBanner: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: '#E3F2FD', borderRadius: radius.md, padding: 12, marginBottom: 16,
+    backgroundColor: C.secondaryTint, borderRadius: radius.md, padding: 12, marginBottom: 16,
   },
   lowConfidenceText: { flex: 1, fontSize: 13, color: C.secondary },
   eventCard: {

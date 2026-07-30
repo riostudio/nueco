@@ -220,9 +220,9 @@ app.include_router(api_router)
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 
 APK_DOWNLOAD_PATH = os.getenv(
-    "APK_DOWNLOAD_PATH", str(ROOT_DIR.parent / "frontend" / "memopad-staging.apk")
+    "APK_DOWNLOAD_PATH", str(ROOT_DIR.parent / "frontend" / "nueco-staging.apk")
 )
-APK_DOWNLOAD_ROUTE = "/download/memopad-staging.apk"
+APK_DOWNLOAD_ROUTE = "/download/nueco-staging.apk"
 
 
 @app.get("/download", response_class=HTMLResponse)
@@ -232,9 +232,9 @@ async def apk_download_page():
     size_mb = os.path.getsize(APK_DOWNLOAD_PATH) / (1024 * 1024)
     return f"""<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>MemoPad staging</title>
+<title>Nueco staging</title>
 <div style="font-family:-apple-system,sans-serif;max-width:480px;margin:48px auto;padding:0 20px;text-align:center">
-  <h1 style="color:#D84315">MemoPad - staging build</h1>
+  <h1 style="color:#D84315">Nueco - staging build</h1>
   <p>{size_mb:.0f} MB</p>
   <p><a href="{APK_DOWNLOAD_ROUTE}" style="display:inline-block;padding:16px 32px;background:#D84315;color:#fff;text-decoration:none;border-radius:12px;font-size:18px;font-weight:600">Download &amp; install APK</a></p>
   <p style="color:#78909C;font-size:14px">Enable “Install from unknown sources” when prompted.</p>
@@ -253,7 +253,7 @@ async def apk_download_file():
 
 
 # ---- Privacy policy ----
-# Served from this backend (same origin as the API) rather than the memopad.app
+# Served from this backend (same origin as the API) rather than the nueco.app
 # domain, which isn't wired to any web host today - only used for outbound email.
 # The Settings screen's Privacy Policy link points here.
 PRIVACY_POLICY_PATH = str(ROOT_DIR / "static" / "privacy.html")

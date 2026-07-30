@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "MemoPad",
+    "name": "Nueco",
     "slug": "memopad",
     "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "memopad",
+    "scheme": "nueco",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
@@ -22,7 +22,8 @@
       "package": "com.riostudio.memopad",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#FDFBF7"
+        "monochromeImage": "./assets/images/adaptive-icon-monochrome.png",
+        "backgroundColor": "#0A5443"
       },
       "edgeToEdgeEnabled": true,
       "permissions": [
@@ -64,7 +65,7 @@
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#FDFBF7"
+          "backgroundColor": "#0A5443"
         }
       ],
       "expo-audio",
@@ -77,7 +78,7 @@
       [
         "expo-notifications",
         {
-          "color": "#D84315"
+          "color": "#0A5443"
         }
       ],
       "expo-web-browser",

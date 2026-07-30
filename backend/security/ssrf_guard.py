@@ -26,7 +26,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-_FETCH_USER_AGENT = "Mozilla/5.0 (compatible; MemoPad/1.0; +https://memopad.app)"
+_FETCH_USER_AGENT = "Mozilla/5.0 (compatible; Nueco/1.0; +https://nueco.app)"
 _DEFAULT_MAX_REDIRECTS = 5
 
 

@@ -1,5 +1,5 @@
 """
-Shared test bootstrap for the MemoPad simulation suite.
+Shared test bootstrap for the Nueco simulation suite.
 
 SAFETY MODEL (local-isolated mode):
   - The real FastAPI app (backend/server.py) is imported and exercised in-process.
@@ -8,7 +8,7 @@ SAFETY MODEL (local-isolated mode):
   - openai / boto3 / botocore are replaced with no-op stubs (those code paths are
     never exercised here) to avoid heavy installs and any outbound calls.
   - All HTTP goes through httpx ASGITransport (in-process) -- no network sockets,
-    no Railway. MEMOPAD_API_URL / Railway are untouched.
+    no Railway. NUECO_API_URL / Railway are untouched.
 
 Because the datastore is in-memory, latency numbers are NOT representative of the
 Railway deployment. This mode validates correctness/logic: data integrity,
@@ -24,10 +24,10 @@ BACKEND_DIR = REPO_ROOT / "backend"
 
 # --- 1. Isolated environment (never the real .env values) -------------------
 os.environ["MONGO_URL"] = "mongodb://127.0.0.1:27017"      # never dialed (mock)
-os.environ["DB_NAME"] = "memopad_test"                      # isolated logical db
+os.environ["DB_NAME"] = "nueco_test"                      # isolated logical db
 os.environ["JWT_SECRET"] = "test-only-secret-not-production-do-not-reuse"
 os.environ["APP_BASE_URL"] = "http://localhost/app"
-os.environ["ALLOWED_ORIGINS"] = "http://localhost,https://memopad.test"
+os.environ["ALLOWED_ORIGINS"] = "http://localhost,https://nueco.test"
 os.environ.pop("S3_BUCKET", None)                           # attachments -> 503 path
 os.environ.setdefault("OPENAI_API_KEY", "")                # AI paths stubbed anyway
 

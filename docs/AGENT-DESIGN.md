@@ -1,4 +1,4 @@
-# MemoPad On-Device AI Agent — Design
+# Nueco On-Device AI Agent — Design
 
 **Status:** Draft / planning. Not yet implemented.
 **Related:** [E2EE-DESIGN.md](./E2EE-DESIGN.md), [CALENDAR-REMINDERS-DESIGN.md](./CALENDAR-REMINDERS-DESIGN.md)
@@ -9,7 +9,7 @@
 
 A local assistant that helps the user **organize** (tag, link, group, summarize notes and events) and **recall** ("what did I note about X?", "what did I plan around Y?") — running **entirely on-device**: offline, private, and GDPR-clean.
 
-The design leverage the fact that MemoPad is already **E2EE**: notes are decrypted in the local cache, so the plaintext the agent needs is *already on the device*. Processing it locally means **nothing leaves the phone** — which both delivers the privacy promise and removes the current plaintext egress to OpenAI (today's biggest compliance gap).
+The design leverage the fact that Nueco is already **E2EE**: notes are decrypted in the local cache, so the plaintext the agent needs is *already on the device*. Processing it locally means **nothing leaves the phone** — which both delivers the privacy promise and removes the current plaintext egress to OpenAI (today's biggest compliance gap).
 
 ### Non-goals (v1)
 - No cloud inference by default (a consented hybrid mode is a possible later add — §12).
@@ -70,7 +70,7 @@ The design leverage the fact that MemoPad is already **E2EE**: notes are decrypt
 
 ## 5. Encrypted index schema
 
-A single SQLite DB (`memopad/ai-index.db` under the offlineSync `FILE_DIR`), encrypted at rest (SQLCipher via op-sqlite, or app-level field encryption with the E2EE key).
+A single SQLite DB (`nueco/ai-index.db` under the offlineSync `FILE_DIR`), encrypted at rest (SQLCipher via op-sqlite, or app-level field encryption with the E2EE key).
 
 ```
 chunks(

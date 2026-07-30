@@ -22,7 +22,7 @@ CACHE_TTL_SECONDS = 900  # 15 minutes - no RSS source is hit more often than thi
 # A browser-like User-Agent - some outlets (e.g. Tribunnews) 403 a bare/unfamiliar UA string
 # but accept this one, so it's less "identify ourselves" and more "get treated like a normal
 # reader" for outlets that block unrecognized bots.
-_FETCH_USER_AGENT = "Mozilla/5.0 (compatible; MemoPad/1.0; +https://memopad.app)"
+_FETCH_USER_AGENT = "Mozilla/5.0 (compatible; Nueco/1.0; +https://nueco.app)"
 _FETCH_TIMEOUT_SECONDS = 8
 
 # In-memory per-outlet cache: outlet id -> {"items": [...], "fetched_at": epoch seconds}.

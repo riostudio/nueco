@@ -31,9 +31,9 @@ export default function AnalyticsConsentScreen() {
         <View style={s.iconCircle}>
           <MaterialIcons name="insights" size={48} color={C.primary} />
         </View>
-        <Text style={s.title}>Help improve MemoPad?</Text>
+        <Text style={s.title}>Help improve Nueco?</Text>
         <Text style={s.body}>
-          Share anonymous usage data - which features you use - so we can make MemoPad better.
+          Share anonymous usage data - which features you use - so we can make Nueco better.
         </Text>
         <Text style={s.reassure}>
           Your notes, events, and personal content are never collected or sent anywhere. You can

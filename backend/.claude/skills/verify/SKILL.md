@@ -1,6 +1,6 @@
 ---
 name: verify
-description: How to actually run the MemoPad backend locally and drive it end-to-end (not just typecheck/import).
+description: How to actually run the Nueco backend locally and drive it end-to-end (not just typecheck/import).
 ---
 
 # Running the backend for real
@@ -14,7 +14,7 @@ python-dateutil, boto3, pyjwt, requests, cryptography, python-multipart. Install
 directly into a venv instead of `-r requirements.txt`.
 
 ```bash
-python3 -m venv /tmp/memopad_venv && source /tmp/memopad_venv/bin/activate
+python3 -m venv /tmp/nueco_venv && source /tmp/nueco_venv/bin/activate
 pip install fastapi==0.110.1 uvicorn python-dotenv motor pydantic email-validator \
   bcrypt httpx pymongo openai python-dateutil boto3 pyjwt requests cryptography \
   python-multipart mongomock mongomock-motor

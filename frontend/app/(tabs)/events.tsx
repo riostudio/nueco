@@ -11,7 +11,7 @@ import { useIsFocused } from '@react-navigation/native';
 import { deleteEventOffline, getLocalEvents, fullSync } from '../../src/offlineSync';
 import { bumpDeviceCalendarSync } from '../../src/deviceCalendarSync';
 import { CalendarEvent } from '../../src/types';
-import { radius, borderWidth } from '../../src/theme';
+import { C, radius, borderWidth } from '../../src/theme';
 import { MONTH_NAMES, DAY_NAMES } from '../../src/dateNames';
 import { UserAvatar } from '../../src/auth';
 import { SegmentedControl } from '../../src/components';
@@ -21,20 +21,6 @@ let ExpoCalendar: typeof import('expo-calendar') | null = null;
 if (Platform.OS !== 'web') {
   try { ExpoCalendar = require('expo-calendar'); } catch {}
 }
-
-const C = {
-  primary: '#D84315',
-  primaryFg: '#FFFFFF',
-  secondary: '#1565C0',
-  bg: '#FDFBF7',
-  surface: '#FFFFFF',
-  text: '#121212',
-  textSec: '#37474F',
-  border: '#E0E0E0',
-  borderSub: '#78909C',
-  error: '#C62828',
-  success: '#2E7D32',
-};
 
 function formatEventTime(iso: string): string {
   const d = new Date(iso);

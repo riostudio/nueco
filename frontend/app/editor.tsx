@@ -8,6 +8,7 @@ import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
+import { useNavigation } from '@react-navigation/native';
 import { useAudioRecorder, AudioModule, RecordingPresets, setAudioModeAsync } from 'expo-audio';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
@@ -292,6 +293,7 @@ const NoteBodyEditor = forwardRef<EditorApi, {
 
 export default function EditorScreen() {
   const router = useRouter();
+  const navigation = useNavigation();
   const { noteId, shared } = useLocalSearchParams<{ noteId: string; shared?: string }>();
   const isNew = !noteId || noteId === 'new';
 
@@ -387,6 +389,14 @@ export default function EditorScreen() {
   // URL we've already attempted a client-side unfurl for (avoids re-fetching in a loop).
   const unfurlTriedRef = useRef<string | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Set right before any of THIS screen's own explicit save-then-navigate paths (the header back
+  // button, delete confirmation, etc.) actually leave - so the beforeRemove guard below (which
+  // exists to catch the Android hardware back button and iOS swipe-back gesture, neither of
+  // which go through those handlers) knows not to duplicate work they've already done. See that
+  // effect's own comment for the bug this closes: without it, closing the note any way other
+  // than tapping the header's back arrow could skip the final save entirely, losing whatever was
+  // just dictated/photographed/sketched/attached in the last ~800ms.
+  const isNavigatingAwayRef = useRef(false);
   // True when this note originated from a share intent (analytics + discard-on-cancel).
   const isSharedRef = useRef(false);
   // True once the user actually edits - a pre-filled shared draft that's never touched
@@ -549,7 +559,7 @@ export default function EditorScreen() {
 
   const loadNote = async (id: string) => {
     try {
-      // Local-first seed: MemoPad is offline-first, so the local copy is the editing-session source
+      // Local-first seed: Nueco is offline-first, so the local copy is the editing-session source
       // of truth. Seed the editor from it immediately (no network wait) so the body appears at once;
       // reconcile metadata with the server below. Avoids the visible lag of waiting on notesApi.get.
       const localCopy = (await getLocalNotes()).find(n => n.id === id);
@@ -756,7 +766,14 @@ export default function EditorScreen() {
       const dataUri = takePendingSketch();
       if (dataUri) {
         editorApiRef.current?.insertImage(dataUri);
-        triggerAutoSave(); // also flips userEditedRef, same as every other editor mutation
+        // Unlike appendToEditor/appendHtmlToEditor, insertImage's result isn't known on the RN
+        // side (the actual DOM insertion happens inside the WebView) - saveImmediately's
+        // syncLatestContent has to ask the WebView for it via getHTML(), which is exactly the
+        // "might not be ready yet, right after returning from another screen" race its own
+        // comment warns about. A short beat here gives the WebView a moment to process the
+        // insertImage message first, so that getHTML() call is more likely to land on a bridge
+        // that's actually ready to answer it, instead of racing it immediately.
+        setTimeout(() => saveImmediately(), 200);
       }
     }, []) // eslint-disable-line react-hooks/exhaustive-deps
   );
@@ -835,6 +852,66 @@ export default function EditorScreen() {
     }, 800);
   }, [persistLocal, signalSaved]);
 
+  // Same save persistLocal does, but started right away instead of behind the 800ms debounce -
+  // for discrete "the user just added something" actions (voice dictation, a checklist, a
+  // sketch, a photo, an attachment, a linked event) rather than continuous typing, where the
+  // debounce exists specifically to avoid a write per keystroke. These are exactly the actions
+  // most likely to be immediately followed by "ok, now I'll go back" - waiting the full debounce
+  // (or worse, an interrupted one - see the beforeRemove guard above) risked losing them.
+  const saveImmediately = useCallback(() => {
+    userEditedRef.current = true;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    setSaveStatus('Saving...');
+    persistLocal({ push: false })
+      .then(() => {
+        setSaveStatus('All changes saved');
+        signalSaved();
+      })
+      .catch((e: any) => {
+        setSaveStatus('Failed to save');
+        console.error('Immediate save error:', e);
+      });
+  }, [persistLocal, signalSaved]);
+
+  // Catches every way of leaving this screen that ISN'T the header's back button - the Android
+  // hardware back button and iOS swipe-back gesture, neither of which run handleSaveAndBack (that
+  // function is only wired to that button's onPress). Without this, those paths relied entirely
+  // on whatever triggerAutoSave's 800ms debounce timer happened to be doing: if the screen was
+  // removed before it fired, or after it fired but while it was still mid-flight reading content
+  // that hadn't finished round-tripping back from the WebView yet, the most recent
+  // dictation/photo/sketch/attachment could be silently lost. This intercepts the removal,
+  // finishes a real save first, then lets the navigation continue.
+  //
+  // isNavigatingAwayRef guards against double-handling: it's set right before every one of this
+  // screen's OWN explicit save-and-leave paths (handleSaveAndBack, delete) so this effect skips
+  // work they've already done - critical for delete in particular, since re-running persistLocal
+  // on a note that was just deleted server-side would resurrect it.
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('beforeRemove' as never, (e: any) => {
+      if (isNavigatingAwayRef.current) return;
+      e.preventDefault();
+      (async () => {
+        if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+        try {
+          await syncLatestContent();
+          const hasContent = !!(
+            titleRef.current || contentRef.current || linkedEventIdsRef.current.length > 0 ||
+            imagesRef.current.length > 0 || attachmentsRef.current.length > 0 || sourcePostRef.current
+          );
+          if (isCreatedRef.current ? !!noteIdRef.current : hasContent) {
+            await persistLocal({ push: true });
+            processSyncQueue().catch(() => {});
+          }
+        } catch (err) {
+          console.error('Save on navigate-away failed:', err);
+        }
+        isNavigatingAwayRef.current = true;
+        navigation.dispatch(e.data.action);
+      })();
+    });
+    return unsubscribe;
+  }, [navigation, persistLocal, syncLatestContent]);
+
   const handleBack = useCallback(async () => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     await syncLatestContent(); // capture the very last keystrokes before persisting
@@ -872,9 +949,13 @@ export default function EditorScreen() {
     // comment on the exact same hazard) - a real risk right after returning from another screen
     // (e.g. /sketch), not just while already focused on this one.
     const base = contentRef.current.replace(/<p><\/p>\s*$/i, ''); // drop a trailing empty paragraph
-    editorApiRef.current?.setContent(base + paras);
-    userEditedRef.current = true;
-    triggerAutoSave();
+    const nextContent = base + paras;
+    editorApiRef.current?.setContent(nextContent);
+    // Set directly rather than waiting for the WebView's debounced content round-trip to update
+    // this - so the immediate save below (and any beforeRemove-triggered save right after) never
+    // has to guess whether that round-trip finished in time.
+    contentRef.current = nextContent;
+    saveImmediately();
   };
 
   // Same append-at-the-end behavior as appendToEditor, but for content that's already real,
@@ -883,9 +964,12 @@ export default function EditorScreen() {
   const appendHtmlToEditor = (html: string) => {
     if (!html) return;
     const base = contentRef.current.replace(/<p><\/p>\s*$/i, ''); // drop a trailing empty paragraph
-    editorApiRef.current?.setContent(base + html);
-    userEditedRef.current = true;
-    triggerAutoSave();
+    const nextContent = base + html;
+    editorApiRef.current?.setContent(nextContent);
+    // See appendToEditor's comment on why this is set directly instead of waiting for the
+    // WebView's own debounced round-trip.
+    contentRef.current = nextContent;
+    saveImmediately();
   };
 
   // Format date/time for display
@@ -1069,7 +1153,7 @@ export default function EditorScreen() {
       setTranscribedText(result.text);
 
       // "Create me a checklist: buy milk, walk the dog" - recognized locally (no AI call) and
-      // inserted as MemoPad's real interactive checklist, not run through the organize/summarize
+      // inserted as Nueco's real interactive checklist, not run through the organize/summarize
       // AI flow (which would only produce plain "☐ item" bullet text, not real checkboxes).
       const checklistMatch = parseChecklistFromSpeech(result.text);
       if (checklistMatch.isChecklist) {
@@ -1177,7 +1261,7 @@ export default function EditorScreen() {
         setImages(newImages);
         // Track image attachment
         trackNoteImageAttached(newImages.length);
-        triggerAutoSave();
+        saveImmediately();
       }
     }
   };
@@ -1217,7 +1301,7 @@ export default function EditorScreen() {
         setImages(newImages);
         // Track image attachment (total count after adding)
         trackNoteImageAttached(newImages.length);
-        triggerAutoSave();
+        saveImmediately();
       }
     }
   };
@@ -1280,7 +1364,7 @@ export default function EditorScreen() {
           setPendingUploads(prev => prev.map(u => (u.id === uploadId ? { ...u, progress: p } : u))),
         );
         setAttachments(prev => [...prev, meta]);
-        triggerAutoSave();
+        saveImmediately();
       } catch (e: any) {
         // Surface the real reason (and log it) instead of a blanket "Couldn't upload".
         const msg = String(e?.message || '');
@@ -1295,7 +1379,7 @@ export default function EditorScreen() {
         setPendingUploads(prev => prev.filter(u => u.id !== uploadId));
       }
     }
-  }, [triggerAutoSave]);
+  }, [saveImmediately]);
 
   // Pick up to MAX_PICK_AT_ONCE files at once and upload each (online-direct).
   const pickAttachment = async () => {
@@ -1433,7 +1517,7 @@ export default function EditorScreen() {
     setShowEventPicker(false);
     setLinkedEventIds(prev => (prev.includes(event.id) ? prev : [...prev, event.id]));
     setLinkedEvents(prev => (prev.some(ev => ev.id === event.id) ? prev : [...prev, event]));
-    triggerAutoSave();
+    saveImmediately();
     // Best-effort: add this note to the event's linked_note_ids (only if the note exists)
     try {
       const noteId = noteIdRef.current;
@@ -1470,6 +1554,9 @@ export default function EditorScreen() {
 
   // Save note and show sign-up prompt (only on first note save)
   const handleSaveAndBack = async () => {
+    // Tells the beforeRemove guard above this path is already handling its own save - it must
+    // not also try to persist (or, worse, resurrect a note handleDelete just deleted server-side).
+    isNavigatingAwayRef.current = true;
     // Cancel any pending autosave timer so it can't double-fire with the save below.
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     await syncLatestContent(); // capture the very last keystrokes before the empty-check + save
@@ -1544,6 +1631,10 @@ export default function EditorScreen() {
     }
     setDeletingNote(false);
     setShowDeleteNoteModal(false);
+    // The note is gone server-side now - the beforeRemove guard above must not try to "save" it
+    // on the way out (which would just resurrect it locally and re-queue it for sync).
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    isNavigatingAwayRef.current = true;
     router.back();
   };
 

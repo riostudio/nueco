@@ -1,6 +1,6 @@
 /**
  * feedbackToast.ts
- * Tracks the lifetime note-created count and whether the "Enjoying MemoPad?" feedback toast has
+ * Tracks the lifetime note-created count and whether the "Enjoying Nueco?" feedback toast has
  * been resolved, so it fires after the 5th note - see src/components/FeedbackToast.tsx for the UI
  * and app/(tabs)/index.tsx for the two trigger points (cold launch, and returning to the notes
  * list).

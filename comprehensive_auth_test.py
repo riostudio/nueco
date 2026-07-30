@@ -129,7 +129,7 @@ def test_events_with_auth():
     return False
 
 if __name__ == "__main__":
-    print("Testing MemoPad Backend APIs after auth/service.py fixes")
+    print("Testing Nueco Backend APIs after auth/service.py fixes")
     print("=" * 60)
     
     # Test 1: Health Check

@@ -46,7 +46,7 @@ export default function CanvaSettingsScreen() {
     setConnecting(true);
     try {
       const { authorize_url } = await canvaApi.connect();
-      const result = await WebBrowser.openAuthSessionAsync(authorize_url, 'memopad://canva-connected');
+      const result = await WebBrowser.openAuthSessionAsync(authorize_url, 'nueco://canva-connected');
       if (result.type === 'success' && result.url) {
         const status = new URL(result.url).searchParams.get('status');
         if (status === 'success') {

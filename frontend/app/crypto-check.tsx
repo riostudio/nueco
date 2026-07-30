@@ -133,7 +133,7 @@ export default function CryptoCheck() {
       <Pressable
         onPress={run}
         disabled={running}
-        style={{ marginTop: 24, padding: 16, backgroundColor: '#D84315', borderRadius: 12, alignItems: 'center', opacity: running ? 0.5 : 1 }}
+        style={{ marginTop: 24, padding: 16, backgroundColor: '#0A5443', borderRadius: 12, alignItems: 'center', opacity: running ? 0.5 : 1 }}
       >
         <Text style={{ color: '#fff', fontWeight: '600', fontSize: 16 }}>Re-run</Text>
       </Pressable>

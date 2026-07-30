@@ -1,5 +1,5 @@
 """
-MemoPad Backend API Tests
+Nueco Backend API Tests
 
 Runs the real FastAPI app (backend/server.py) in-process against an in-memory
 mongomock database, via the shared harness at tests/harness.py (the same
@@ -59,7 +59,7 @@ async def api_client():
     n = uuid.uuid4().int
     forwarded_for = f"10.{(n >> 16) % 256}.{(n >> 8) % 256}.{n % 256}"
     client = harness.make_client(forwarded_for=forwarded_for)
-    email = f"pkg1-{uuid.uuid4().hex[:12]}@memopad-test.com"
+    email = f"pkg1-{uuid.uuid4().hex[:12]}@nueco-test.com"
     signup = await client.post("/api/auth/signup", json={
         "name": "Package1 Tester",
         "email": email,

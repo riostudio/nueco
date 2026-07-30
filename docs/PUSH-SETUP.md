@@ -1,4 +1,4 @@
-# MemoPad — Event-Reminder Push: Setup Runbook
+# Nueco — Event-Reminder Push: Setup Runbook
 
 _Operational steps to turn on the Phase 2 push reminders. The code is already shipped
 (`feat/push-reminders`); this is the external wiring (Firebase, EAS credentials, Railway
@@ -16,14 +16,14 @@ service needs the FCM V1 service-account key.
 
 1. **Firebase project + Android app**
    - https://console.firebase.google.com → create a project (or reuse one).
-   - Add an **Android app** with package name **`com.riostudio.memopad`**.
+   - Add an **Android app** with package name **`com.riostudio.nueco`**.
    - Download **`google-services.json`**.
 
 2. **Add it to the app** — put `google-services.json` in `frontend/`, then reference it in
    `frontend/app.json` under `expo.android`:
    ```json
    "android": {
-     "package": "com.riostudio.memopad",
+     "package": "com.riostudio.nueco",
      "googleServicesFile": "./google-services.json"
    }
    ```

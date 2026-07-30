@@ -1,4 +1,4 @@
-# MemoPad E2EE — Audit Brief
+# Nueco E2EE — Audit Brief
 
 Use this to commission an **independent** cryptography review. It defines scope,
 the claims to verify, available test artifacts, and recommended firms.

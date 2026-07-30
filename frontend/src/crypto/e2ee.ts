@@ -1,5 +1,5 @@
 /**
- * End-to-end encryption core for MemoPad notes.
+ * End-to-end encryption core for Nueco notes.
  *
  * Threat model: the server only ever stores ciphertext + opaque wrapped keys.
  * Note content is encrypted on-device with AES-256-GCM under a per-user random

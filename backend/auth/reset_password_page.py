@@ -10,7 +10,7 @@ async def reset_password_page(token: str = ""):
     <html>
     <head>
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>Reset Password - MemoPad</title>
+        <title>Reset Password - Nueco</title>
         <style>
             * {{ box-sizing: border-box; margin: 0; padding: 0; }}
             body {{
@@ -270,7 +270,7 @@ async def reset_password_page(token: str = ""):
                         message.className = 'message success';
                         message.innerHTML = `
                             <strong>✅ Password reset successfully!</strong><br><br>
-                            You can now open the <strong>MemoPad</strong> app and log in with your new password.
+                            You can now open the <strong>Nueco</strong> app and log in with your new password.
                         `;
                     }} else {{
                         message.className = 'message error';

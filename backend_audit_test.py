@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Comprehensive test suite for MemoPad Technical Audit Fixes
+Comprehensive test suite for Nueco Technical Audit Fixes
 Tests rate limiting, pagination, batch APIs, auth requirements, and existing functionality
 """
 
@@ -419,7 +419,7 @@ class AuditTestRunner:
                 
     async def run_all_tests(self):
         """Run all audit tests"""
-        print("🚀 STARTING MEMOPAD TECHNICAL AUDIT TESTING")
+        print("🚀 STARTING NUECO TECHNICAL AUDIT TESTING")
         print("=" * 60)
         
         await self.setup()

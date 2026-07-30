@@ -2,6 +2,7 @@ import React, { Component, ErrorInfo, ReactNode } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
+import { C } from '../theme';
 
 interface Props {
   children: ReactNode;
@@ -52,7 +53,7 @@ export class ErrorBoundary extends Component<Props, State> {
         <SafeAreaView style={styles.container}>
           <View style={styles.content}>
             <View style={styles.iconContainer}>
-              <MaterialIcons name="error-outline" size={64} color="#D84315" />
+              <MaterialIcons name="error-outline" size={64} color={C.error} />
             </View>
             
             <Text style={styles.title}>Something went wrong</Text>
@@ -61,7 +62,7 @@ export class ErrorBoundary extends Component<Props, State> {
             </Text>
 
             <TouchableOpacity style={styles.button} onPress={this.handleReset}>
-              <MaterialIcons name="refresh" size={24} color="#FFFFFF" />
+              <MaterialIcons name="refresh" size={24} color={C.primaryFg} />
               <Text style={styles.buttonText}>Try Again</Text>
             </TouchableOpacity>
 
@@ -90,7 +91,7 @@ export class ErrorBoundary extends Component<Props, State> {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#FDFBF7',
+    backgroundColor: C.bg,
   },
   content: {
     flex: 1,
@@ -110,13 +111,13 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 24,
     fontWeight: '700',
-    color: '#121212',
+    color: C.text,
     marginBottom: 12,
     textAlign: 'center',
   },
   message: {
     fontSize: 16,
-    color: '#546E7A',
+    color: C.icon,
     textAlign: 'center',
     lineHeight: 24,
     marginBottom: 32,
@@ -125,14 +126,14 @@ const styles = StyleSheet.create({
   button: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#D84315',
+    backgroundColor: C.primary,
     paddingVertical: 16,
     paddingHorizontal: 32,
     borderRadius: 12,
     gap: 8,
   },
   buttonText: {
-    color: '#FFFFFF',
+    color: C.primaryFg,
     fontSize: 18,
     fontWeight: '600',
   },
@@ -147,12 +148,12 @@ const styles = StyleSheet.create({
   debugTitle: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#D84315',
+    color: C.primary,
     marginBottom: 8,
   },
   debugText: {
     fontSize: 12,
-    color: '#37474F',
+    color: C.textSec,
     fontFamily: 'monospace',
   },
 });

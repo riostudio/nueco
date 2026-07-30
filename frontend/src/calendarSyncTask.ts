@@ -14,7 +14,7 @@
 import { Platform } from 'react-native';
 import { runCalendarSync } from './calendarSync';
 
-export const CALENDAR_SYNC_TASK = 'memopad-calendar-sync';
+export const CALENDAR_SYNC_TASK = 'nueco-calendar-sync';
 
 let TaskManager: typeof import('expo-task-manager') | null = null;
 let BackgroundTask: typeof import('expo-background-task') | null = null;

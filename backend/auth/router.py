@@ -183,7 +183,7 @@ async def verify_email(token: str, db: AsyncIOMotorDatabase = Depends(get_db)):
     <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>Email Verified - MemoPad</title>
+        <title>Email Verified - Nueco</title>
         <style>
             body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: #FDFBF7; }}
             .container {{ text-align: center; padding: 40px; max-width: 400px; }}
@@ -197,8 +197,8 @@ async def verify_email(token: str, db: AsyncIOMotorDatabase = Depends(get_db)):
         <div class="container">
             <div class="avatar">{first_letter}</div>
             <h1>Email Verified!</h1>
-            <p>Your email has been verified successfully. You can now log in to MemoPad.</p>
-            <a href="{app_url}" class="btn">Open MemoPad</a>
+            <p>Your email has been verified successfully. You can now log in to Nueco.</p>
+            <a href="{app_url}" class="btn">Open Nueco</a>
         </div>
     </body>
     </html>

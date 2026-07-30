@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-JWT Authentication Testing for MemoPad
+JWT Authentication Testing for Nueco
 Tests the new JWT authentication endpoints specifically
 """
 

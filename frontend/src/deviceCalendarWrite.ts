@@ -63,7 +63,7 @@ export interface WriteDeviceEventInput {
  * instead of waiting for the OS's periodic sync window (bumpDeviceCalendarSync - no-op on
  * iOS/web). Returns the device calendar event id, or null if calendar access isn't available or
  * wasn't granted - callers should treat that as "no device calendar counterpart", not an error:
- * the MemoPad event itself is unaffected. */
+ * the Nueco event itself is unaffected. */
 export async function writeEventToDeviceCalendar(input: WriteDeviceEventInput): Promise<string | null> {
   if (!ExpoCalendar || isWeb) return null;
   try {

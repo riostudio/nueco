@@ -1,21 +1,21 @@
 ---
-name: memopad-synthetic-test-simulation
+name: nueco-synthetic-test-simulation
 description: >
   Use this skill whenever the user wants to run automated synthetic user
   simulations, load tests, security audits, or performance evaluations
-  against the MemoPad FastAPI backend on Railway with MongoDB Atlas.
+  against the Nueco FastAPI backend on Railway with MongoDB Atlas.
   Trigger when the user asks to: simulate users, run test scenarios,
   test in parallel, stress test the backend, check security vulnerabilities,
   evaluate notetaking performance, test real-time sync, or run an autonomous
-  fix loop against MemoPad. Also trigger for: personas, synthetic data,
-  concurrent users, file attachment testing, or automated repair for MemoPad.
+  fix loop against Nueco. Also trigger for: personas, synthetic data,
+  concurrent users, file attachment testing, or automated repair for Nueco.
 ---
 
-# MemoPad Synthetic Test Simulation
+# Nueco Synthetic Test Simulation
 
 A 7-agent mixture-of-experts orchestration for synthetic user simulation,
 real-time sync validation, security auditing, and autonomous bug fixing
-against MemoPad's FastAPI backend on Railway + MongoDB Atlas M0.
+against Nueco's FastAPI backend on Railway + MongoDB Atlas M0.
 
 ---
 
@@ -47,7 +47,7 @@ against MemoPad's FastAPI backend on Railway + MongoDB Atlas M0.
 
 ```bash
 # Environment variable (required)
-export MEMOPAD_API_URL=https://your-app.railway.app
+export NUECO_API_URL=https://your-app.railway.app
 
 # Python dependencies
 pip install pytest pytest-asyncio httpx asyncio
@@ -98,7 +98,7 @@ cat tests/ESCALATION_REPORT.md
 ## Key Constraints
 
 - Never exceed 20 concurrent MongoDB connections (Semaphore guard)
-- Never touch production DB — all tests run against `memopad_test`
+- Never touch production DB — all tests run against `nueco_test`
 - Agent 7 commits to `fix/auto-repair` branch only, never `main`
 - Malicious persona uses synthetic flagged strings only (e.g. SQLI_TEST_PAYLOAD)
 - Max 3 file changes per Agent 7 fix iteration

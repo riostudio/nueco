@@ -36,7 +36,7 @@ function main() {
       isCalendarSelectionUnchanged('["a"]', '["b"]', true) === false);
   }
 
-  console.log('planCalendarSync - new device event with no MemoPad match -> create:');
+  console.log('planCalendarSync - new device event with no Nueco match -> create:');
   {
     const de = mkDeviceEvent();
     const { actions, nextHashes } = planCalendarSync([de], new Map(), {}, true);
@@ -45,12 +45,12 @@ function main() {
     ok('hash recorded for the device event', nextHashes['dev-1'] === hashDeviceEvent({ title: 'Standup', location: '', notes: '', startDate: de.startDate, endDate: de.endDate }));
   }
 
-  console.log('planCalendarSync - changed device event with a MemoPad match -> update:');
+  console.log('planCalendarSync - changed device event with a Nueco match -> update:');
   {
     const de = mkDeviceEvent({ title: 'Standup (moved)' });
     const byDeviceId = new Map([['dev-1', { id: 'memo-1' }]]);
     const { actions } = planCalendarSync([de], byDeviceId, { 'dev-1': 'stale-hash' }, true);
-    ok('one update action targeting the matched MemoPad id', actions.length === 1 && actions[0].kind === 'update' && actions[0].memoId === 'memo-1', JSON.stringify(actions));
+    ok('one update action targeting the matched Nueco id', actions.length === 1 && actions[0].kind === 'update' && actions[0].memoId === 'memo-1', JSON.stringify(actions));
   }
 
   console.log('planCalendarSync - unchanged hash -> no action:');
@@ -88,10 +88,10 @@ function main() {
     ok('no delete when deviceEvents is empty (guards a transient empty read)', actions.every((a) => a.kind !== 'delete'), JSON.stringify(actions));
   }
 
-  console.log('planCalendarSync - disappeared device event with no MemoPad match -> no action:');
+  console.log('planCalendarSync - disappeared device event with no Nueco match -> no action:');
   {
     const { actions } = planCalendarSync([], new Map(), { 'dev-1': 'old-hash' }, true);
-    ok('nothing to delete when there was never a MemoPad copy', actions.length === 0, JSON.stringify(actions));
+    ok('nothing to delete when there was never a Nueco copy', actions.length === 0, JSON.stringify(actions));
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);

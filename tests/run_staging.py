@@ -7,15 +7,15 @@ capture latency, cold-start, and transport/security-header behaviour that can on
 be observed over the wire.
 
 USAGE
-  export MEMOPAD_API_URL="https://<your-staging-host>"      # required, must be https
+  export NUECO_API_URL="https://<your-staging-host>"      # required, must be https
   # optional: authenticated-endpoint latency needs a PRE-VERIFIED account
-  export MEMOPAD_TEST_EMAIL="someone@example.com"
-  export MEMOPAD_TEST_PASSWORD="..."
+  export NUECO_TEST_EMAIL="someone@example.com"
+  export NUECO_TEST_PASSWORD="..."
   python tests/run_staging.py
 
 SAFETY
-  - Refuses to run if MEMOPAD_API_URL is unset or not https://.
-  - Refuses the known PRODUCTION host unless MEMOPAD_ALLOW_PROD=1 (avoid hammering prod).
+  - Refuses to run if NUECO_API_URL is unset or not https://.
+  - Refuses the known PRODUCTION host unless NUECO_ALLOW_PROD=1 (avoid hammering prod).
   - Warms up sequentially, adds jitter, and trips a circuit breaker on repeated 429/503.
   - Any notes it creates for latency sampling are deleted again at the end.
 Outputs: tests/report_staging.md
@@ -50,14 +50,14 @@ def _fail(msg: str, code: int = 2):
 
 
 def _resolve_target() -> str:
-    base = (os.getenv("MEMOPAD_API_URL") or "").strip().rstrip("/")
+    base = (os.getenv("NUECO_API_URL") or "").strip().rstrip("/")
     if not base:
-        _fail("MEMOPAD_API_URL is not set. Point it at a STAGING https URL and re-run.")
+        _fail("NUECO_API_URL is not set. Point it at a STAGING https URL and re-run.")
     if not base.startswith("https://"):
-        _fail(f"MEMOPAD_API_URL must be https:// (got {base!r}).")
-    if KNOWN_PROD_HOST in base and os.getenv("MEMOPAD_ALLOW_PROD") != "1":
+        _fail(f"NUECO_API_URL must be https:// (got {base!r}).")
+    if KNOWN_PROD_HOST in base and os.getenv("NUECO_ALLOW_PROD") != "1":
         _fail(f"Refusing to target the production host {KNOWN_PROD_HOST}. "
-              "Use a staging URL, or set MEMOPAD_ALLOW_PROD=1 to override (not recommended).")
+              "Use a staging URL, or set NUECO_ALLOW_PROD=1 to override (not recommended).")
     return base
 
 
@@ -160,8 +160,8 @@ async def latency_pass(client, base, cb, report):
     results = {"cold": [cold] if cold else [], "post": [], "get": [], "edit": []}
 
     # ---- authenticated latency (optional) ----
-    email = os.getenv("MEMOPAD_TEST_EMAIL")
-    password = os.getenv("MEMOPAD_TEST_PASSWORD")
+    email = os.getenv("NUECO_TEST_EMAIL")
+    password = os.getenv("NUECO_TEST_PASSWORD")
     authed_note = []
     headers = None
     if email and password:
@@ -198,7 +198,7 @@ async def latency_pass(client, base, cb, report):
         report.append(f"> Authenticated latency sampled over {len(created)} notes "
                       "(all created notes deleted afterwards).\n")
     else:
-        report.append("> No MEMOPAD_TEST_EMAIL/PASSWORD set — only unauthenticated "
+        report.append("> No NUECO_TEST_EMAIL/PASSWORD set — only unauthenticated "
                       "(health) latency measured. Set a pre-verified account for note CRUD latency.\n")
 
     # ---- benchmark table ----
@@ -225,7 +225,7 @@ async def main():
     base = _resolve_target()
     print(f"Target: {base}")
     report = [
-        "# MemoPad — Staging Latency & Transport Report",
+        "# Nueco — Staging Latency & Transport Report",
         "",
         f"_Generated: {datetime.now(timezone.utc).isoformat()}_",
         f"_Target: `{base}` (real network)_",

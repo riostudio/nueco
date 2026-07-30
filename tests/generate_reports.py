@@ -27,7 +27,7 @@ def write_performance_report():
 
     lines = []
     lines += [
-        "# MemoPad — Notetaking Performance Report",
+        "# Nueco — Notetaking Performance Report",
         "",
         f"_Generated: {R['generated_at']}_",
         f"_Mode: **{R['mode']}**_",
@@ -121,9 +121,9 @@ def write_performance_report():
         "**staging** URL (never prod):",
         "",
         "```bash",
-        "export MEMOPAD_API_URL=\"https://<staging-host>\"",
-        "export MEMOPAD_TEST_EMAIL=\"<pre-verified account>\"   # optional: enables note-CRUD latency",
-        "export MEMOPAD_TEST_PASSWORD=\"...\"",
+        "export NUECO_API_URL=\"https://<staging-host>\"",
+        "export NUECO_TEST_EMAIL=\"<pre-verified account>\"   # optional: enables note-CRUD latency",
+        "export NUECO_TEST_PASSWORD=\"...\"",
         "python tests/run_staging.py        # -> tests/report_staging.md",
         "```",
         "",
@@ -142,7 +142,7 @@ def write_security_report():
     counts = Counter(x["status"] for x in findings)
 
     lines = [
-        "# MemoPad — Security Evaluation Report",
+        "# Nueco — Security Evaluation Report",
         "",
         f"_Generated: {R['generated_at']}_",
         f"_Mode: **{R['mode']}**_",

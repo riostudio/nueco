@@ -17,7 +17,7 @@ export async function exportMyData(user: ExportUser): Promise<void> {
   const [notes, events] = await Promise.all([getLocalNotes(), getLocalEvents()]);
 
   const payload = {
-    app: 'MemoPad',
+    app: 'Nueco',
     format_version: 1,
     exported_at: new Date().toISOString(),
     profile: user ? { id: user.id, email: user.email, name: user.name } : null,
@@ -48,13 +48,13 @@ export async function exportMyData(user: ExportUser): Promise<void> {
   };
 
   const json = JSON.stringify(payload, null, 2);
-  const fileUri = `${FileSystem.documentDirectory}memopad-export-${Date.now()}.json`;
+  const fileUri = `${FileSystem.documentDirectory}nueco-export-${Date.now()}.json`;
   await FileSystem.writeAsStringAsync(fileUri, json);
 
   if (await Sharing.isAvailableAsync()) {
     await Sharing.shareAsync(fileUri, {
       mimeType: 'application/json',
-      dialogTitle: 'Export MemoPad data',
+      dialogTitle: 'Export Nueco data',
       UTI: 'public.json',
     });
   }

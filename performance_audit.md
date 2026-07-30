@@ -1,4 +1,4 @@
-# MemoPad — Performance Audit
+# Nueco — Performance Audit
 
 Scope: backend (FastAPI + MongoDB) and frontend (Expo/React Native) runtime performance —
 not architecture or code organization (see `architectural_audit.md` for that). Findings are
@@ -48,7 +48,7 @@ needed when a specific note is opened in the editor. So every full sync download
 full-resolution base64 image data for every image-bearing note, for no reason the list
 screen uses.
 
-**Why this is deferred, not fixed:** MemoPad is local-first and offline-capable by design —
+**Why this is deferred, not fixed:** Nueco is local-first and offline-capable by design —
 `fullSync()` fetches every note via this exact endpoint and caches the *complete* result
 (including images) in `notes.json`, so a note opens instantly with its images even with no
 network connection. Simply dropping `images` from this projection would silently break

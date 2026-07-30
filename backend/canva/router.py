@@ -13,10 +13,10 @@ from .schemas import (
 router = APIRouter(prefix="/canva", tags=["canva"])
 
 # The mobile app deep-links back in via this scheme once the backend has finished the OAuth
-# exchange - see app.json's `scheme` and ShareIntentProvider's config for the same "memopad" URI
+# exchange - see app.json's `scheme` and ShareIntentProvider's config for the same "nueco" URI
 # scheme used elsewhere in this app.
-APP_DEEP_LINK_SUCCESS = "memopad://canva-connected?status=success"
-APP_DEEP_LINK_FAILURE = "memopad://canva-connected?status=error"
+APP_DEEP_LINK_SUCCESS = "nueco://canva-connected?status=success"
+APP_DEEP_LINK_FAILURE = "nueco://canva-connected?status=error"
 
 
 def _callback_redirect_uri() -> str:

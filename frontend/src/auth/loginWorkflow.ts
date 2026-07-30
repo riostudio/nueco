@@ -52,7 +52,7 @@ export async function runLoginWorkflow(
   deps: LoginWorkflowDeps,
 ): Promise<LoginWorkflowResult> {
   // Front-loads the calendar permission prompt right after login instead of waiting for the
-  // user to first create/edit an event - so event-editor's device-calendar write and MemoPad's
+  // user to first create/edit an event - so event-editor's device-calendar write and Nueco's
   // own sync queue both have access from the start. Not awaited: irrelevant to bootstrap/sync
   // ordering, and safe to call on every login (a no-op UI-wise if already granted/denied).
   deps.requestCalendarSyncPermission();

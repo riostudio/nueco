@@ -16,7 +16,7 @@ import { BACKEND_BASE_URL } from '../src/backendBaseUrl';
 import { C, radius, borderWidth } from '../src/theme';
 
 // Served from the backend itself (same origin as the API) - see backend/server.py's
-// GET /privacy route and backend/static/privacy.html. Swap to a memopad.app URL if
+// GET /privacy route and backend/static/privacy.html. Swap to a nueco.app URL if
 // that domain ever gets a custom-domain mapping to this Railway service.
 const PRIVACY_POLICY_URL = `${BACKEND_BASE_URL}/privacy`;
 const TERMS_OF_USE_URL = `${BACKEND_BASE_URL}/terms`;

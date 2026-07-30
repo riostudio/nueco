@@ -1,5 +1,5 @@
 /**
- * A rich card for a post shared into MemoPad from a social app (Instagram, Facebook,
+ * A rich card for a post shared into Nueco from a social app (Instagram, Facebook,
  * TikTok, …). Shows the thumbnail (image or generated video frame), the post header/caption,
  * and a platform badge; tapping the card opens the original post. Rendered in the editor above
  * the note body. Presentation (brand color + icon + host) is re-derived from the URL, so nothing

@@ -3,7 +3,7 @@
     "id": 1,
     "persona": "power",
     "name": "Power User 1",
-    "email": "testuser_1@memopad-sim.com",
+    "email": "testuser_1@nueco-sim.com",
     "forwarded_for": "10.0.1.147",
     "sample_kind": "study",
     "sample_content": "MongoDB compound index order matters: equality, sort, range."
@@ -12,7 +12,7 @@
     "id": 2,
     "persona": "power",
     "name": "Power User 2",
-    "email": "testuser_2@memopad-sim.com",
+    "email": "testuser_2@nueco-sim.com",
     "forwarded_for": "10.0.2.199",
     "sample_kind": "todo",
     "sample_content": "- [ ] Refactor auth service\n- [ ] Add note index\n- [ ] Write tests"
@@ -21,7 +21,7 @@
     "id": 3,
     "persona": "new",
     "name": "New User 3",
-    "email": "testuser_3@memopad-sim.com",
+    "email": "testuser_3@nueco-sim.com",
     "forwarded_for": "10.0.3.163",
     "sample_kind": "journal",
     "sample_content": "Tough day debugging a race condition. Note to self: add await guards."
@@ -30,7 +30,7 @@
     "id": 4,
     "persona": "new",
     "name": "New User 4",
-    "email": "testuser_4@memopad-sim.com",
+    "email": "testuser_4@nueco-sim.com",
     "forwarded_for": "10.0.4.101",
     "sample_kind": "study",
     "sample_content": "MongoDB compound index order matters: equality, sort, range."
@@ -39,7 +39,7 @@
     "id": 5,
     "persona": "new",
     "name": "New User 5",
-    "email": "testuser_5@memopad-sim.com",
+    "email": "testuser_5@nueco-sim.com",
     "forwarded_for": "10.0.5.195",
     "sample_kind": "todo",
     "sample_content": "- [ ] Water plants\n- [ ] Pay rent\n- [ ] Book flights"
@@ -48,7 +48,7 @@
     "id": 6,
     "persona": "churned",
     "name": "Churned User 6",
-    "email": "testuser_6@memopad-sim.com",
+    "email": "testuser_6@nueco-sim.com",
     "forwarded_for": "10.0.6.28",
     "sample_kind": "study",
     "sample_content": "JWT = header.payload.signature; HS256 symmetric, verify with secret."
@@ -57,7 +57,7 @@
     "id": 7,
     "persona": "churned",
     "name": "Churned User 7",
-    "email": "testuser_7@memopad-sim.com",
+    "email": "testuser_7@nueco-sim.com",
     "forwarded_for": "10.0.7.231",
     "sample_kind": "journal",
     "sample_content": "Long run this morning, felt great. Grateful for cooler weather."
@@ -66,7 +66,7 @@
     "id": 8,
     "persona": "churned",
     "name": "Churned User 8",
-    "email": "testuser_8@memopad-sim.com",
+    "email": "testuser_8@nueco-sim.com",
     "forwarded_for": "10.0.8.228",
     "sample_kind": "study",
     "sample_content": "JWT = header.payload.signature; HS256 symmetric, verify with secret."
@@ -75,7 +75,7 @@
     "id": 9,
     "persona": "rapid",
     "name": "Rapid User 9",
-    "email": "testuser_9@memopad-sim.com",
+    "email": "testuser_9@nueco-sim.com",
     "forwarded_for": "10.0.9.206",
     "sample_kind": "journal",
     "sample_content": "Tried a new ramen place. 8/10. Would bring friends."
@@ -84,7 +84,7 @@
     "id": 10,
     "persona": "rapid",
     "name": "Rapid User 10",
-    "email": "testuser_10@memopad-sim.com",
+    "email": "testuser_10@nueco-sim.com",
     "forwarded_for": "10.0.10.170",
     "sample_kind": "study",
     "sample_content": "Bcrypt uses a salt + cost factor; rounds=12 ~ 250ms/hash."
@@ -93,7 +93,7 @@
     "id": 11,
     "persona": "rapid",
     "name": "Rapid User 11",
-    "email": "testuser_11@memopad-sim.com",
+    "email": "testuser_11@nueco-sim.com",
     "forwarded_for": "10.0.11.153",
     "sample_kind": "study",
     "sample_content": "Bcrypt uses a salt + cost factor; rounds=12 ~ 250ms/hash."
@@ -102,7 +102,7 @@
     "id": 12,
     "persona": "conflict",
     "name": "Conflict User 12",
-    "email": "testuser_12@memopad-sim.com",
+    "email": "testuser_12@nueco-sim.com",
     "forwarded_for": "10.0.12.64",
     "sample_kind": "journal",
     "sample_content": "Long run this morning, felt great. Grateful for cooler weather."
@@ -111,7 +111,7 @@
     "id": 13,
     "persona": "conflict",
     "name": "Conflict User 13",
-    "email": "testuser_13@memopad-sim.com",
+    "email": "testuser_13@nueco-sim.com",
     "forwarded_for": "10.0.13.174",
     "sample_kind": "study",
     "sample_content": "MongoDB compound index order matters: equality, sort, range."
@@ -120,7 +120,7 @@
     "id": 14,
     "persona": "formatter",
     "name": "Formatter User 14",
-    "email": "testuser_14@memopad-sim.com",
+    "email": "testuser_14@nueco-sim.com",
     "forwarded_for": "10.0.14.155",
     "sample_kind": "journal",
     "sample_content": "Tough day debugging a race condition. Note to self: add await guards."
@@ -129,7 +129,7 @@
     "id": 15,
     "persona": "formatter",
     "name": "Formatter User 15",
-    "email": "testuser_15@memopad-sim.com",
+    "email": "testuser_15@nueco-sim.com",
     "forwarded_for": "10.0.15.141",
     "sample_kind": "todo",
     "sample_content": "- [ ] Buy groceries\n- [ ] Call dentist\n- [x] Renew passport"
@@ -138,7 +138,7 @@
     "id": 16,
     "persona": "search",
     "name": "Search User 16",
-    "email": "testuser_16@memopad-sim.com",
+    "email": "testuser_16@nueco-sim.com",
     "forwarded_for": "10.0.16.19",
     "sample_kind": "meeting",
     "sample_content": "Design review: calendar event color contrast fails WCAG AA."
@@ -147,7 +147,7 @@
     "id": 17,
     "persona": "search",
     "name": "Search User 17",
-    "email": "testuser_17@memopad-sim.com",
+    "email": "testuser_17@nueco-sim.com",
     "forwarded_for": "10.0.17.173",
     "sample_kind": "meeting",
     "sample_content": "Standup: shipped attachments PR, blocked on S3 IAM, ETA Friday."
@@ -156,7 +156,7 @@
     "id": 18,
     "persona": "search",
     "name": "Search User 18",
-    "email": "testuser_18@memopad-sim.com",
+    "email": "testuser_18@nueco-sim.com",
     "forwarded_for": "10.0.18.51",
     "sample_kind": "todo",
     "sample_content": "- [ ] Buy groceries\n- [ ] Call dentist\n- [x] Renew passport"
@@ -165,7 +165,7 @@
     "id": 19,
     "persona": "malicious",
     "name": "Malicious User 19",
-    "email": "testuser_19@memopad-sim.com",
+    "email": "testuser_19@nueco-sim.com",
     "forwarded_for": "10.0.19.51",
     "sample_kind": "study",
     "sample_content": "JWT = header.payload.signature; HS256 symmetric, verify with secret."
@@ -174,7 +174,7 @@
     "id": 20,
     "persona": "malicious",
     "name": "Malicious User 20",
-    "email": "testuser_20@memopad-sim.com",
+    "email": "testuser_20@nueco-sim.com",
     "forwarded_for": "10.0.20.4",
     "sample_kind": "study",
     "sample_content": "MongoDB compound index order matters: equality, sort, range."

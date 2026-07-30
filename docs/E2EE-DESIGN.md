@@ -1,4 +1,4 @@
-# MemoPad - End-to-End Encryption Design & Threat Model
+# Nueco - End-to-End Encryption Design & Threat Model
 
 _Status: implemented (crypto core, backend escrow, note field encrypt/decrypt,
 calendar event field encrypt/decrypt, account name encrypt/decrypt, gated
@@ -179,7 +179,7 @@ same flags, same rollout gates (§9) - built as a natural extension, not a new s
   Existing Event" picker; `(tabs)/events.tsx` and `(tabs)/calendar.tsx` list fetches;
   `calendarSync.ts`'s device-calendar auto-sync writes. The calendar-sync hash-diff
   logic is unaffected - it only ever compares raw device-calendar text against a
-  locally cached hash, never against MemoPad's (now encrypted) stored copy.
+  locally cached hash, never against Nueco's (now encrypted) stored copy.
 - **Events - size caps:** same 5× ciphertext headroom rationale as notes
   (`_CIPHERTEXT_HEADROOM`); `MAX_EVENT_TITLE_CHARS`/`_DESCRIPTION_CHARS`/`_LOCATION_CHARS`.
 - **Events - migration:** `eventMigration.ts` `migrateEventsToEncrypted`, same

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Focused DELETE Note Functionality Test for MemoPad
+Focused DELETE Note Functionality Test for Nueco
 Tests the specific DELETE note functionality as requested
 """
 

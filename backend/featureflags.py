@@ -25,7 +25,7 @@ async def _refresh_flags() -> None:
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.post(
             f"{POSTHOG_HOST}/decide/?v=3",
-            json={"api_key": POSTHOG_PROJECT_API_KEY, "distinct_id": "memopad-backend"},
+            json={"api_key": POSTHOG_PROJECT_API_KEY, "distinct_id": "nueco-backend"},
         )
         resp.raise_for_status()
         flags = resp.json().get("featureFlags", {})

@@ -354,7 +354,7 @@ const s = StyleSheet.create({
   // eventInfo/eventInfoTitle) - same visual language for "this is a calendar event" everywhere.
   eventRow: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: '#E3F2FD', borderRadius: 8, padding: 8, marginBottom: 6,
+    backgroundColor: C.secondaryTint, borderRadius: 8, padding: 8, marginBottom: 6,
   },
   eventRowText: { flex: 1, fontSize: 14, fontWeight: '600', color: C.secondary },
   newsLogo: { width: 17, height: 17, borderRadius: 4 },

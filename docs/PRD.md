@@ -1,4 +1,4 @@
-# MemoPad — Product Requirements Document
+# Nueco — Product Requirements Document
 
 *Reverse-engineered from the current codebase. Reflects what is actually built and shipping, not the roadmap.*
 
@@ -6,16 +6,16 @@
 
 ## 📋 Executive Summary
 
-**MemoPad** is a **privacy-first, offline-first** note-taking and personal
+**Nueco** is a **privacy-first, offline-first** note-taking and personal
 organization app for mobile, built with **Expo/React Native** on the
 frontend and **FastAPI + MongoDB** on the backend, deployed on **Railway**.
 
 It is aimed at people who want one fast, always-available place to **capture
 thoughts, voice memos, and reminders** — without trusting a server to read
 their notes. Every note is **end-to-end encrypted** on-device before it ever
-reaches MemoPad's servers.
+reaches Nueco's servers.
 
-Beyond note-taking, MemoPad doubles as a **lightweight personal
+Beyond note-taking, Nueco doubles as a **lightweight personal
 scheduler** (recurring reminders, two-way native calendar sync) and a
 **daily briefing tool** — a "Daily Brew" card that greets the user each
 morning with weather, today's events, and a few chosen news headlines, right
@@ -32,7 +32,7 @@ has a full signal or none at all.
 | Feature | User Benefit | Technical Implementation File |
 |---|---|---|
 | Email/password signup & login | Create a private account in seconds | `frontend/app/signup.tsx` |
-| End-to-end encrypted notes | Only the user can read their notes — not even MemoPad's own servers | `frontend/src/crypto/noteCrypto.ts` |
+| End-to-end encrypted notes | Only the user can read their notes — not even Nueco's own servers | `frontend/src/crypto/noteCrypto.ts` |
 | Recovery code | Resetting your password never permanently locks you out of encrypted notes | `frontend/app/recovery-code.tsx`, `recover-key.tsx` |
 | In-app password change | Change your password without losing access to your notes | `frontend/app/change-password.tsx` |
 | Rich text editor | Format notes with **bold**, *italic*, bullet lists, and undo/redo | `frontend/app/editor.tsx` |
@@ -96,7 +96,7 @@ has a full signal or none at all.
 
 ### Core action: share content from another app
 - User shares a link, photo, or video from Instagram, TikTok, Reddit, etc.
-- MemoPad asks: **new note**, or **append to an existing one**?
+- Nueco asks: **new note**, or **append to an existing one**?
 - The shared link **unfurls** into a real preview card — thumbnail and title, not a raw URL.
 
 ### Daily habit: the morning briefing

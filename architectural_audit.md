@@ -1,4 +1,4 @@
-# MemoPad — Architectural Audit: Business Logic Coupling & Isolation
+# Nueco — Architectural Audit: Business Logic Coupling & Isolation
 
 Scope: same codebase as `business_logic_map.md`. That document says *where* logic lives;
 this one judges *how cleanly* — tight coupling, logic leaking into controllers/routes/UI, and
@@ -413,7 +413,7 @@ async def push_tick(request: Request):
 **What this buys, concretely:**
 - `RemindersService.claim_due_reminders` and `advance_recurring` are now each independently
   unit-testable against a mock-Mongo `db` (the same `mongomock_motor` setup already used in
-  `backend/tests/test_memopad_apis.py`) — no FastAPI app, no real Expo call, no route needed to
+  `backend/tests/test_nueco_apis.py`) — no FastAPI app, no real Expo call, no route needed to
   exercise the claim-atomicity or recurrence-rollforward logic.
 - `send_and_track` can be tested against a fake `ExpoClient` whose `send_batch` returns
   canned success/error/`None` responses — covering the `DeviceNotRegistered` token-deactivation

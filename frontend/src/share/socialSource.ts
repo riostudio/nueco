@@ -55,7 +55,7 @@ const BRANDS: BrandRule[] = [
 ];
 
 const FALLBACK_ICON = 'link-variant';
-const FALLBACK_COLOR = '#1565C0'; // == C.secondary
+const FALLBACK_COLOR = '#0F6E56'; // == C.secondary
 
 /** Lowercased hostname with a leading `www.` removed; '' when the URL can't be parsed. */
 export function hostOf(url: string): string {

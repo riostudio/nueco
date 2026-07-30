@@ -29,9 +29,9 @@ export default function WelcomeScreen() {
         {/* Logo and Branding */}
         <View style={styles.brandSection}>
           <View style={styles.logoContainer}>
-            <MaterialIcons name="description" size={64} color={C.primary} />
+            <Image source={require('../assets/images/icon.png')} style={styles.logoImage} />
           </View>
-          <Text style={styles.appName}>MemoPad</Text>
+          <Text style={styles.appName}>Nueco</Text>
           <Text style={styles.tagline}>Your thoughts, organized simply</Text>
         </View>
 
@@ -92,13 +92,13 @@ const styles = StyleSheet.create({
   logoContainer: {
     width: 120,
     height: 120,
-    borderRadius: radius.lg,
-    backgroundColor: C.surfaceHi,
-    justifyContent: 'center',
-    alignItems: 'center',
+    borderRadius: 28,
+    overflow: 'hidden',
     marginBottom: 24,
-    borderWidth: borderWidth.thick,
-    borderColor: C.border,
+  },
+  logoImage: {
+    width: 120,
+    height: 120,
   },
   appName: {
     fontSize: 42,

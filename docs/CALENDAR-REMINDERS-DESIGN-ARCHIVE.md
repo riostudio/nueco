@@ -1,4 +1,4 @@
-# MemoPad — Calendar Sync & Event-Reminder Push Infrastructure
+# Nueco — Calendar Sync & Event-Reminder Push Infrastructure
 
 _Status: **planned** (not yet implemented). This doc is the implementation plan for
 two related features: (1) native Google/Apple calendar sync without a browser
@@ -12,7 +12,7 @@ _Decisions locked with the product owner (2026-07-05):_
 
 ## 1. Goals
 
-1. A user can **create or link** an event in MemoPad and have it **auto-sync to the
+1. A user can **create or link** an event in Nueco and have it **auto-sync to the
    device's Google or Apple calendar** with no redirect to `calendar.google.com`.
 2. Event reminders are delivered as **push notifications** driven by backend
    infrastructure (not only on-device local scheduling), so a reminder fires even if
@@ -27,7 +27,7 @@ _Decisions locked with the product owner (2026-07-05):_
   from a background/lock-screen push without the iOS **Critical Alerts** entitlement
   (special Apple approval). Out of scope. Voice happens on tap, foregrounded.
 - **Two-way calendar sync.** We write to the device calendar and track the created
-  event id; we do not import external calendar changes back into MemoPad.
+  event id; we do not import external calendar changes back into Nueco.
 
 ## 2. Current state (what already exists)
 

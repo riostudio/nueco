@@ -1,6 +1,6 @@
 export const strings = {
   // Welcome screen
-  welcomeTitle: 'MemoPad',
+  welcomeTitle: 'Nueco',
   welcomeSubtitle: 'Your AI-powered notetaking companion',
   createAccount: 'Create Account',
   logIn: 'Log In',

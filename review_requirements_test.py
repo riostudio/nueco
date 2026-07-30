@@ -181,7 +181,7 @@ def test_specific_requirements():
     return True
 
 if __name__ == "__main__":
-    print("Testing MemoPad Backend APIs - Review Request Verification")
+    print("Testing Nueco Backend APIs - Review Request Verification")
     print("Backend URL: https://web-production-a3258.up.railway.app/api")
     print("=" * 70)
     

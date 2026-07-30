@@ -1,4 +1,4 @@
-# Dev/test dependencies for the MemoPad simulation suite (tests/).
+# Dev/test dependencies for the Nueco simulation suite (tests/).
 #
 # Runs the real backend (backend/server.py) in-process against an in-memory Mongo,
 # so the heavy/outbound-only deps (openai, boto3, requests) are stubbed by

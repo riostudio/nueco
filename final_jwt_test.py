@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Final Comprehensive JWT Authentication Test for MemoPad
+Final Comprehensive JWT Authentication Test for Nueco
 Tests all JWT endpoints as requested in the review
 """
 

@@ -64,7 +64,7 @@ export default function ShareTargetScreen() {
         <TouchableOpacity testID="share-target-cancel" style={s.headerBtn} onPress={cancel}>
           <MaterialIcons name="close" size={26} color={C.text} />
         </TouchableOpacity>
-        <Text style={s.headerTitle}>Add to MemoPad</Text>
+        <Text style={s.headerTitle}>Add to Nueco</Text>
         <View style={{ width: 26 }} />
       </View>
       <Text style={s.preview} numberOfLines={2}>{preview}</Text>

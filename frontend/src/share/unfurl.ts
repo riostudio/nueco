@@ -29,7 +29,7 @@ export interface UnfurlResult {
 const UNFURL_PLATFORMS = new Set(['tiktok', 'reddit', 'instagram', 'facebook', 'threads', 'linkedin', 'link']);
 
 // Reddit blocks generic/empty User-Agents (429s); a descriptive UA keeps the `.json` API happy.
-const REDDIT_UA = 'MemoPad/1.0 (link unfurl)';
+const REDDIT_UA = 'Nueco/1.0 (link unfurl)';
 
 /** Platforms we attempt to unfurl client-side (see reliability note above). */
 export function needsUnfurl(platform: string): boolean {
