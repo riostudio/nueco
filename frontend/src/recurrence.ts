@@ -135,6 +135,17 @@ function alignForward(start: Date, from: Date, stepMs: number): Date {
   return new Date(start.getTime() + daysToAdvance * stepMs);
 }
 
+// A date-only "YYYY-MM-DD" all-day start_time/end_time fed straight to `new Date(...)` is
+// parsed as *UTC* midnight per the JS spec (unlike a bare datetime string, which parses as
+// local) - local getters on that instant would then shift the calendar date backward by one
+// for any negative-UTC-offset timezone. Building the Date directly from the Y/M/D integers via
+// the local constructor sidesteps any UTC round-trip entirely, so it's correct in every
+// timezone. Exported so events.tsx's day-grouping can use the same logic instead of its own copy.
+export function parseDateOnlyLocal(dateOnly: string): Date {
+  const [y, m, d] = dateOnly.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
 function parseIsoDateOnly(iso: string): { year: number; month: number; day: number } | null {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
@@ -171,6 +182,17 @@ export function occursOnDay(event: CalendarEvent, year: number, month: number, d
 // Matches any day the event spans, not just its start day - multi-day events (event-editor's
 // End Date field) would otherwise vanish from every day but the first.
 export function eventCoversDay(e: CalendarEvent, y: number, m: number, d: number): boolean {
+  if (e.all_day) {
+    // Date-only comparison, no instant/timezone conversion at all - start inclusive, end
+    // exclusive, matching the iCal all-day convention calendarSyncCore.ts's ingestion follows
+    // (a single-day event's end_time is the calendar day *after* its start_time). Without this
+    // branch, routing an all-day event's date-only start_time/end_time through `new Date(...)`
+    // below would parse them as UTC midnight and could shift the day it's shown on for a
+    // negative-UTC-offset device - the same bug class this whole fix addresses, just at the
+    // day-matching layer instead of the clock-time-display layer.
+    const cellStart = new Date(y, m, d).getTime();
+    return cellStart >= parseDateOnlyLocal(e.start_time).getTime() && cellStart < parseDateOnlyLocal(e.end_time).getTime();
+  }
   const dayStart = new Date(y, m, d, 0, 0, 0, 0);
   const dayEnd = new Date(y, m, d, 23, 59, 59, 999);
   return new Date(e.start_time) <= dayEnd && new Date(e.end_time) >= dayStart;
@@ -180,6 +202,12 @@ export function eventCoversDay(e: CalendarEvent, y: number, m: number, d: number
 // source of truth for reminder firing) instead of the plain start/end range check -
 // eventCoversDay is left untouched for non-recurring events so their day-matching
 // behavior stays byte-identical to before.
+//
+// occursOnDay (the recurring path) has no equivalent all_day handling - device-calendar sync
+// never sets recurrence on an all-day event today (see calendarSyncCore.ts), so an all-day
+// recurring event isn't a reachable combination yet. If that changes, occursOnDay's
+// nextOccurrenceOnOrAfter -> localCalendarDay chain would need the same date-only treatment
+// eventCoversDay gets here.
 export function eventOccursOnDay(e: CalendarEvent, y: number, m: number, d: number): boolean {
   return e.recurrence ? occursOnDay(e, y, m, d) : eventCoversDay(e, y, m, d);
 }

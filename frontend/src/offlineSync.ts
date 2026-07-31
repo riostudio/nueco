@@ -57,6 +57,9 @@ export interface LocalEvent {
   title: string;
   description: string;
   location?: string;
+  // Date-only "YYYY-MM-DD" when true (see CalendarEvent in types.ts for the full contract) -
+  // start_time/end_time are never converted to/from local time in that case.
+  all_day?: boolean;
   start_time: string;
   end_time: string;
   linked_note_ids: string[];

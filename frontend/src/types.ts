@@ -43,6 +43,10 @@ export interface CalendarEvent {
   title: string;
   description: string;
   location: string;
+  // When true, start_time/end_time are date-only "YYYY-MM-DD" (a calendar date, not an
+  // instant) - never converted to/from local time. When false/absent (legacy events predating
+  // this field), they're full ISO-8601 instants, converted to local time for display as usual.
+  all_day?: boolean;
   start_time: string;
   end_time: string;
   linked_note_ids: string[];

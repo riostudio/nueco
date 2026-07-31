@@ -6,8 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useIsFocused } from '@react-navigation/native';
-import { eventsApi } from '../../src/api';
-import { getLocalEvents } from '../../src/offlineSync';
+import { getLocalEvents, fullSync } from '../../src/offlineSync';
 import { CalendarEvent } from '../../src/types';
 import { C, radius, borderWidth } from '../../src/theme';
 import { MONTH_NAMES, DAY_NAMES } from '../../src/dateNames';
@@ -21,6 +20,17 @@ function formatEventTime(iso: string): string {
   const ampm = h >= 12 ? 'PM' : 'AM';
   const hour = h % 12 || 12;
   return `${hour}:${m.toString().padStart(2, '0')} ${ampm}`;
+}
+
+// The time column shows one line for a point-in-time event (or "All day"), and a start/end
+// pair only when they genuinely display differently - previously this always printed both
+// start and end unconditionally, which for an all-day event (whose start/end are both
+// midnight, just on consecutive dates) meant the same formatted clock time appeared twice.
+function formatEventTimeRange(event: CalendarEvent): { primary: string; secondary: string | null } {
+  if (event.all_day) return { primary: 'All day', secondary: null };
+  const start = formatEventTime(event.start_time);
+  const end = formatEventTime(event.end_time);
+  return { primary: start, secondary: end !== start ? end : null };
 }
 
 // Time-of-day, not raw start_time epoch: every event passed in already occurs on the target
@@ -44,27 +54,26 @@ export default function CalendarScreen() {
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
 
-  const loadEvents = useCallback(async () => {
+  // Local-first, then reconcile via fullSync - same pattern (tabs)/events.tsx uses. Previously
+  // this followed the local-first render with a raw eventsApi.getAllCached() call that had no
+  // merge logic at all: it unconditionally overwrote the correct local render with whatever the
+  // (possibly stale-cached, possibly not-yet-caught-up) server response was, so a just-created
+  // event could flash into view and then vanish again if its push hadn't landed yet. Routing
+  // through fullSync + re-reading the local store (like events.tsx already does) means both tabs
+  // now go through the exact same reconciliation path and can't disagree with each other.
+  const loadEvents = useCallback(async (force?: boolean) => {
     try {
-      // Local-first: show whatever's already synced instantly (the same offline store the
-      // Events tab and Notes' linked-event lookups already keep current via fullSync), instead
-      // of every calendar visit waiting on a network round-trip before day-markers/the selected
-      // day's events appear. Day-level filtering (eventOccursOnDay below) doesn't need this
-      // pre-filtered to the current month - the full local list works the same either way.
       const local = await getLocalEvents();
       setEvents(local.filter(e => !e._pendingDelete) as CalendarEvent[]);
-
-      // Cached (20s TTL, keyed by month/year - see src/api.ts) instead of a raw network fetch:
-      // this screen re-runs on every focus (tab switch, back-nav), so within that window a
-      // repeat visit to the same month is served instantly instead of re-fetching + re-decrypting.
-      const data = await eventsApi.getAllCached(month + 1, year);
-      setEvents(data);
+      await fullSync({ force });
+      const fresh = await getLocalEvents();
+      setEvents(fresh.filter(e => !e._pendingDelete) as CalendarEvent[]);
     } catch (e) {
       console.error('Failed to load events:', e);
     } finally {
       setLoading(false);
     }
-  }, [month, year]);
+  }, []);
 
   useFocusEffect(useCallback(() => { loadEvents(); }, [loadEvents]));
 
@@ -205,7 +214,9 @@ export default function CalendarScreen() {
         </View>
 
         {selectedDayEvents.length > 0 ? (
-          selectedDayEvents.map((event) => (
+          selectedDayEvents.map((event) => {
+            const { primary, secondary } = formatEventTimeRange(event);
+            return (
             <TouchableOpacity
               key={event.id}
               testID={`cal-selected-event-${event.id}`}
@@ -214,8 +225,8 @@ export default function CalendarScreen() {
               onPress={() => router.push({ pathname: '/event-editor', params: { eventId: event.id } })}
             >
               <View style={s.eventTimeCol}>
-                <Text style={s.timeStart}>{formatEventTime(event.start_time)}</Text>
-                <Text style={s.timeEnd}>{formatEventTime(event.end_time)}</Text>
+                <Text style={s.timeStart}>{primary}</Text>
+                {secondary ? <Text style={s.timeEnd}>{secondary}</Text> : null}
               </View>
               <View style={s.eventBody}>
                 <Text style={s.eventTitle} numberOfLines={1}>{event.title}</Text>
@@ -225,7 +236,8 @@ export default function CalendarScreen() {
               </View>
               <MaterialIcons name="chevron-right" size={22} color={C.textSec} />
             </TouchableOpacity>
-          ))
+            );
+          })
         ) : (
           <Text style={s.emptyHint}>No events on this day</Text>
         )}

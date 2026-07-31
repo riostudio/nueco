@@ -14,6 +14,10 @@ class EventCreate(BaseModel):
     location: str = ""
     start_time: str
     end_time: str
+    # True: start_time/end_time are date-only "YYYY-MM-DD" (no time-of-day, no instant/timezone
+    # conversion - a calendar date, not an instant). False/absent: start_time/end_time are full
+    # ISO-8601 instants, converted to the viewer's local time for display as today.
+    all_day: bool = False
     linked_note_ids: List[str] = []
     reminder_minutes: Optional[int] = None  # Minutes before event to remind
     device_calendar_event_id: Optional[str] = None  # ID from device calendar
@@ -29,6 +33,7 @@ class EventUpdate(BaseModel):
     location: Optional[str] = None
     start_time: Optional[str] = None
     end_time: Optional[str] = None
+    all_day: Optional[bool] = None
     linked_note_ids: Optional[List[str]] = None
     reminder_minutes: Optional[int] = None
     device_calendar_event_id: Optional[str] = None
@@ -45,6 +50,7 @@ class EventResponse(BaseModel):
     location: str = ""
     start_time: str
     end_time: str
+    all_day: bool = False
     linked_note_ids: List[str]
     reminder_minutes: Optional[int] = None
     device_calendar_event_id: Optional[str] = None

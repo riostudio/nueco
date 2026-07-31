@@ -12,6 +12,7 @@ export type DeviceEvent = {
   notes: string | null | undefined;
   startDate: string | Date;
   endDate: string | Date;
+  allDay: boolean | null | undefined;
 };
 
 export type EventPayload = {
@@ -20,7 +21,22 @@ export type EventPayload = {
   location: string;
   start_time: string;
   end_time: string;
+  all_day: boolean;
 };
+
+// Android's CalendarContract (and iOS EventKit, via ExpoCalendar's shared representation) store
+// an all-day event's start/end as UTC midnight of the intended calendar date, regardless of the
+// device's own timezone - a platform convention, not an instant. Reading the date back out via
+// *UTC* getters recovers the intended date correctly for every timezone; local getters would
+// shift the date backward by one for any negative-UTC-offset device (e.g. US timezones), even
+// though it happens to look right from a positive-offset one like Melbourne.
+function toDateOnly(d: string | Date): string {
+  const date = new Date(d);
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(date.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
 
 export type CreatePayload = EventPayload & {
   linked_note_ids: string[];
@@ -39,8 +55,12 @@ export function hashDeviceEvent(e: {
   notes: string;
   startDate: string | Date;
   endDate: string | Date;
+  allDay: boolean;
 }): string {
-  return [e.title, e.location, e.notes, new Date(e.startDate).toISOString(), new Date(e.endDate).toISOString()].join('|');
+  const [start, end] = e.allDay
+    ? [toDateOnly(e.startDate), toDateOnly(e.endDate)]
+    : [new Date(e.startDate).toISOString(), new Date(e.endDate).toISOString()];
+  return [e.title, e.location, e.notes, e.allDay, start, end].join('|');
 }
 
 /**
@@ -74,23 +94,28 @@ export function planCalendarSync(
   const actions: SyncAction[] = [];
 
   for (const de of deviceEvents) {
+    const allDay = !!de.allDay;
     const hash = hashDeviceEvent({
       title: de.title || 'Untitled',
       location: de.location || '',
       notes: de.notes || '',
       startDate: de.startDate,
       endDate: de.endDate,
+      allDay,
     });
     nextHashes[de.id] = hash;
     if (prevHashes[de.id] === hash) continue; // unchanged since last sync
 
     const match = memoEventsByDeviceId.get(de.id);
+    // Date-only when all-day - see toDateOnly's comment. Never an instant/timezone conversion
+    // for these, so they can't shift across a date boundary or pick up a spurious clock time.
     const payload: EventPayload = {
       title: de.title || 'Untitled',
       description: de.notes || '',
       location: de.location || '',
-      start_time: new Date(de.startDate).toISOString(),
-      end_time: new Date(de.endDate).toISOString(),
+      all_day: allDay,
+      start_time: allDay ? toDateOnly(de.startDate) : new Date(de.startDate).toISOString(),
+      end_time: allDay ? toDateOnly(de.endDate) : new Date(de.endDate).toISOString(),
     };
     if (match) {
       // Deliberately not sending reminder_minutes/linked_note_ids, so a user's Nueco-side

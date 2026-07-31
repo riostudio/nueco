@@ -15,7 +15,7 @@ import { C, radius, borderWidth } from '../../src/theme';
 import { MONTH_NAMES, DAY_NAMES } from '../../src/dateNames';
 import { UserAvatar } from '../../src/auth';
 import { SegmentedControl } from '../../src/components';
-import { nextOccurrenceOnOrAfter, formatRecurrenceSummary } from '../../src/recurrence';
+import { nextOccurrenceOnOrAfter, formatRecurrenceSummary, parseDateOnlyLocal } from '../../src/recurrence';
 
 let ExpoCalendar: typeof import('expo-calendar') | null = null;
 if (Platform.OS !== 'web') {
@@ -29,6 +29,17 @@ function formatEventTime(iso: string): string {
   const ampm = h >= 12 ? 'PM' : 'AM';
   const hour = h % 12 || 12;
   return `${hour}:${m.toString().padStart(2, '0')} ${ampm}`;
+}
+
+// The time column shows one line for a point-in-time event (or "All day"), and a start/end
+// pair only when they genuinely display differently - previously this always printed both
+// start and end unconditionally, which for an all-day event (whose start/end are both
+// midnight, just on consecutive dates) meant the same formatted clock time appeared twice.
+function formatEventTimeRange(event: CalendarEvent): { primary: string; secondary: string | null } {
+  if (event.all_day) return { primary: 'All day', secondary: null };
+  const start = formatEventTime(event.start_time);
+  const end = formatEventTime(event.end_time);
+  return { primary: start, secondary: end !== start ? end : null };
 }
 
 function formatEventDate(iso: string): string {
@@ -59,7 +70,12 @@ function formatReminderMinutes(minutes: number | null | undefined): string {
 // once the series has ended (nextOccurrenceOnOrAfter returns null past `until`) so an ended
 // series still shows up somewhere instead of silently disappearing. Shared by the Upcoming
 // filter and the day-grouping below so both agree on what "today"/"upcoming" means for a series.
+//
+// all_day is checked first, ahead of recurrence: device-calendar sync never sets recurrence on
+// an all-day event today, so this is a defensive fallback (correct calendar day, no recurrence
+// math attempted) rather than a fix for a currently-reachable combination.
 function effectiveEventDate(evt: CalendarEvent): Date {
+  if (evt.all_day) return parseDateOnlyLocal(evt.start_time);
   if (!evt.recurrence) return new Date(evt.start_time);
   return nextOccurrenceOnOrAfter(evt, new Date()) ?? new Date(evt.start_time);
 }
@@ -318,7 +334,9 @@ export default function EventsScreen() {
               )}
             </View>
 
-            {group.events.map((event) => (
+            {group.events.map((event) => {
+              const { primary, secondary } = formatEventTimeRange(event);
+              return (
               <TouchableOpacity
                 key={event.id}
                 testID={`event-card-${event.id}`}
@@ -327,8 +345,8 @@ export default function EventsScreen() {
                 onPress={() => router.push({ pathname: '/event-editor', params: { eventId: event.id } })}
               >
                 <View style={s.eventTimeCol}>
-                  <Text style={s.timeStart}>{formatEventTime(event.start_time)}</Text>
-                  <Text style={s.timeEnd}>{formatEventTime(event.end_time)}</Text>
+                  <Text style={s.timeStart}>{primary}</Text>
+                  {secondary ? <Text style={s.timeEnd}>{secondary}</Text> : null}
                 </View>
 
                 <View style={s.eventBody}>
@@ -363,7 +381,8 @@ export default function EventsScreen() {
                   </TouchableOpacity>
                 </View>
               </TouchableOpacity>
-            ))}
+              );
+            })}
           </View>
         )}
         ListFooterComponent={<View style={{ height: 100 }} />}

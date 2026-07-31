@@ -7,7 +7,7 @@
  * that's covered server-side against `next_occurrence_on_or_after` in
  * backend/tests/test_nueco_apis.py.
  */
-import { nextOccurrenceOnOrAfter, occursOnDay, formatRecurrenceSummary } from './recurrence.ts';
+import { nextOccurrenceOnOrAfter, occursOnDay, eventCoversDay, formatRecurrenceSummary } from './recurrence.ts';
 import type { CalendarEvent, Recurrence } from './types.ts';
 
 let passed = 0;
@@ -151,6 +151,54 @@ function main() {
 
     const nonRecurring = mkEvent({ recurrence: null });
     ok('non-recurring event -> false (no throw)', occursOnDay(nonRecurring, 2026, 6, 13) === false);
+  }
+
+  // Both blocks below run under TZ=Australia/Melbourne - a positive UTC offset, matching the
+  // original bug report (a device all-day event's UTC-midnight start rendered as a spurious
+  // 10am/11am local clock time). eventCoversDay's all-day branch never converts through an
+  // instant at all, so these must land on the exact stored date regardless of device timezone.
+  const prevTz = process.env.TZ;
+  process.env.TZ = 'Australia/Melbourne';
+  try {
+    console.log('eventCoversDay - all-day event from a positive-UTC-offset timezone:');
+    {
+      // Single-day all-day event: end_time is the day *after* start_time (iCal convention -
+      // see calendarSyncCore.ts), so it covers exactly one calendar day.
+      const holiday = mkEvent({
+        all_day: true,
+        start_time: '2026-09-28',
+        end_time: '2026-09-29',
+        recurrence: null,
+      });
+      ok('covers its own date (28 Sep)', eventCoversDay(holiday, 2026, 8, 28) === true);
+      ok('does not cover the day before (27 Sep)', eventCoversDay(holiday, 2026, 8, 27) === false);
+      ok('does not cover the day after (29 Sep, exclusive end)', eventCoversDay(holiday, 2026, 8, 29) === false);
+    }
+
+    console.log('eventCoversDay - all-day events either side of a DST transition:');
+    {
+      // Melbourne's AEDT (UTC+11) starts 4 Oct 2026.
+      const beforeDst = mkEvent({
+        all_day: true,
+        start_time: '2026-09-28',
+        end_time: '2026-09-29',
+        recurrence: null,
+      });
+      const afterDst = mkEvent({
+        all_day: true,
+        start_time: '2026-10-05',
+        end_time: '2026-10-06',
+        recurrence: null,
+      });
+      ok('pre-DST event still lands on 28 Sep, not shifted by the upcoming transition',
+        eventCoversDay(beforeDst, 2026, 8, 28) === true);
+      ok('post-DST event still lands on 5 Oct, not shifted by the just-passed transition',
+        eventCoversDay(afterDst, 2026, 9, 5) === true);
+      ok('post-DST event does not leak onto 4 Oct (the transition day itself)',
+        eventCoversDay(afterDst, 2026, 9, 4) === false);
+    }
+  } finally {
+    if (prevTz === undefined) delete process.env.TZ; else process.env.TZ = prevTz;
   }
 
   console.log('formatRecurrenceSummary:');
