@@ -409,6 +409,14 @@ export default function EditorScreen() {
   // URL we've already attempted a client-side unfurl for (avoids re-fetching in a loop).
   const unfurlTriedRef = useRef<string | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Chains every persistLocal() call so they run strictly one-after-another, never concurrently.
+  // Without this, two saves fired close together (e.g. adding two images in quick succession, or
+  // an image plus an attachment) could both start while isCreatedRef.current was still false,
+  // each independently call createNoteOffline, and end up as two separate local notes - whichever
+  // one noteIdRef.current/isCreatedRef last got pointed at "wins", silently orphaning the other's
+  // content (a just-added image or attachment simply vanishing, or an earlier image's draft
+  // resurfacing looking "reverted"). See saveImmediately/triggerAutoSave below.
+  const savePromiseRef = useRef<Promise<void>>(Promise.resolve());
   // Set right before any of THIS screen's own explicit save-then-navigate paths (the header back
   // button, delete confirmation, etc.) actually leave - so the beforeRemove guard below (which
   // exists to catch the Android hardware back button and iOS swipe-back gesture, neither of
@@ -813,13 +821,19 @@ export default function EditorScreen() {
 
   // Pull the newest HTML straight from the editor bridge. The reactive contentRef lags by the
   // editor's debounce, so persisting without this could write stale content. Raced against a
-  // short timeout: if the webview bridge isn't ready yet, getHTML's message is silently dropped
-  // and its promise never settles - without the race, awaiting it would hang navigation.
+  // timeout: if the webview bridge isn't ready yet, getHTML's message is silently dropped and its
+  // promise never settles - without the race, awaiting it would hang navigation. 400ms was tuned
+  // for typing (fast, tiny responses) and was too short for a just-inserted full-width image -
+  // encoding/laying out/re-measuring a large data-uri image inside the webview can genuinely take
+  // longer than that, and losing the race meant silently persisting content from BEFORE the
+  // image, i.e. the image quietly vanishing on next reload. 2500ms keeps the same safety net
+  // (a broken/not-yet-ready bridge still can't hang navigation forever) with real headroom for
+  // legitimate slow responses instead of a budget tuned for the wrong workload.
   const syncLatestContent = useCallback(async () => {
     try {
       const latest = await Promise.race([
         editorApiRef.current?.getHTML(),
-        new Promise<undefined>((resolve) => setTimeout(resolve, 400)),
+        new Promise<undefined>((resolve) => setTimeout(resolve, 2500)),
       ]);
       if (typeof latest === 'string') contentRef.current = latest;
     } catch {}
@@ -868,6 +882,17 @@ export default function EditorScreen() {
     }
   }, []);
 
+  // Queues a persistLocal() call after whatever's currently chained in savePromiseRef, so
+  // concurrent callers (autosave debounce firing while an immediate save is still in flight, or
+  // two immediate saves back to back) never overlap - see savePromiseRef's own comment above.
+  const enqueuePersist = useCallback((opts: { push?: boolean } = {}): Promise<void> => {
+    const run = savePromiseRef.current
+      .catch(() => {}) // a previous save's rejection must not poison this one's turn
+      .then(() => persistLocal(opts));
+    savePromiseRef.current = run;
+    return run;
+  }, [persistLocal]);
+
   const triggerAutoSave = useCallback(() => {
     userEditedRef.current = true; // any edit commits a shared draft (no longer discardable)
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -876,7 +901,7 @@ export default function EditorScreen() {
       setSaveStatus('Saving...');
       try {
         // Local write only (push deferred to exit/background) - always succeeds offline.
-        await persistLocal({ push: false });
+        await enqueuePersist({ push: false });
         setSaveStatus('All changes saved');
         signalSaved();
       } catch (e: any) {
@@ -884,7 +909,7 @@ export default function EditorScreen() {
         console.error('Autosave error:', e);
       }
     }, 800);
-  }, [persistLocal, signalSaved]);
+  }, [enqueuePersist, signalSaved]);
 
   // Same save persistLocal does, but started right away instead of behind the 800ms debounce -
   // for discrete "the user just added something" actions (voice dictation, a checklist, a
@@ -896,7 +921,7 @@ export default function EditorScreen() {
     userEditedRef.current = true;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     setSaveStatus('Saving...');
-    persistLocal({ push: false })
+    enqueuePersist({ push: false })
       .then(() => {
         setSaveStatus('All changes saved');
         signalSaved();
@@ -905,7 +930,7 @@ export default function EditorScreen() {
         setSaveStatus('Failed to save');
         console.error('Immediate save error:', e);
       });
-  }, [persistLocal, signalSaved]);
+  }, [enqueuePersist, signalSaved]);
 
   // addImages (native free-floating object creation) is intentionally not called from this
   // screen's UI anymore - "Take Photo"/"Choose from Gallery" now insert text-wrapped images via
@@ -944,7 +969,7 @@ export default function EditorScreen() {
             imagesRef.current.length > 0 || attachmentsRef.current.length > 0 || sourcePostRef.current
           );
           if (isCreatedRef.current ? !!noteIdRef.current : hasContent) {
-            await persistLocal({ push: true });
+            await enqueuePersist({ push: true });
             processSyncQueue().catch(() => {});
           }
         } catch (err) {
@@ -955,7 +980,7 @@ export default function EditorScreen() {
       })();
     });
     return unsubscribe;
-  }, [navigation, persistLocal, syncLatestContent]);
+  }, [navigation, enqueuePersist, syncLatestContent]);
 
   const handleBack = useCallback(async () => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -968,7 +993,7 @@ export default function EditorScreen() {
         // await a full network round-trip before back navigation could even start, making every
         // "edit a note, tap back" visibly hang on the network. The queue flush below already
         // covers reaching the server; it just needs to not block the tap that triggered it.
-        await persistLocal({ push: false });
+        await enqueuePersist({ push: false });
         // Flush the queue so the note reaches the server on exit (best-effort, non-blocking).
         processSyncQueue().catch(() => {});
       }
@@ -976,7 +1001,7 @@ export default function EditorScreen() {
       console.error('Save on back failed:', e);
     }
     router.back();
-  }, [router, persistLocal, syncLatestContent]);
+  }, [router, enqueuePersist, syncLatestContent]);
 
   const handleTitleChange = (text: string) => {
     setTitle(text);
@@ -1370,7 +1395,16 @@ export default function EditorScreen() {
         const meta = await uploadAttachmentWithProgress(file, (p) =>
           setPendingUploads(prev => prev.map(u => (u.id === uploadId ? { ...u, progress: p } : u))),
         );
-        setAttachments(prev => [...prev, meta]);
+        // attachmentsRef (not the `attachments` state) is what persistLocal's draft actually
+        // reads - it's normally kept in sync by a useEffect, but that runs AFTER this render
+        // commits, i.e. strictly later than the saveImmediately() call right below. Updating the
+        // ref synchronously here (not via the effect) means persistLocal can never read a stale
+        // ref and silently save a draft missing this attachment - the bug reported as "attachment
+        // not appearing", most reproducible right after adding an image, which fires its own
+        // saveImmediately() and made the race far more likely to lose.
+        const nextAttachments = [...attachmentsRef.current, meta];
+        attachmentsRef.current = nextAttachments;
+        setAttachments(nextAttachments);
         saveImmediately();
       } catch (e: any) {
         // Surface the real reason (and log it) instead of a blanket "Couldn't upload".
@@ -1434,7 +1468,11 @@ export default function EditorScreen() {
   };
 
   const removeAttachment = (att: Attachment) => {
-    setAttachments(prev => prev.filter(a => a.id !== att.id));
+    // Keep attachmentsRef in sync synchronously (not just via the useEffect below) - same
+    // reasoning as uploadFiles above, for the same persistLocal-reads-the-ref reason.
+    const nextAttachments = attachmentsRef.current.filter(a => a.id !== att.id);
+    attachmentsRef.current = nextAttachments;
+    setAttachments(nextAttachments);
     triggerAutoSave();
     // Best-effort remote cleanup; storage lifecycle/next save reconciles on failure.
     attachmentsApi.remove(att.key).catch(() => {});
@@ -1580,7 +1618,7 @@ export default function EditorScreen() {
     let saveSucceeded = false;
 
     try {
-      await persistLocal({ push: true });
+      await enqueuePersist({ push: true });
       processSyncQueue().catch(() => {});
       saveSucceeded = true;
       setSaveStatus('All changes saved');
@@ -1975,10 +2013,10 @@ export default function EditorScreen() {
               style={s.formatBar}
               contentContainerStyle={s.formatBarContent}
             >
-              {/* Attach/Add Image lead the bar - also live in the icon action row below, but
-                  that row only shows once the keyboard is hidden - i.e. exactly when the user
-                  ISN'T mid-edit. Duplicated here (same handlers, not moved) so they're reachable
-                  without having to dismiss the keyboard first. */}
+              {/* Attach/Tag/Calendar/Link Event/Share/Add Image lead the bar - also live in the
+                  icon action row below, but that row only shows once the keyboard is hidden -
+                  i.e. exactly when the user ISN'T mid-edit. Duplicated here (same handlers, not
+                  moved) so they're reachable without having to dismiss the keyboard first. */}
               <TouchableOpacity
                 testID="fmt-attach"
                 style={s.fmtBtn}
@@ -1990,6 +2028,29 @@ export default function EditorScreen() {
                 ) : (
                   <MaterialIcons name="attach-file" size={24} color={C.text} />
                 )}
+              </TouchableOpacity>
+              {tags.length < 3 && (
+                <TouchableOpacity testID="fmt-add-tag" style={s.fmtBtn} onPress={() => setShowTagPicker(!showTagPicker)}>
+                  <MaterialIcons name="sell" size={24} color={C.text} />
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                testID="fmt-schedule"
+                style={s.fmtBtn}
+                onPress={() =>
+                  router.push({
+                    pathname: '/event-editor',
+                    params: { noteId: noteIdRef.current || 'new', noteTitle: title },
+                  })
+                }
+              >
+                <MaterialIcons name="calendar-today" size={24} color={C.text} />
+              </TouchableOpacity>
+              <TouchableOpacity testID="fmt-link-event" style={s.fmtBtn} onPress={openEventPicker}>
+                <MaterialIcons name="link" size={24} color={C.text} />
+              </TouchableOpacity>
+              <TouchableOpacity testID="fmt-share" style={s.fmtBtn} onPress={handleShare}>
+                <MaterialIcons name="share" size={24} color={C.text} />
               </TouchableOpacity>
               <TouchableOpacity testID="fmt-add-image" style={s.fmtBtn} onPress={() => setShowImagePicker(true)}>
                 <MaterialIcons name="add-photo-alternate" size={24} color={C.text} />
@@ -2052,22 +2113,10 @@ export default function EditorScreen() {
               >
                 <MaterialIcons name="redo" size={24} color={C.text} />
               </TouchableOpacity>
-              {/* Schedule/Delete also live in the icon action row below, but that row only
-                  shows once the keyboard is hidden - i.e. exactly when the user ISN'T mid-edit.
-                  Duplicated here (same handlers, not moved) so they're reachable without having
-                  to dismiss the keyboard first. */}
-              <TouchableOpacity
-                testID="fmt-schedule"
-                style={s.fmtBtn}
-                onPress={() =>
-                  router.push({
-                    pathname: '/event-editor',
-                    params: { noteId: noteIdRef.current || 'new', noteTitle: title },
-                  })
-                }
-              >
-                <MaterialIcons name="calendar-today" size={24} color={C.text} />
-              </TouchableOpacity>
+              {/* Delete also lives in the icon action row below, but that row only shows once
+                  the keyboard is hidden - i.e. exactly when the user ISN'T mid-edit. Duplicated
+                  here (same handler, not moved) so it's reachable without having to dismiss the
+                  keyboard first. */}
               {noteExists && (
                 <TouchableOpacity testID="fmt-delete" style={s.fmtBtn} onPress={handleDelete}>
                   <MaterialIcons name="delete" size={24} color={C.error} />

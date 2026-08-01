@@ -75,7 +75,23 @@ export const WrappedImageNode = Node.create({
   },
 
   parseHTML() {
-    return [{ tag: 'img[data-wrapped-image]' }];
+    // Explicit getAttrs rather than relying on Tiptap's default per-attribute HTML round-trip -
+    // `width`'s schema default is a number, but any value read off the DOM via getAttribute() is
+    // always a string, and leaving that coercion implicit is the kind of thing that quietly
+    // breaks (a node re-parsed from saved `content` HTML looking "resized"/reverted) without ever
+    // throwing an error to notice it by.
+    return [{
+      tag: 'img[data-wrapped-image]',
+      getAttrs: (el: HTMLElement) => {
+        const parsedWidth = parseInt(el.getAttribute('width') || '', 10);
+        const align = el.getAttribute('align');
+        return {
+          src: el.getAttribute('src'),
+          width: Number.isFinite(parsedWidth) && parsedWidth > 0 ? parsedWidth : DEFAULT_WRAP_WIDTH,
+          align: align === 'left' || align === 'right' || align === 'full' ? align : 'left',
+        };
+      },
+    }];
   },
 
   renderHTML({ HTMLAttributes }) {
