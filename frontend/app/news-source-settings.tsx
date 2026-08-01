@@ -282,7 +282,7 @@ export default function NewsSourceSettingsScreen() {
       <View style={s.header}>
         {isOnboarding ? (
           <TouchableOpacity testID="news-settings-skip-btn" onPress={handleSkip} style={s.skipBtn}>
-            <Text style={s.skipText}>Skip for now</Text>
+            <Text style={s.skipText}>Skip</Text>
           </TouchableOpacity>
         ) : (
           <TouchableOpacity onPress={() => router.back()} style={s.backBtn}>

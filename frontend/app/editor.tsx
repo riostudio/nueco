@@ -8,10 +8,10 @@ import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
-import { useNavigation } from '@react-navigation/native';
-import { useAudioRecorder, AudioModule, RecordingPresets, setAudioModeAsync } from 'expo-audio';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
+import { useNavigation } from '@react-navigation/native';
+import { useAudioRecorder, AudioModule, RecordingPresets, setAudioModeAsync } from 'expo-audio';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as WebBrowser from 'expo-web-browser';
@@ -23,15 +23,20 @@ import { takePendingSketch } from '../src/pendingSketch';
 import { takePendingLinkedEventIds } from '../src/pendingLinkedEvents';
 import { decryptEventsFromServer } from '../src/crypto/eventCrypto';
 import { RadialProgress, SharedPostCard, Button } from '../src/components';
+import NoteImageCanvas from '../src/components/NoteImageCanvas';
+import { useNoteObjects } from '../src/useNoteObjects';
 import { decryptNoteFromServer } from '../src/crypto/noteCrypto';
-import { createNoteOffline, updateNoteOffline, getLocalNotes, processSyncQueue } from '../src/offlineSync';
+import { createNoteOffline, updateNoteOffline, deleteNoteOffline, getLocalNotes, processSyncQueue, isNewer } from '../src/offlineSync';
 import { takePendingShareDraft, peekPendingShareDraft } from '../src/share/pendingShareDraft';
 import { parseSourcePost, serializeSourcePost, type SourcePost } from '../src/share/socialSource';
 import { unfurl, needsUnfurl } from '../src/share/unfurl';
 import { plainTextFromContent } from '../src/textContent';
 import { RichText, useEditorBridge, useEditorContent, useBridgeState, TenTapStartKit, PlaceholderBridge } from '@10play/tentap-editor';
 import { TableBridge } from '../src/editor/tableBridge';
+import { WrappedImageBridge } from '../src/editor/wrappedImageBridge';
 import { NotePlaceholderBridge } from '../src/editor/placeholderBridge';
+import { ContentHeightBridge } from '../src/editor/contentHeightBridge';
+import { CONTENT_HEIGHT_MESSAGE_TYPE } from '../src/editor/contentHeightConfig';
 import { customEditorHtml } from '../src/editor/customEditorHtml';
 import { Tag, CalendarEvent, Attachment } from '../src/types';
 import { TAG_COLORS, C, radius } from '../src/theme';
@@ -68,34 +73,31 @@ const EXT_MIME: Record<string, string> = {
   ppt: 'application/vnd.ms-powerpoint', pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
 };
 
-// Caps the longest edge of a picked/captured photo before it's inlined as base64 into the note.
-// ImagePicker's `quality: 0.7` only applies JPEG compression - it doesn't downscale pixel
-// dimensions, so a modern phone camera can still produce a multi-MB base64 string regardless of
-// that setting. 1600px is comfortably larger than any size a note image is ever displayed at in
-// this app (card preview, editor inline), while cutting a typical 12MP+ photo down dramatically -
-// that base64 blob is what gets synced to the server and rewritten into the local notes.json
-// file on every autosave, so its size matters well beyond just this one image.
-const MAX_NOTE_IMAGE_DIMENSION = 1600;
+// Caps the longest edge of an image before it's inserted into the note body as a wrapped image -
+// same reasoning as the old inline-gallery cap this replaces (see git history): a modern phone
+// camera photo is comfortably larger than a note ever displays it at, and this base64 blob is
+// what gets synced/stored, so its size matters well beyond just this one image.
+const MAX_WRAP_IMAGE_DIMENSION = 1600;
 
-// Returns a resized+compressed base64 string, or null if resizing wasn't needed/failed - callers
-// fall back to the picker's own base64 in either case, so a resize failure never blocks attaching
-// the image, just skips the size optimization for that one image.
-async function resizeImageForNote(uri: string, width: number, height: number): Promise<string | null> {
+// Always runs ImageManipulator, even at same-size - unlike a "skip if already small enough"
+// shortcut, this guarantees EXIF orientation gets baked in every time (a portrait photo shot on
+// a real device otherwise renders sideways - the manipulator pass is what corrects that,
+// incidentally to the resize, not a separate step). Also converts to a data: URI unconditionally,
+// since the WebView's <img> can't reliably load an arbitrary local file:// path.
+async function prepareWrappedImage(uri: string, width: number, height: number): Promise<{ dataUri: string; width: number; height: number } | null> {
   const longestEdge = Math.max(width, height);
-  // width/height can be 0 if the OS didn't report them (documented ImagePicker behavior) - can't
-  // compute a target dimension without them, so skip resizing rather than guess.
-  if (longestEdge <= 0 || longestEdge <= MAX_NOTE_IMAGE_DIMENSION) return null;
-
-  const resize = width >= height ? { width: MAX_NOTE_IMAGE_DIMENSION } : { height: MAX_NOTE_IMAGE_DIMENSION };
+  const targetLongest = Math.min(longestEdge > 0 ? longestEdge : MAX_WRAP_IMAGE_DIMENSION, MAX_WRAP_IMAGE_DIMENSION);
+  const resize = width >= height ? { width: targetLongest } : { height: targetLongest };
   try {
     const result = await ImageManipulator.manipulateAsync(uri, [{ resize }], {
-      compress: 0.7,
+      compress: 0.85,
       format: ImageManipulator.SaveFormat.JPEG,
       base64: true,
     });
-    return result.base64 ?? null;
+    if (!result.base64) return null;
+    return { dataUri: `data:image/jpeg;base64,${result.base64}`, width: result.width, height: result.height };
   } catch (e) {
-    console.warn('Note image resize failed, using original:', e);
+    console.warn('Wrapped image prep failed:', e);
     return null;
   }
 }
@@ -115,6 +117,7 @@ type EditorApi = {
   deleteRow: () => void;
   deleteTable: () => void;
   insertImage: (src: string) => void;
+  insertWrappedImage: (src: string, naturalWidth: number, naturalHeight: number) => void;
   undo: () => void;
   redo: () => void;
 };
@@ -128,12 +131,15 @@ type EditorUiState = {
 // `initialContent`. That's the reliable way to load existing content: `setContent` after mount
 // races the webview's readiness (it logs "Editor isn't ready yet" and drops the call, leaving the
 // body empty until tapped). Mounting this only once the content is known sidesteps the race.
-// Writing-area height: TenTap's dynamicHeight is a no-op on Expo - node_modules/@10play/
+// Writing-area height: TenTap's own dynamicHeight is a no-op on Expo - node_modules/@10play/
 // tentap-editor/src/webEditorUtils/contentHeight.tsx swaps in a shimmed, do-nothing
-// ContentHeightListener whenever `expo-constants` is requireable (i.e. always, in this app),
-// so the WebView's containerStyle height stays stuck at its initial 0 forever; nothing ever
-// reports real content height back. So: grow the box from the content ourselves (bodyHeight
-// below) instead. This also sidesteps the OTHER failure mode a flex/100%-based height hit - it
+// ContentHeightListener whenever `expo-constants` is requireable (i.e. always, in this app), so
+// the WebView's containerStyle height stays stuck at its initial 0 forever; nothing built-in ever
+// reports real content height back. src/editor/contentHeightConfig.ts is our own replacement for
+// that dead mechanism - a ResizeObserver on `.ProseMirror` reporting real pixel height via
+// postMessage (see measuredHeight below) - so bodyHeight reflects actual rendered height, not a
+// guess. estimatedHeight (a char-count heuristic) only covers the brief window before the first
+// real report lands. This also sidesteps the OTHER failure mode a flex/100%-based height hit - it
 // got squeezed by sibling sections lower on the screen (attachments, linked events) competing
 // for space in the same flex chain, clipping content behind the WebView's own internal scroll.
 // bodyHeight is a plain pixel number, immune to both: it doesn't depend on the (broken)
@@ -173,7 +179,9 @@ function animateSheet(backdrop: Animated.Value, translateY: Animated.Value, open
 const noteBridgeExtensions = [
   ...TenTapStartKit.filter((ext) => ext !== PlaceholderBridge),
   TableBridge,
+  WrappedImageBridge,
   NotePlaceholderBridge,
+  ContentHeightBridge,
 ];
 
 const NoteBodyEditor = forwardRef<EditorApi, {
@@ -205,10 +213,17 @@ const NoteBodyEditor = forwardRef<EditorApi, {
   // its own onCreate, independent of interaction - that's the real boot signal, so intercept it
   // directly via RichText's onMessage instead of trusting state.isReady.
   const [bridgeReady, setBridgeReady] = useState(false);
+  // Real measured height from the contentHeight bridge's ResizeObserver (see
+  // src/editor/contentHeightConfig.ts) - once a real measurement arrives it always wins over the
+  // estimatedHeight heuristic below, which only covers the brief window before the first report.
+  const [measuredHeight, setMeasuredHeight] = useState<number | null>(null);
   const handleWebviewMessage = useCallback((event: { nativeEvent: { data: string } }) => {
     try {
-      const { type } = JSON.parse(event.nativeEvent.data);
+      const { type, payload } = JSON.parse(event.nativeEvent.data);
       if (type === 'editor-ready') setBridgeReady(true);
+      if (type === CONTENT_HEIGHT_MESSAGE_TYPE && typeof payload?.height === 'number') {
+        setMeasuredHeight(Math.min(BODY_SANITY_MAX_HEIGHT, Math.max(0, Math.ceil(payload.height))));
+      }
     } catch {}
   }, []);
   // The page can settle scrolled a few px past the top once fonts/layout finish reflowing after
@@ -222,11 +237,10 @@ const NoteBodyEditor = forwardRef<EditorApi, {
     return () => clearTimeout(t);
   }, [bridgeReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Estimate the writing-area height from the content (dynamicHeight can't do this - see the
-  // note above) so a long paste (e.g. text copied from a webpage) grows the box to show all of
-  // it, instead of clipping it behind the WebView's internal scroll. No real max - BODY_SANITY_MAX
-  // is only a backstop against a degenerate estimate.
-  const bodyHeight = useMemo(() => {
+  // Fallback only - covers the brief window before the contentHeight bridge's first real
+  // ResizeObserver report lands (fresh mount). Once measuredHeight is set, it's always used
+  // instead; this heuristic never overrides a real measurement again for this note's session.
+  const estimatedHeight = useMemo(() => {
     const h = html || initialContent || '';
     // `tr` counted the same way textContent.ts's plain-text preview treats it (one row per
     // line). Images are stripped out along with every other tag by the plain-text pass below, so
@@ -244,6 +258,7 @@ const NoteBodyEditor = forwardRef<EditorApi, {
     const imagesHeight = imageCount * ESTIMATED_SKETCH_IMAGE_HEIGHT;
     return Math.min(BODY_SANITY_MAX_HEIGHT, lines * 26 + 28 + imagesHeight);
   }, [html, initialContent]);
+  const bodyHeight = measuredHeight ?? estimatedHeight;
 
   useImperativeHandle(ref, () => ({
     getHTML: () => editor.getHTML(),
@@ -259,6 +274,7 @@ const NoteBodyEditor = forwardRef<EditorApi, {
     deleteRow: () => editor.deleteRow(),
     deleteTable: () => editor.deleteTable(),
     insertImage: (src: string) => editor.setImage(src),
+    insertWrappedImage: (src: string, naturalWidth: number, naturalHeight: number) => editor.insertWrappedImage(src, naturalWidth, naturalHeight),
     undo: () => editor.undo(),
     redo: () => editor.redo(),
   }), [editor]);
@@ -364,9 +380,13 @@ export default function EditorScreen() {
   // Auth state from context
   const { user: authUser } = useAuth();
 
-  // Keyboard listener for showing format toolbar
+  // Keyboard listener for showing format toolbar - also deselects any selected image object,
+  // since the keyboard only shows when the user tapped a text field (title, tag input, or the
+  // body WebView), a reasonable proxy given this screen's own isFocused is documented elsewhere
+  // as unreliable on Expo. Validate on-device; a WebView-postMessage focus signal is the
+  // fallback if this heuristic proves flaky in practice.
   useEffect(() => {
-    const showSub = Keyboard.addListener('keyboardDidShow', () => setIsKeyboardVisible(true));
+    const showSub = Keyboard.addListener('keyboardDidShow', () => { setIsKeyboardVisible(true); deselectAll(); });
     const hideSub = Keyboard.addListener('keyboardDidHide', () => setIsKeyboardVisible(false));
     return () => {
       showSub.remove();
@@ -580,6 +600,7 @@ export default function EditorScreen() {
         setIsPinned(localCopy.is_pinned);
         setImages(localCopy.images || []);
         setAttachments(localCopy.attachments || []);
+        seedObjects(localCopy.objects || []);
       }
 
       let note: any;
@@ -596,9 +617,19 @@ export default function EditorScreen() {
           note = localCopy;
         }
       }
-      setTitle(note.title);
+      // If the local copy is newer than what the server just returned, keep the local copy's
+      // fields instead of letting a stale server response overwrite them. This happens for real:
+      // handleBack deliberately doesn't await the network push before navigating back (see its
+      // own comment - blocking every "edit, tap back" on a round-trip was worse), so reopening a
+      // note moments later can hit notesApi.get() before that background push has landed,
+      // silently reverting whatever was just added (most visibly, a just-added image object -
+      // "when I go back, the image disappears"). Mirrors fullSync's timestamp-wins merge.
+      const serverIsStale = !!localCopy && !id.startsWith('local_') && isNewer(localCopy.updated_at, note.updated_at);
+      const authoritative = serverIsStale ? localCopy : note;
+
+      setTitle(authoritative.title);
       // A shared-post card is persisted as a marker at the end of content; split it back out.
-      const parsed = parseSourcePost(note.content || '');
+      const parsed = parseSourcePost(authoritative.content || '');
       // Body already seeded from local (instant). Only seed from the server copy if we had no local
       // copy - re-seeding after the WebView mounts can't take effect (initialContent is fixed).
       if (!bodySeeded) {
@@ -609,17 +640,18 @@ export default function EditorScreen() {
           setThumbInImages0(parsed.thumbInImages0);
         }
       }
-      setTags(note.tags);
-      setIsPinned(note.is_pinned);
+      setTags(authoritative.tags);
+      setIsPinned(authoritative.is_pinned);
       // Defensive fallback: prefer the plural field, but fall back to the deprecated singular one
       // in case a transitional/cached copy only has that populated (the server already normalizes
       // and dual-writes both, so this is belt-and-suspenders, not the expected path).
-      const ids: string[] = note.linked_event_ids?.length
-        ? note.linked_event_ids
-        : (note.linked_event_id ? [note.linked_event_id] : []);
+      const ids: string[] = authoritative.linked_event_ids?.length
+        ? authoritative.linked_event_ids
+        : (authoritative.linked_event_id ? [authoritative.linked_event_id] : []);
       setLinkedEventIds(ids);
-      setImages(note.images || []);
-      setAttachments(note.attachments || []);
+      setImages(authoritative.images || []);
+      setAttachments(authoritative.attachments || []);
+      seedObjects(authoritative.objects || []);
       noteIdRef.current = note.id;
       isCreatedRef.current = true;
       setNoteExists(true);
@@ -750,9 +782,10 @@ export default function EditorScreen() {
 
   // Pick up a sketch staged by /sketch (see pendingSketch.ts) once this screen regains focus -
   // same "can't fit in route params" handoff pattern the share-intent draft and voice-event
-  // extraction already use. Unlike takePhoto/pickFromGallery (which attach to the separate
-  // images[] gallery below the note body), a sketch is inserted inline into the note's rich text,
-  // right where the user was writing, not off in a thumbnail row.
+  // extraction already use. Unlike addImages (which attaches to the free-floating object layer -
+  // see useNoteObjects.ts - now that the old images[] gallery's own add-buttons are repointed to
+  // it), a sketch is inserted inline into the note's rich text, right where the user was writing,
+  // not as a positioned object.
   //
   // Uses the editor bridge's own insertImage (ImageBridge's setImage command) rather than
   // appendHtmlToEditor's getHTML()+setContent() full-document-replace approach: setImage inserts
@@ -816,6 +849,7 @@ export default function EditorScreen() {
       linked_event_ids: linkedEventIdsRef.current,
       images: imagesRef.current,
       attachments: attachmentsRef.current,
+      objects: objectsRef.current,
     };
     if (!isCreatedRef.current) {
       const created = await createNoteOffline(draft, { push: opts.push });
@@ -872,6 +906,17 @@ export default function EditorScreen() {
         console.error('Immediate save error:', e);
       });
   }, [persistLocal, signalSaved]);
+
+  // addImages (native free-floating object creation) is intentionally not called from this
+  // screen's UI anymore - "Take Photo"/"Choose from Gallery" now insert text-wrapped images via
+  // pickWrappedImage instead (real CSS wrap and free rotation are mutually exclusive - see
+  // wrappedImageConfig.ts). The rest of this hook stays wired: existing notes with objects[]
+  // already in them (from testing before this change) still render/drag/pinch/rotate/resize via
+  // NoteImageCanvas below, so nothing already-saved silently disappears.
+  const {
+    objects, objectsRef, selectedObjectId, pendingDeleteId,
+    seedObjects, selectObject, deselectAll, commitTransform, requestDelete, confirmDelete, cancelDelete,
+  } = useNoteObjects(noteIdRef, saveImmediately);
 
   // Catches every way of leaving this screen that ISN'T the header's back button - the Android
   // hardware back button and iOS swipe-back gesture, neither of which run handleSaveAndBack (that
@@ -1230,85 +1275,47 @@ export default function EditorScreen() {
   };
 
 
-  // Image picker functions
-  const takePhoto = async () => {
-    setShowImagePicker(false);
-    
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Needed', 'Camera access is required to take photos.');
-      return;
-    }
-
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.7,
-      base64: true,
-    });
-
-    if (!result.canceled && result.assets[0]) {
-      const asset = result.assets[0];
-      // Downscale before inlining if the capture is larger than a note image ever needs to be -
-      // see resizeImageForNote's comment. Falls back to the picker's own base64 if resizing
-      // wasn't needed or failed.
-      const resized = await resizeImageForNote(asset.uri, asset.width, asset.height);
-      const base64Data = resized ?? asset.base64;
-      if (base64Data) {
-        const dataUri = `data:image/jpeg;base64,${base64Data}`;
-        const newImages = [...images, dataUri];
-        setImages(newImages);
-        // Track image attachment
-        trackNoteImageAttached(newImages.length);
-        saveImmediately();
-      }
-    }
-  };
-
-  const pickFromGallery = async () => {
-    setShowImagePicker(false);
-    
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Needed', 'Gallery access is required to select photos.');
-      return;
-    }
-
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.7,
-      allowsMultipleSelection: true,
-      selectionLimit: 5,
-      base64: true,
-    });
-
-    if (!result.canceled && result.assets.length > 0) {
-      // Downscale each asset before inlining, same as takePhoto - see resizeImageForNote.
-      const newImageUris = (
-        await Promise.all(
-          result.assets.map(async (asset) => {
-            const resized = await resizeImageForNote(asset.uri, asset.width, asset.height);
-            const base64Data = resized ?? asset.base64;
-            return base64Data ? `data:image/jpeg;base64,${base64Data}` : null;
-          })
-        )
-      ).filter((uri): uri is string => uri !== null);
-      if (newImageUris.length > 0) {
-        const newImages = [...images, ...newImageUris];
-        setImages(newImages);
-        // Track image attachment (total count after adding)
-        trackNoteImageAttached(newImages.length);
-        saveImmediately();
-      }
-    }
-  };
-
+  // Old images[] gallery: add-buttons now repointed to pickWrappedImage (see the image-picker
+  // sheet below) - takePhoto/pickFromGallery are gone, but removeImage stays, since existing
+  // notes' already-inline images still need to be removable.
   const removeImage = (index: number) => {
     setImages(prev => prev.filter((_, i) => i !== index));
     triggerAutoSave();
+  };
+
+  // Adds a real (not free-floating) text-wrapped image: picks, EXIF-normalizes + downscales
+  // (prepareWrappedImage), then inserts it as an actual node in the note body via the
+  // WrappedImageBridge - see that file's header for why this is a different mechanism from
+  // useNoteObjects' native drag/pinch/rotate objects (mutually exclusive with real text wrap).
+  const pickWrappedImage = async (kind: 'camera' | 'gallery') => {
+    setShowImagePicker(false);
+    const permission = kind === 'camera'
+      ? await ImagePicker.requestCameraPermissionsAsync()
+      : await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (permission.status !== 'granted') {
+      Alert.alert('Permission Needed', kind === 'camera'
+        ? 'Camera access is required to take photos.'
+        : 'Gallery access is required to select photos.');
+      return;
+    }
+    // allowsEditing: false, no aspect lock - never crop/alter aspect ratio.
+    const result = kind === 'camera'
+      ? await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], allowsEditing: false, quality: 1 })
+      : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: false, quality: 1 });
+    if (result.canceled || !result.assets[0]) return;
+
+    const asset = result.assets[0];
+    const prepared = await prepareWrappedImage(asset.uri, asset.width, asset.height);
+    if (!prepared) {
+      Alert.alert('Couldn’t add image', 'Please try again.');
+      return;
+    }
+    editorApiRef.current?.insertWrappedImage(prepared.dataUri, prepared.width, prepared.height);
+    // Unlike the old images[] gallery, a wrapped image lives in `content` HTML, not an array
+    // this screen has a live count of - trackNoteImageAttached's count arg is cumulative gallery
+    // size for that case, so this just signals "one image attached", not a running total.
+    trackNoteImageAttached(1);
+    saveImmediately();
   };
 
   // Open the original social post in the browser.
@@ -1619,7 +1626,12 @@ export default function EditorScreen() {
       // Use noteIdRef or the noteId from params
       const idToDelete = noteIdRef.current || noteId;
       if (idToDelete) {
-        await notesApi.delete(idToDelete);
+        // deleteNoteOffline (not notesApi.delete directly) - a note that hasn't finished its
+        // first sync yet still has a `local_` id, and calling the server DELETE endpoint with
+        // that id 404s (nothing to delete server-side yet), surfacing as "Failed to delete
+        // note. Please try again." even though there's nothing actually wrong. Mirrors
+        // deleteEventOffline's already-correct local-vs-synced branching.
+        await deleteNoteOffline(idToDelete);
         // Track note deletion
         trackNoteDeleted();
       }
@@ -1773,27 +1785,39 @@ export default function EditorScreen() {
           <View style={s.contentContainer}>
             <View style={s.inputBox}>
 
-              {/* Shared social post card (Instagram/Facebook/WhatsApp/YouTube/…) - links back to the post */}
-              {sourcePost && (
-                <SharedPostCard
-                  style={s.cardInInput}
-                  source={thumbInImages0 && images[0] ? { ...sourcePost, thumbnail: images[0] } : sourcePost}
-                  onOpen={openSourcePost}
-                  onRemove={removeSourcePost}
-                />
-              )}
-              {/* Rich-text body (TenTap WebView). Mounted only once the note content is known, so the
-                  bridge is created with it as initialContent - reliable load, no setContent race. */}
-              {seedHtml != null ? (
-                <NoteBodyEditor
-                  ref={editorApiRef}
-                  initialContent={seedHtml}
-                  onChange={handleBodyChange}
-                  onStateChange={setEditorUi}
-                />
-              ) : (
-                <View style={s.richTextWrap}><View style={{ height: 180 }} /></View>
-              )}
+              {/* Free-floating image objects live in this fixed, measured region - wraps only the
+                  card + rich-text body, not Attachments/Attached-Images below. See
+                  NoteImageCanvas.tsx for why this is a dedicated region rather than an overlay
+                  across the whole scrolling note page. */}
+              <NoteImageCanvas
+                objects={objects}
+                selectedObjectId={selectedObjectId}
+                onSelect={selectObject}
+                onGestureEnd={commitTransform}
+                onRequestDelete={requestDelete}
+              >
+                {/* Shared social post card (Instagram/Facebook/WhatsApp/YouTube/…) - links back to the post */}
+                {sourcePost && (
+                  <SharedPostCard
+                    style={s.cardInInput}
+                    source={thumbInImages0 && images[0] ? { ...sourcePost, thumbnail: images[0] } : sourcePost}
+                    onOpen={openSourcePost}
+                    onRemove={removeSourcePost}
+                  />
+                )}
+                {/* Rich-text body (TenTap WebView). Mounted only once the note content is known, so the
+                    bridge is created with it as initialContent - reliable load, no setContent race. */}
+                {seedHtml != null ? (
+                  <NoteBodyEditor
+                    ref={editorApiRef}
+                    initialContent={seedHtml}
+                    onChange={handleBodyChange}
+                    onStateChange={setEditorUi}
+                  />
+                ) : (
+                  <View style={s.richTextWrap}><View style={{ height: 180 }} /></View>
+                )}
+              </NoteImageCanvas>
 
               {/* Attachments - shown inside the writing surface itself, not as a separate section
                   below it. */}
@@ -1951,6 +1975,25 @@ export default function EditorScreen() {
               style={s.formatBar}
               contentContainerStyle={s.formatBarContent}
             >
+              {/* Attach/Add Image lead the bar - also live in the icon action row below, but
+                  that row only shows once the keyboard is hidden - i.e. exactly when the user
+                  ISN'T mid-edit. Duplicated here (same handlers, not moved) so they're reachable
+                  without having to dismiss the keyboard first. */}
+              <TouchableOpacity
+                testID="fmt-attach"
+                style={s.fmtBtn}
+                onPress={pickAttachment}
+                disabled={isUploadingAttachment}
+              >
+                {isUploadingAttachment ? (
+                  <ActivityIndicator size="small" color={C.secondary} />
+                ) : (
+                  <MaterialIcons name="attach-file" size={24} color={C.text} />
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity testID="fmt-add-image" style={s.fmtBtn} onPress={() => setShowImagePicker(true)}>
+                <MaterialIcons name="add-photo-alternate" size={24} color={C.text} />
+              </TouchableOpacity>
               <TouchableOpacity
                 testID="fmt-bold"
                 style={[s.fmtBtn, editorUi.isBoldActive && s.fmtBtnActive]}
@@ -2009,6 +2052,27 @@ export default function EditorScreen() {
               >
                 <MaterialIcons name="redo" size={24} color={C.text} />
               </TouchableOpacity>
+              {/* Schedule/Delete also live in the icon action row below, but that row only
+                  shows once the keyboard is hidden - i.e. exactly when the user ISN'T mid-edit.
+                  Duplicated here (same handlers, not moved) so they're reachable without having
+                  to dismiss the keyboard first. */}
+              <TouchableOpacity
+                testID="fmt-schedule"
+                style={s.fmtBtn}
+                onPress={() =>
+                  router.push({
+                    pathname: '/event-editor',
+                    params: { noteId: noteIdRef.current || 'new', noteTitle: title },
+                  })
+                }
+              >
+                <MaterialIcons name="calendar-today" size={24} color={C.text} />
+              </TouchableOpacity>
+              {noteExists && (
+                <TouchableOpacity testID="fmt-delete" style={s.fmtBtn} onPress={handleDelete}>
+                  <MaterialIcons name="delete" size={24} color={C.error} />
+                </TouchableOpacity>
+              )}
             </ScrollView>
           )}
 
@@ -2218,12 +2282,12 @@ export default function EditorScreen() {
               <View style={s.sheetHandle} />
               <Text style={s.imagePickerTitle}>Add Image</Text>
 
-              <TouchableOpacity style={s.imagePickerOption} onPress={takePhoto}>
+              <TouchableOpacity style={s.imagePickerOption} onPress={() => pickWrappedImage('camera')}>
                 <MaterialIcons name="camera-alt" size={28} color={C.primary} />
                 <Text style={s.imagePickerOptionText}>Take Photo</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity style={s.imagePickerOption} onPress={pickFromGallery}>
+              <TouchableOpacity style={s.imagePickerOption} onPress={() => pickWrappedImage('gallery')}>
                 <MaterialIcons name="photo-library" size={28} color={C.secondary} />
                 <Text style={s.imagePickerOptionText}>Choose from Gallery</Text>
               </TouchableOpacity>
@@ -2335,6 +2399,43 @@ export default function EditorScreen() {
                 ) : (
                   <Text style={s.deleteModalDeleteText}>Delete</Text>
                 )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Delete Image Object Confirmation Modal - same confirm-before-delete pattern as the note
+          delete modal above (no undo-snackbar; matches this app's existing convention). */}
+      <Modal
+        visible={pendingDeleteId !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={cancelDelete}
+      >
+        <View style={s.modalOverlay}>
+          <View style={s.deleteModalContent}>
+            <MaterialIcons name="delete" size={48} color={C.error} style={{ marginBottom: 16 }} />
+            <Text style={s.deleteModalTitle}>Delete Image?</Text>
+            <Text style={s.deleteModalMessage}>
+              Are you sure you want to delete this image? This action cannot be undone.
+            </Text>
+            <View style={s.deleteModalButtons}>
+              <TouchableOpacity
+                testID="cancel-delete-object-btn"
+                style={s.deleteModalCancelBtn}
+                onPress={cancelDelete}
+                activeOpacity={0.7}
+              >
+                <Text style={s.deleteModalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="confirm-delete-object-btn"
+                style={s.deleteModalDeleteBtn}
+                onPress={confirmDelete}
+                activeOpacity={0.7}
+              >
+                <Text style={s.deleteModalDeleteText}>Delete</Text>
               </TouchableOpacity>
             </View>
           </View>

@@ -13,6 +13,25 @@ export interface Attachment {
   uploaded_at: string;
 }
 
+// A free-floating, drag/pinch/rotate-able image layered over the note's text - distinct from
+// the plain `images` gallery (base64 thumbnails, no transforms) and from `Attachment` (arbitrary
+// files). Mirrors backend/notes/schemas.py's ImageObject.
+export interface NoteObject {
+  id: string;
+  type: 'image';
+  local_uri: string | null;
+  remote_url: string | null; // informational only - the bucket is private, never fetched directly
+  key: string | null; // S3 object key - needed for delete-cleanup and re-minting a download URL
+  intrinsic_width: number;
+  intrinsic_height: number;
+  x: number; // normalized 0..1, relative to canvas WIDTH (both axes - see noteObjectsCore.ts)
+  y: number;
+  scale: number; // uniform, relative to a base display width
+  rotation: number; // radians
+  z: number;
+  upload_status: 'pending' | 'uploaded' | 'failed';
+}
+
 export interface Note {
   id: string;
   title: string;
@@ -22,6 +41,7 @@ export interface Note {
   linked_event_id: string | null; // Deprecated: use linked_event_ids. Kept for old clients.
   linked_event_ids: string[];
   attachments?: Attachment[];
+  objects?: NoteObject[];
   has_attachments?: boolean;
   created_at: string;
   updated_at: string;

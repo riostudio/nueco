@@ -4,13 +4,18 @@ linked_event_id/linked_event_ids dual-read/dual-write shim.
 Framework-agnostic: raises plain exceptions (NoteNotFoundError, NotePayloadTooLargeError)
 rather than fastapi.HTTPException. backend/notes/router.py translates them to HTTP responses.
 """
+import asyncio
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from attachments.service import delete_attachment
 from .schemas import NoteCreate, NoteUpdate
+
+logger = logging.getLogger(__name__)
 
 
 class NoteNotFoundError(Exception):
@@ -38,9 +43,13 @@ _CIPHERTEXT_HEADROOM = 5
 MAX_NOTE_TITLE_CHARS = 1_000 * _CIPHERTEXT_HEADROOM            # ~1k plaintext chars
 MAX_NOTE_CONTENT_CHARS = 256 * 1024 * _CIPHERTEXT_HEADROOM     # ~256 KB of plaintext text
 MAX_NOTE_IMAGES_BYTES = 8 * 1024 * 1024                        # 8 MB total base64 image payload
+# Unlike `images` (base64, so the payload IS the bytes), each ImageObject is small fixed-size
+# metadata (a uuid, a handful of floats, short strings) - a count cap is the right guard here,
+# same reasoning as why `tags`/`attachments` aren't byte-capped.
+MAX_NOTE_OBJECTS_COUNT = 200
 
 
-def _validate_note_payload(title=None, content=None, images=None):
+def _validate_note_payload(title=None, content=None, images=None, objects=None):
     """Reject oversized note fields. Only checks provided (non-None) fields."""
     if title is not None and len(title) > MAX_NOTE_TITLE_CHARS:
         raise NotePayloadTooLargeError(f"Title too long (max {MAX_NOTE_TITLE_CHARS} characters)")
@@ -50,6 +59,8 @@ def _validate_note_payload(title=None, content=None, images=None):
         total = sum(len(img) for img in images)
         if total > MAX_NOTE_IMAGES_BYTES:
             raise NotePayloadTooLargeError(f"Images too large (max {MAX_NOTE_IMAGES_BYTES // (1024 * 1024)}MB total)")
+    if objects is not None and len(objects) > MAX_NOTE_OBJECTS_COUNT:
+        raise NotePayloadTooLargeError(f"Too many image objects (max {MAX_NOTE_OBJECTS_COUNT})")
 
 
 def _normalize_linked_event_ids(doc: dict) -> dict:
@@ -69,7 +80,7 @@ class NotesService:
         self.db = db
 
     async def create(self, user_id: str, note: NoteCreate) -> dict:
-        _validate_note_payload(note.title, note.content, note.images)
+        _validate_note_payload(note.title, note.content, note.images, note.objects)
         now = datetime.now(timezone.utc).isoformat()
         # linked_event_ids (new, plural) is authoritative when provided; dual-write
         # linked_event_id (deprecated, singular) so an old app build reading only the
@@ -85,6 +96,7 @@ class NotesService:
             "linked_event_ids": linked_event_ids,
             "images": note.images,
             "attachments": [a.model_dump() for a in note.attachments],
+            "objects": [o.model_dump() for o in note.objects],
             "has_attachments": len(note.attachments) > 0,
             "user_id": user_id,
             "enc_version": note.enc_version,
@@ -111,6 +123,7 @@ class NotesService:
             "linked_event_ids": 1,
             "images": 1,
             "attachments": 1,
+            "objects": 1,
             "has_attachments": 1,
             "user_id": 1,
             "enc_version": 1,
@@ -128,7 +141,7 @@ class NotesService:
         return _normalize_linked_event_ids(note)
 
     async def update(self, user_id: str, note_id: str, update: NoteUpdate) -> dict:
-        _validate_note_payload(update.title, update.content, update.images)
+        _validate_note_payload(update.title, update.content, update.images, update.objects)
         updates = {}
         for k, v in update.model_dump(exclude_unset=True).items():
             if v is None:
@@ -159,9 +172,26 @@ class NotesService:
         return _normalize_linked_event_ids(note)
 
     async def delete(self, user_id: str, note_id: str) -> None:
-        result = await self.db.notes.delete_one({"id": note_id, "user_id": user_id})
-        if result.deleted_count == 0:
+        # find_one_and_delete: atomic (no separate find-then-delete race) and hands back the
+        # attachment/object keys to clean up in the same round trip. Previously this was a bare
+        # delete_one with no S3 involvement at all - deleting a note left its attachments AND
+        # image objects as orphaned S3 objects forever; only full account erasure
+        # (accounts/service.py's erase, via delete_user_attachments) ever cleaned storage up.
+        note = await self.db.notes.find_one_and_delete(
+            {"id": note_id, "user_id": user_id}, {"_id": 0, "attachments": 1, "objects": 1}
+        )
+        if not note:
             raise NoteNotFoundError()
+        keys = [a["key"] for a in (note.get("attachments") or []) if a.get("key")]
+        keys += [o["key"] for o in (note.get("objects") or []) if o.get("key")]
+        for key in keys:
+            # Best-effort, never raises: the DB row is already gone, so a storage hiccup here
+            # must not resurrect the note or fail the delete - same philosophy as
+            # delete_user_attachments' own best-effort cleanup.
+            try:
+                await asyncio.to_thread(delete_attachment, user_id, key)
+            except Exception as e:
+                logger.error(f"Note delete: failed to clean up S3 key {key} for note {note_id}: {e}")
 
     async def toggle_pin(self, user_id: str, note_id: str) -> dict:
         note = await self.db.notes.find_one({"id": note_id, "user_id": user_id}, {"_id": 0})

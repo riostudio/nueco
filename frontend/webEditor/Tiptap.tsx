@@ -18,7 +18,9 @@ import React from 'react';
 import { EditorContent } from '@tiptap/react';
 import { useTenTap, TenTapStartKit, PlaceholderBridge } from '@10play/tentap-editor/web';
 import { TableBridge } from './tableBridgeWeb';
+import { WrappedImageBridge } from './wrappedImageBridgeWeb';
 import { NotePlaceholderBridge } from './placeholderBridgeWeb';
+import { ContentHeightBridge } from './contentHeightBridgeWeb';
 
 declare global {
   interface Window {
@@ -30,7 +32,9 @@ declare global {
 const tenTapExtensions = [
   ...TenTapStartKit.filter((e) => e !== PlaceholderBridge),
   TableBridge,
+  WrappedImageBridge,
   NotePlaceholderBridge,
+  ContentHeightBridge,
 ].filter(
   (e) =>
     !window.whiteListBridgeExtensions ||

@@ -18,7 +18,7 @@ import { encryptNoteForServer, decryptNoteFromServer, decryptNotesFromServer } f
 import { encryptEventForServer, decryptEventsFromServer } from './crypto/eventCrypto';
 import { encryptTripForServer, decryptTripsFromServer } from './crypto/tripCrypto';
 import { incrementNoteCreatedCount } from './feedbackToast';
-import type { Recurrence } from './types';
+import type { Recurrence, NoteObject } from './types';
 
 // ---- Types ----
 
@@ -45,6 +45,7 @@ export interface LocalNote {
   linked_event_ids?: string[];
   images: string[];
   attachments?: any[];      // blob-storage attachment metadata (Attachment[])
+  objects?: NoteObject[];   // free-floating image objects - see types.ts's NoteObject
   user_id?: string;
   created_at: string;
   updated_at: string;
@@ -178,7 +179,7 @@ function newerTimestamp(a: string, b: string): string {
   return new Date(a) >= new Date(b) ? a : b;
 }
 
-function isNewer(incoming: string, existing: string): boolean {
+export function isNewer(incoming: string, existing: string): boolean {
   return new Date(incoming) > new Date(existing);
 }
 
@@ -354,6 +355,40 @@ export async function updateNoteOffline(
     } catch {
       // Sync failed - update is saved locally and stays queued.
     }
+  }
+}
+
+// Same local-write-then-enqueue-then-push-if-online shape as deleteEventOffline below -
+// notes never got this treatment (editor.tsx's confirmDeleteNote called notesApi.delete
+// directly), so deleting a note before its create had synced (still a `local_` id) hit the
+// server with an id that doesn't exist there, 404'd, and surfaced as "Failed to delete note.
+// Please try again." even though there was nothing wrong - the delete succeeds locally either way.
+export async function deleteNoteOffline(id: string, opts: { push?: boolean } = {}): Promise<void> {
+  const notes = await getLocalNotes();
+  const existing = notes.find(n => n.id === id);
+
+  if (existing?._isLocal) {
+    // Never synced - remove locally and drop the now-pointless pending create from the queue.
+    await deleteLocalNote(id);
+    const queue = await getSyncQueue();
+    await saveSyncQueue(queue.filter(q => !(q.id === id && q.entity === 'note')));
+    return;
+  }
+
+  // Mark pending-delete locally so it disappears from the UI immediately, even before the
+  // server confirms.
+  const updated = notes.map(n => (n.id === id ? { ...n, _pendingDelete: true } : n));
+  await saveLocalNotes(updated);
+
+  await enqueueOperation({ id, entity: 'note', operation: 'delete', timestamp: new Date().toISOString() });
+
+  if (opts.push !== false && (await isOnline())) {
+    try {
+      await processSyncQueue();
+    } catch {
+      // Sync failed - delete stays queued, will retry via background sync.
+    }
+    await deleteLocalNote(id);
   }
 }
 
