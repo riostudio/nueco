@@ -12,7 +12,8 @@
     "test:crypto": "node --import ./src/crypto/_ts-resolver.mjs src/crypto/e2ee.test.ts && node --import ./src/crypto/_ts-resolver.mjs src/crypto/noteCryptoCore.test.ts && node --import ./src/crypto/_ts-resolver.mjs src/crypto/eventCryptoCore.test.ts",
     "check:e2ee-backend": "node --import ./src/crypto/_ts-resolver.mjs scripts/e2ee-backend-check.ts",
     "test:share": "node --import ./src/crypto/_ts-resolver.mjs src/textContent.test.ts && node --import ./src/crypto/_ts-resolver.mjs src/share/socialSource.test.ts && node --import ./src/crypto/_ts-resolver.mjs src/share/unfurl.test.ts && node --import ./src/crypto/_ts-resolver.mjs src/share/normalizeShareIntent.test.ts",
-    "build:web-editor": "vite build --config webEditor/vite.config.ts && node scripts/buildWebEditorHtml.js"
+    "test:sync": "node --import ./src/crypto/_ts-resolver.mjs src/pagedPullCore.test.ts && node --import ./src/crypto/_ts-resolver.mjs src/syncMergeCore.test.ts && node --import ./src/crypto/_ts-resolver.mjs src/calendarSyncCore.test.ts",
+    "build:web-editor": "vite build --config webEditor/vite.config.ts && node scripts/buildWebEditorHtml.js",
   },
   "dependencies": {
     "@10play/tentap-editor": "^1.0.1",

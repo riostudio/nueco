@@ -5,6 +5,7 @@ import { decryptAccountFromServer } from './crypto/accountCrypto';
 import { decryptEventsFromServer } from './crypto/eventCrypto';
 import type { CalendarEvent, VoiceIntentResult } from './types';
 import type { NewsItem } from './dailyBrew/dailyBrew';
+import { collectPages, type PagedPull } from './pagedPullCore';
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const accessToken = await authStorage.getAccessToken();
@@ -96,9 +97,28 @@ async function fetchApi(path: string, options?: RequestInit, retryCount: number 
   return res.json();
 }
 
+// ---- Paged collection pulls ----
+
+// One page per request stays exactly as large as the single response used to be - each endpoint's
+// page size here is its own server-side default. Only the number of requests changes, which
+// matters because a note's `images` are inline base64: a bigger page is a bigger peak payload.
+const NOTES_PAGE_SIZE = 50;
+const EVENTS_PAGE_SIZE = 100;
+const TRIPS_PAGE_SIZE = 200;
+
+function fetchAllPages<T>(path: string, pageSize: number): Promise<PagedPull<T>> {
+  const separator = path.includes('?') ? '&' : '?';
+  return collectPages<T>(
+    (page, size) => fetchApi(`${path}${separator}page=${page}&page_size=${size}`),
+    pageSize,
+  );
+}
+
 export const notesApi = {
-  // Search is client-side (notes are E2EE ciphertext server-side); always fetch all.
-  getAll: () => fetchApi('/notes'),
+  // Search is client-side (notes are E2EE ciphertext server-side), so the app genuinely needs
+  // every note rather than the first page - hence paging rather than a single request.
+  getAllPaged: (): Promise<PagedPull<any>> => fetchAllPages('/notes', NOTES_PAGE_SIZE),
+  getAll: async (): Promise<any[]> => (await notesApi.getAllPaged()).items,
   get: (id: string) => fetchApi(`/notes/${id}`),
   create: (data: any) =>
     fetchApi('/notes', { method: 'POST', body: JSON.stringify(data) }),
@@ -124,10 +144,13 @@ function monthEventsCacheKey(month: number, year: number): string {
 }
 
 export const eventsApi = {
-  getAll: (month?: number, year?: number) =>
-    fetchApi(
-      month && year ? `/events?month=${month}&year=${year}` : '/events'
+  getAllPaged: (month?: number, year?: number): Promise<PagedPull<any>> =>
+    fetchAllPages(
+      month && year ? `/events?month=${month}&year=${year}` : '/events',
+      EVENTS_PAGE_SIZE,
     ),
+  getAll: async (month?: number, year?: number): Promise<any[]> =>
+    (await eventsApi.getAllPaged(month, year)).items,
   // Decrypted + cached (see monthEventsCache above) - prefer this over getAll+decryptEventsFromServer
   // wherever "this month's events" is all that's needed.
   getAllCached: async (month: number, year: number): Promise<CalendarEvent[]> => {
@@ -162,7 +185,8 @@ export const eventsApi = {
 };
 
 export const tripsApi = {
-  getAll: () => fetchApi('/trips'),
+  getAllPaged: (): Promise<PagedPull<any>> => fetchAllPages('/trips', TRIPS_PAGE_SIZE),
+  getAll: async (): Promise<any[]> => (await tripsApi.getAllPaged()).items,
   get: (id: string) => fetchApi(`/trips/${id}`),
   create: (data: any) =>
     fetchApi('/trips', { method: 'POST', body: JSON.stringify(data) }),

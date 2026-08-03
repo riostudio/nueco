@@ -30,6 +30,12 @@ MAX_TRIP_NAME_CHARS = 100 * _CIPHERTEXT_HEADROOM
 MAX_TRIP_DESCRIPTION_CHARS = 2_000 * _CIPHERTEXT_HEADROOM
 
 
+# Pagination. 200 is the same number as the hard `.to_list(200)` cap this endpoint carried before
+# it was paginated, so an older app build sending no page params sees the response it always did.
+DEFAULT_TRIPS_PAGE_SIZE = 200
+MAX_TRIPS_PAGE_SIZE = 200
+
+
 def _validate_trip_payload(name=None, description=None):
     """Reject oversized trip fields. Only checks provided (non-None) fields."""
     if name is not None and len(name) > MAX_TRIP_NAME_CHARS:
@@ -56,10 +62,17 @@ class TripsService:
         doc.pop("_id", None)
         return doc
 
-    async def list(self, user_id: str) -> List[dict]:
+    async def list(
+        self, user_id: str, page: int = 1, page_size: int = DEFAULT_TRIPS_PAGE_SIZE
+    ) -> List[dict]:
         return await self.db.trips.find(
             {"user_id": user_id}, {"_id": 0}
-        ).sort("created_at", -1).to_list(200)
+        ).sort(
+            # `id` tiebreaks created_at so skip/limit paging is deterministic - two trips created
+            # in the same millisecond (an itinerary import) would otherwise be free to swap
+            # places between page requests, which is how a paged pull loses a row.
+            [("created_at", -1), ("id", 1)]
+        ).skip((page - 1) * page_size).limit(page_size).to_list(page_size)
 
     async def get(self, user_id: str, trip_id: str) -> dict:
         trip = await self.db.trips.find_one({"id": trip_id, "user_id": user_id}, {"_id": 0})

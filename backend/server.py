@@ -356,11 +356,20 @@ async def create_indexes():
         # used by any other query, and a compound index's prefix (user_id, is_pinned) already
         # covers what a user_id+is_pinned-only query would need.
         await db.notes.create_index([("user_id", 1), ("is_pinned", -1), ("updated_at", -1)])
+        # Superset of the index above, matching list()'s sort once `id` was added as a paging
+        # tiebreaker (see notes/service.py's list()). The 3-key version is deliberately left in
+        # place rather than dropped: during a rolling deploy an older instance still sorts without
+        # the tiebreaker, and dropping its index would push that instance onto a blocking
+        # in-memory sort of image-bearing notes - the exact failure the compound index exists to
+        # prevent. Safe to drop once no pre-tiebreaker build is serving.
+        await db.notes.create_index([("user_id", 1), ("is_pinned", -1), ("updated_at", -1), ("id", 1)])
         await db.notes.create_index([("user_id", 1), ("id", 1)])
         await db.notes.create_index([("user_id", 1), ("has_attachments", 1)])
         
         # Events indexes
         await db.events.create_index([("user_id", 1), ("start_time", 1)])
+        # Covers list()'s (start_time, id) paging sort - same tiebreaker rationale as notes above.
+        await db.events.create_index([("user_id", 1), ("start_time", 1), ("id", 1)])
         await db.events.create_index([("user_id", 1), ("id", 1)])
         await db.events.create_index("id")
         # Reminder scheduler: PARTIAL index over only the small pending subset (the vast majority of
@@ -375,6 +384,8 @@ async def create_indexes():
 
         # Trips indexes
         await db.trips.create_index([("user_id", 1), ("created_at", -1)])
+        # Covers list()'s (created_at, id) paging sort - same tiebreaker rationale as notes above.
+        await db.trips.create_index([("user_id", 1), ("created_at", -1), ("id", 1)])
         await db.trips.create_index([("user_id", 1), ("id", 1)])
 
         # Push token indexes (reminder fire looks up the owner's active tokens on every send)

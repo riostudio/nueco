@@ -18,6 +18,7 @@ import { encryptNoteForServer, decryptNoteFromServer, decryptNotesFromServer } f
 import { encryptEventForServer, decryptEventsFromServer } from './crypto/eventCrypto';
 import { encryptTripForServer, decryptTripsFromServer } from './crypto/tripCrypto';
 import { incrementNoteCreatedCount } from './feedbackToast';
+import { mergeRecords, recordTimestamp } from './syncMergeCore';
 import type { Recurrence, NoteObject } from './types';
 
 // ---- Types ----
@@ -77,6 +78,13 @@ export interface LocalEvent {
   local_notification_id?: string | null;
   user_id?: string;
   created_at: string;
+  // Every write to an event stamps this, and it is sent to the server, which stores it and
+  // returns it (backfilled from created_at for events written before the field existed). Without
+  // it the fullSync merge below had nothing to compare for events - only `created_at`, which
+  // doesn't change on edit - so an already-synced event edited locally but not yet pushed lost to
+  // the server's stale copy on the next pull. Optional because events already in a device's local
+  // store predate the field.
+  updated_at?: string;
   _isLocal?: boolean;
   _pendingDelete?: boolean;
 }
@@ -198,6 +206,48 @@ export function isNewer(incoming: string, existing: string): boolean {
 let _notesCache: LocalNote[] | null = null;
 let _eventsCache: LocalEvent[] | null = null;
 let _tripsCache: LocalTrip[] | null = null;
+
+// getLocalNotes()/saveLocalNotes() is a read-whole-array, mutate, write-whole-array-back
+// pattern - not atomic across the gap between the read and the write. Three call sites do this
+// for `notes` on completely uncoordinated schedules: the editor's own upsertLocalNote (every
+// autosave/image add), processSyncQueue's own id-swap-after-create write, and fullSync's
+// periodic reconciliation write. If two of these interleave - concretely: the editor adds an
+// image while a backgrounded processSyncQueue or fullSync from an earlier save is still
+// mid-flight (handleBack fires processSyncQueue() without awaiting it before navigating away) -
+// whichever finishes last wins with whatever it read at ITS start, silently discarding the
+// other's change. This queue forces every read-modify-write cycle against `notes` to run to
+// completion, in order, regardless of which of the three call sites started it - that's the fix
+// for "an image quietly disappears after adding a second/third one and navigating back and forth".
+//
+// Not reentrant: a function running inside withNotesLock must never call another function that
+// also takes withNotesLock, or it deadlocks waiting for itself.
+function createMutex() {
+  let tail: Promise<void> = Promise.resolve();
+  return function withLock<T>(fn: () => Promise<T>): Promise<T> {
+    const result = tail.then(fn, fn);
+    tail = result.then(() => undefined, () => undefined);
+    return result;
+  };
+}
+
+const withNotesLock = createMutex();
+
+// processNoteOperation's 'create' case (below) swaps a note's local temp id for its real
+// server id once the first push lands - but a caller that captured the temp id once (most
+// concretely: editor.tsx's noteIdRef, set only when createNoteOffline first resolves, never
+// re-read afterward) has no way to know that happened. That swap can happen mid-editing-session:
+// handleBack fires processSyncQueue() without awaiting it before navigating away, and
+// startBackgroundSync's NetInfo listener (offlineSync.ts, started once when the notes-list
+// screen mounts and never torn down while an editor screen is pushed on top of it) can also
+// fire processSyncQueue() on any connectivity state event, not just a real reconnect. Every
+// updateNoteOffline call after that point looks up the note by the now-stale temp id, finds
+// nothing, and silently returns - no error, no throw, "All changes saved" still shows, but
+// nothing was ever enqueued to sync. This alias map lets updateNoteOffline/deleteNoteOffline
+// transparently resolve a stale id to its current one instead of silently no-op'ing.
+const _noteIdAliases = new Map<string, string>();
+function resolveNoteId(id: string): string {
+  return _noteIdAliases.get(id) || id;
+}
 
 export async function getLocalNotes(): Promise<LocalNote[]> {
   if (_notesCache) return [..._notesCache];
@@ -398,8 +448,14 @@ export async function upsertLocalEvent(event: LocalEvent): Promise<void> {
   const events = await getLocalEvents();
   const idx = events.findIndex(e => e.id === event.id);
   if (idx >= 0) {
-    // Events don't have updated_at, use created_at as fallback
-    events[idx] = event;
+    // Incoming write wins unless the stored copy is provably newer - now decidable for events
+    // because they carry updated_at (recordTimestamp falls back to created_at for events stored
+    // before that field existed). Phrased as "unless the existing one is newer" rather than
+    // "only if the incoming one is newer" so that two writes landing in the same millisecond
+    // still behave the way this function always did: the later call wins.
+    if (!isNewer(recordTimestamp(events[idx]), recordTimestamp(event))) {
+      events[idx] = event;
+    }
   } else {
     events.push(event);
   }
@@ -447,15 +503,18 @@ export async function setLocalEventNotificationId(id: string, notificationId: st
 // - that write is local/native (no network), unaffected by any of this.
 
 export async function createEventOffline(
-  data: Omit<LocalEvent, 'id' | 'created_at' | '_isLocal'>,
+  data: Omit<LocalEvent, 'id' | 'created_at' | 'updated_at' | '_isLocal'>,
   opts: { push?: boolean } = {},
 ): Promise<LocalEvent> {
   const now = new Date().toISOString();
   const tempId = `local_${uuid.v4()}`;
-  const event: LocalEvent = { ...data, id: tempId, created_at: now, _isLocal: true };
+  const event: LocalEvent = { ...data, id: tempId, created_at: now, updated_at: now, _isLocal: true };
+  // The server takes the client's updated_at when it's sent (see backend/events/schemas.py) -
+  // this device's clock is the one the merge compares against, so it has to be the one recorded.
+  const payload = { ...data, updated_at: now };
 
   await upsertLocalEvent(event);
-  await enqueueOperation({ id: tempId, entity: 'event', operation: 'create', payload: data, timestamp: now });
+  await enqueueOperation({ id: tempId, entity: 'event', operation: 'create', payload, timestamp: now });
 
   if (opts.push !== false && (await isOnline())) {
     // Deliberately NOT the generic processSyncQueue() here (unlike createNoteOffline): the
@@ -465,7 +524,7 @@ export async function createEventOffline(
     // directly instead, so success returns the real id synchronously; on failure, the item is
     // already queued above and will retry via the background sync listener.
     try {
-      const created = await eventsApi.create(await encryptEventForServer(data));
+      const created = await eventsApi.create(await encryptEventForServer(payload));
       const events = await getLocalEvents();
       const idx = events.findIndex(e => e.id === tempId);
       const resolved: LocalEvent = { ...event, id: created.id, _isLocal: false };
@@ -493,7 +552,9 @@ export async function updateEventOffline(
   const existing = events.find(e => e.id === id);
   if (!existing) return;
 
-  const updated: LocalEvent = { ...existing, ...data };
+  // Stamped after the spread so it wins even if a caller passed an updated_at of its own: the
+  // moment of THIS write is what the merge needs to compare, not whatever the caller was holding.
+  const updated: LocalEvent = { ...existing, ...data, updated_at: now };
   await upsertLocalEvent(updated);
 
   await enqueueOperation({
@@ -502,7 +563,7 @@ export async function updateEventOffline(
     // An event still local (never synced) stays a pending 'create' - enqueueOperation merges
     // this into its existing create op rather than emitting a doomed 'update'.
     operation: existing._isLocal ? 'create' : 'update',
-    payload: { ...existing, ...data },
+    payload: { ...existing, ...data, updated_at: now },
     timestamp: now,
   });
 
@@ -777,40 +838,39 @@ export async function fullSync(opts: { force?: boolean } = {}): Promise<void> {
 
     // 2. Pull latest from server - notes, events and trips are independent; don't let
     //    a broken response for one block the others from being saved.
+    //
+    //    Every pull pages to the end of its collection and reports whether it got there
+    //    (PagedPull.complete). That flag is what the merges below need: these endpoints are
+    //    paginated, and reading only the first page while assuming it was the whole collection is
+    //    what silently deleted every note past the first 50 from the device on each sync.
+    //
+    //    Captured before the pulls, not after: any local write with a later timestamp than this
+    //    happened while the pull was in flight, so the pull cannot be treated as knowing about it.
+    const pullStartedAt = new Date().toISOString();
     const [notesResult, eventsResult, tripsResult] = await Promise.allSettled([
-      notesApi.getAll(),
-      eventsApi.getAll(),
-      tripsApi.getAll(),
+      notesApi.getAllPaged(),
+      eventsApi.getAllPaged(),
+      tripsApi.getAllPaged(),
     ]);
 
-    // 3. Merge server notes with local (timestamp wins)
+    // 3. Merge server notes with local (newest write wins - see syncMergeCore)
     if (notesResult.status === 'fulfilled') {
+      const notesPull = notesResult.value;
       // Decrypt server notes to plaintext before they enter the (plaintext) local store.
-      const serverNotes = await decryptNotesFromServer(notesResult.value);
-      const localNotes = await getLocalNotes();
-      const mergedById = new Map<string, LocalNote>(
-        serverNotes.map((n: any) => [n.id, { ...n, _isLocal: false }]),
-      );
-
-      for (const local of localNotes) {
-        if (local._pendingDelete) continue;
-        if (local._isLocal) {
-          mergedById.set(local.id, local);
-          continue;
-        }
-        // Timestamp actually wins here now: a local edit (e.g. a pin toggle) newer than the
-        // server's copy hasn't landed there yet - push still in flight, or racing this same
-        // fullSync's own pull - so keep it. Previously this branch did nothing, meaning the
-        // server's copy (spread into mergedNotes above) always won regardless of timestamp,
-        // silently reverting any local change not yet reflected server-side.
-        const server = mergedById.get(local.id);
-        if (server && isNewer(local.updated_at, server.updated_at)) {
-          mergedById.set(local.id, local);
-        }
+      const serverNotes = await decryptNotesFromServer(notesPull.items);
+      const mergedNotes = await withNotesLock(async () => {
+        const merged = mergeRecords<LocalNote>({
+          server: serverNotes as LocalNote[],
+          local: await getLocalNotes(),
+          serverPullComplete: notesPull.complete,
+          pullStartedAt,
+        });
+        await saveLocalNotes(merged);
+        return merged;
+      });
+      if (!notesPull.complete) {
+        console.warn('fullSync: notes pull was incomplete - keeping local notes it did not cover');
       }
-
-      const mergedNotes = Array.from(mergedById.values());
-      await saveLocalNotes(mergedNotes);
       console.log('fullSync saved notes count:', mergedNotes.length);
     } else {
       console.warn('fullSync: notes fetch failed:', notesResult.reason);
@@ -818,39 +878,25 @@ export async function fullSync(opts: { force?: boolean } = {}): Promise<void> {
 
     // 4. Merge server events (independently - a failure here won't lose notes)
     if (eventsResult.status === 'fulfilled') {
-      const decryptedEvents = await decryptEventsFromServer(eventsResult.value);
-      const localEvents = await getLocalEvents();
-      const localEventsById = new Map(localEvents.map((e) => [e.id, e]));
-      const mergedById = new Map<string, LocalEvent>(
-        decryptedEvents.map((e: any) => [e.id, {
-          ...e,
-          _isLocal: false,
-          // `local_notification_id` is device-local-only and never round-trips through the
-          // server - without carrying it over from the previous local copy, this fullSync
-          // would silently wipe it and orphan the still-scheduled OS notification (nothing
-          // would be able to find its id to cancel/reschedule it again).
-          local_notification_id: localEventsById.get(e.id)?.local_notification_id ?? null,
-        }]),
-      );
-
-      // Same preservation as the notes merge above - without this, an event created/edited
-      // offline (still queued, not yet on the server) would get silently wiped the next time
-      // fullSync() runs, since the server's response wouldn't include it yet.
-      //
-      // Unlike notes, LocalEvent has no `updated_at` to compare (only `created_at`, which
-      // doesn't change on edit), so this can't apply the same "timestamp wins" fix as the notes
-      // merge above for an already-synced event edited locally but not yet pushed - that's a
-      // real gap (same bug class as the notes one this fullSync fixes), just not fixable here
-      // without adding a real per-write timestamp field to LocalEvent first.
-      for (const local of localEvents) {
-        if (local._pendingDelete) continue;
-        if (local._isLocal) {
-          mergedById.set(local.id, local);
-          continue;
-        }
+      const eventsPull = eventsResult.value;
+      const decryptedEvents = await decryptEventsFromServer(eventsPull.items);
+      const mergedEvents = mergeRecords<LocalEvent>({
+        server: decryptedEvents as LocalEvent[],
+        local: await getLocalEvents(),
+        serverPullComplete: eventsPull.complete,
+        pullStartedAt,
+        // `local_notification_id` is device-local-only and never round-trips through the server -
+        // without carrying it over from the previous local copy, this fullSync would silently wipe
+        // it and orphan the still-scheduled OS notification (nothing would be able to find its id
+        // to cancel/reschedule it again).
+        adoptLocalFields: (serverEvent, previousLocal) => ({
+          ...serverEvent,
+          local_notification_id: previousLocal?.local_notification_id ?? null,
+        }),
+      });
+      if (!eventsPull.complete) {
+        console.warn('fullSync: events pull was incomplete - keeping local events it did not cover');
       }
-
-      const mergedEvents = Array.from(mergedById.values());
       await saveLocalEvents(mergedEvents);
     } else {
       console.warn('fullSync: events fetch failed:', eventsResult.reason);
@@ -858,18 +904,17 @@ export async function fullSync(opts: { force?: boolean } = {}): Promise<void> {
 
     // 5. Merge server trips (independently - a failure here won't lose notes/events)
     if (tripsResult.status === 'fulfilled') {
-      const decryptedTrips = await decryptTripsFromServer(tripsResult.value);
-      const localTrips = await getLocalTrips();
-      const mergedTrips: LocalTrip[] = decryptedTrips.map((t: any) => ({ ...t, _isLocal: false }));
-
-      for (const local of localTrips) {
-        if (local._pendingDelete) continue;
-        if (local._isLocal) {
-          mergedTrips.push(local);
-          continue;
-        }
+      const tripsPull = tripsResult.value;
+      const decryptedTrips = await decryptTripsFromServer(tripsPull.items);
+      const mergedTrips = mergeRecords<LocalTrip>({
+        server: decryptedTrips as LocalTrip[],
+        local: await getLocalTrips(),
+        serverPullComplete: tripsPull.complete,
+        pullStartedAt,
+      });
+      if (!tripsPull.complete) {
+        console.warn('fullSync: trips pull was incomplete - keeping local trips it did not cover');
       }
-
       await saveLocalTrips(mergedTrips);
     } else {
       console.warn('fullSync: trips fetch failed:', tripsResult.reason);

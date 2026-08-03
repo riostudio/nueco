@@ -1,10 +1,16 @@
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from core.deps import get_current_user, get_db
-from .service import TripsService, TripNotFoundError, TripPayloadTooLargeError
+from .service import (
+    DEFAULT_TRIPS_PAGE_SIZE,
+    MAX_TRIPS_PAGE_SIZE,
+    TripsService,
+    TripNotFoundError,
+    TripPayloadTooLargeError,
+)
 from .schemas import TripCreate, TripUpdate, TripResponse
 
 router = APIRouter(prefix="/trips", tags=["trips"])
@@ -30,11 +36,17 @@ async def create_trip(
 
 @router.get("", response_model=List[TripResponse])
 async def get_trips(
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(
+        DEFAULT_TRIPS_PAGE_SIZE, ge=1, le=MAX_TRIPS_PAGE_SIZE, description="Items per page"
+    ),
     current_user: dict = Depends(get_current_user),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
+    """Paginated; returns a bare array for the same wire-compatibility reason as
+    GET /events (see that route's docstring)."""
     service = TripsService(db)
-    trips = await service.list(_user_id(current_user))
+    trips = await service.list(_user_id(current_user), page, page_size)
     return [TripResponse(**t) for t in trips]
 
 

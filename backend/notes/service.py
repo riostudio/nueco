@@ -130,7 +130,15 @@ class NotesService:
             "created_at": 1,
             "updated_at": 1
         }).sort(
-            [("is_pinned", -1), ("updated_at", -1)]
+            # `id` breaks ties so paging is deterministic. (is_pinned, updated_at) is not unique -
+            # notes written in the same millisecond, or carrying timestamps copied from an import,
+            # tie exactly - and with skip/limit an unstable order can return one document on two
+            # pages while never returning another at all. A client paging to build its offline
+            # store would then treat the missing note as deleted. Kept index-covered by the
+            # (user_id, is_pinned, updated_at, id) index in server.py: an uncovered sort here is
+            # a blocking in-memory sort over notes that carry base64 images, which is exactly
+            # what the 32MB sort limit rejects.
+            [("is_pinned", -1), ("updated_at", -1), ("id", 1)]
         ).skip(skip).limit(page_size).to_list(page_size)
         return [_normalize_linked_event_ids(n) for n in notes]
 

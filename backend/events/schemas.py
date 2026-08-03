@@ -25,6 +25,11 @@ class EventCreate(BaseModel):
     recurrence: Optional[Recurrence] = None
     timezone: Optional[str] = None  # IANA name (e.g. "Australia/Sydney"); anchors recurrence math to wall-clock time across DST
     trip_id: Optional[str] = None  # Groups this event under a Trip (backend/trips/) - opaque id, no validation here.
+    # Client-authoritative timestamp for offline-first conflict resolution, same contract as
+    # NoteCreate/NoteUpdate's (see notes/schemas.py for why the client's clock must win over the
+    # server's). Optional so older app builds that don't send it still work - the service falls
+    # back to server time.
+    updated_at: Optional[str] = None
 
 
 class EventUpdate(BaseModel):
@@ -41,6 +46,7 @@ class EventUpdate(BaseModel):
     recurrence: Optional[Recurrence] = None
     timezone: Optional[str] = None
     trip_id: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 class EventResponse(BaseModel):
@@ -57,6 +63,10 @@ class EventResponse(BaseModel):
     user_id: Optional[str] = None
     enc_version: Optional[int] = None
     created_at: str
+    # Always present on the wire: events written before this field existed have it backfilled
+    # from created_at on read (see events/service.py's _normalize_updated_at), so a client can
+    # rely on it for conflict resolution without a Mongo migration.
+    updated_at: str
     recurrence: Optional[Recurrence] = None
     timezone: Optional[str] = None
     trip_id: Optional[str] = None

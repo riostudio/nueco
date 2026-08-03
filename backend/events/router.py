@@ -4,7 +4,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from core.deps import get_current_user, get_db
-from .service import EventsService, EventNotFoundError, EventPayloadTooLargeError
+from .service import (
+    DEFAULT_EVENTS_PAGE_SIZE,
+    MAX_EVENTS_PAGE_SIZE,
+    EventsService,
+    EventNotFoundError,
+    EventPayloadTooLargeError,
+)
 from .schemas import EventCreate, EventUpdate, EventResponse, BatchEventIds
 
 router = APIRouter(prefix="/events", tags=["events"])
@@ -32,11 +38,18 @@ async def create_event(
 async def get_events(
     month: Optional[int] = Query(None),
     year: Optional[int] = Query(None),
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(
+        DEFAULT_EVENTS_PAGE_SIZE, ge=1, le=MAX_EVENTS_PAGE_SIZE, description="Items per page"
+    ),
     current_user: dict = Depends(get_current_user),
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
+    """Paginated, but returns a bare array rather than a paging envelope: released app builds
+    parse this response as a list, so wrapping it would break every client already in the wild.
+    A caller wanting every event pages until it gets back fewer items than it asked for."""
     service = EventsService(db)
-    events = await service.list(_user_id(current_user), month, year)
+    events = await service.list(_user_id(current_user), month, year, page, page_size)
     return [EventResponse(**e) for e in events]
 
 

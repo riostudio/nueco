@@ -1167,3 +1167,229 @@ class TestTripsCRUD:
         got = await api_client.get(f"/api/events/{event_id}")
         assert got.status_code == 200, got.text
         assert got.json()["trip_id"] is None, "event must not be left pointing at a deleted trip"
+
+
+class TestEventUpdatedAt:
+    """`updated_at` on events: client-authoritative on write, backfilled on read.
+
+    Events had no per-write timestamp at all, so the client's offline merge had nothing to
+    compare and an already-synced event edited locally lost to the server's stale copy on the
+    next pull. These lock in the contract that merge now depends on.
+    """
+
+    async def test_create_returns_updated_at_defaulting_to_server_time(self, api_client):
+        created = await api_client.post("/api/events", json={
+            "title": "TEST_Stamped",
+            "start_time": "2026-10-01T09:00:00Z",
+            "end_time": "2026-10-01T10:00:00Z",
+            "linked_note_ids": [],
+        })
+        assert created.status_code == 200, created.text
+        body = created.json()
+        assert body["updated_at"], "every event response must carry updated_at"
+        assert body["updated_at"] == body["created_at"], (
+            "with no client timestamp sent, a brand-new event's updated_at is its created_at"
+        )
+
+    async def test_create_honors_client_supplied_updated_at(self, api_client):
+        client_ts = "2026-01-02T03:04:05.678000+00:00"
+        created = await api_client.post("/api/events", json={
+            "title": "TEST_Client Clock",
+            "start_time": "2026-10-02T09:00:00Z",
+            "end_time": "2026-10-02T10:00:00Z",
+            "linked_note_ids": [],
+            "updated_at": client_ts,
+        })
+        assert created.status_code == 200, created.text
+        assert created.json()["updated_at"] == client_ts, (
+            "the client's clock must win - the offline merge compares against it, so a "
+            "server-stamped time from an earlier round trip could outrank a newer local edit"
+        )
+
+    async def test_update_honors_client_supplied_updated_at(self, api_client):
+        created = await api_client.post("/api/events", json={
+            "title": "TEST_Before",
+            "start_time": "2026-10-03T09:00:00Z",
+            "end_time": "2026-10-03T10:00:00Z",
+            "linked_note_ids": [],
+        })
+        event_id = created.json()["id"]
+
+        client_ts = "2026-05-06T07:08:09.101112+00:00"
+        updated = await api_client.put(f"/api/events/{event_id}", json={
+            "title": "TEST_After",
+            "updated_at": client_ts,
+        })
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["title"] == "TEST_After"
+        assert updated.json()["updated_at"] == client_ts
+
+    async def test_update_without_client_timestamp_advances_updated_at(self, api_client):
+        created = await api_client.post("/api/events", json={
+            "title": "TEST_Fallback",
+            "start_time": "2026-10-04T09:00:00Z",
+            "end_time": "2026-10-04T10:00:00Z",
+            "linked_note_ids": [],
+        })
+        original = created.json()["updated_at"]
+
+        updated = await api_client.put(
+            f"/api/events/{created.json()['id']}", json={"title": "TEST_Fallback Edited"}
+        )
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["updated_at"] > original, (
+            "an older app build that sends no timestamp still needs the field to move forward"
+        )
+
+    async def test_legacy_event_without_updated_at_is_backfilled_from_created_at(
+        self, api_client, server_module,
+    ):
+        """Events written before the field existed must not come back without it - a client
+        merging them would have nothing to compare. Backfilled on read, no migration."""
+        user_id = await _get_user_id(api_client)
+        event_id = await _seed_event(
+            server_module, user_id,
+            start_time="2026-10-05T09:00:00+00:00",
+            reminder_minutes=None,
+            reminder_fire_at=None,
+            reminder_status="none",
+        )
+        raw = await server_module.db.events.find_one({"id": event_id})
+        assert "updated_at" not in raw, "fixture must reproduce a pre-updated_at document"
+
+        got = await api_client.get(f"/api/events/{event_id}")
+        assert got.status_code == 200, got.text
+        assert got.json()["updated_at"] == got.json()["created_at"]
+
+        listed = await api_client.get("/api/events")
+        assert listed.status_code == 200, listed.text
+        seeded = next(e for e in listed.json() if e["id"] == event_id)
+        assert seeded["updated_at"] == seeded["created_at"]
+
+        batched = await api_client.post("/api/events/batch", json={"event_ids": [event_id]})
+        assert batched.status_code == 200, batched.text
+        assert batched.json()[0]["updated_at"] == batched.json()[0]["created_at"]
+
+
+class TestCollectionPagination:
+    """Paging the list endpoints.
+
+    These endpoints were always paginated; the client just never paged, so it saw the first
+    page and treated it as the whole collection. Paging has to be exhaustive (every record
+    reachable) and disjoint (no record on two pages) for a client to rebuild its offline store
+    from it safely.
+    """
+
+    async def test_notes_paging_is_exhaustive_and_disjoint(self, api_client):
+        created_ids = []
+        for i in range(5):
+            response = await api_client.post("/api/notes", json={
+                "title": f"TEST_Paged {i}",
+                "content": "x",
+            })
+            assert response.status_code == 200, response.text
+            created_ids.append(response.json()["id"])
+
+        seen = []
+        for page in range(1, 4):
+            response = await api_client.get(f"/api/notes?page={page}&page_size=2")
+            assert response.status_code == 200, response.text
+            seen.extend(n["id"] for n in response.json())
+
+        assert len(seen) == len(set(seen)) == 5, f"expected 5 distinct notes across pages, got {seen}"
+        assert set(seen) == set(created_ids)
+
+    async def test_notes_short_page_marks_the_end_of_the_collection(self, api_client):
+        for i in range(3):
+            await api_client.post("/api/notes", json={"title": f"TEST_Short {i}", "content": "x"})
+
+        full = await api_client.get("/api/notes?page=1&page_size=2")
+        assert len(full.json()) == 2, "a full page means the client must ask for another"
+        short = await api_client.get("/api/notes?page=2&page_size=2")
+        assert len(short.json()) == 1, "a short page is how the client learns the pull is complete"
+        past_end = await api_client.get("/api/notes?page=3&page_size=2")
+        assert past_end.json() == [], "paging past the end is empty, not an error"
+
+    async def test_notes_page_size_is_capped(self, api_client):
+        response = await api_client.get("/api/notes?page_size=101")
+        assert response.status_code == 422, "page_size above the cap must be rejected, not clamped"
+
+    async def test_events_paging_is_exhaustive_and_disjoint(self, api_client):
+        created_ids = []
+        for day in range(1, 6):
+            response = await api_client.post("/api/events", json={
+                "title": f"TEST_Paged Event {day}",
+                "start_time": f"2026-11-0{day}T09:00:00Z",
+                "end_time": f"2026-11-0{day}T10:00:00Z",
+                "linked_note_ids": [],
+            })
+            assert response.status_code == 200, response.text
+            created_ids.append(response.json()["id"])
+
+        seen = []
+        for page in range(1, 4):
+            response = await api_client.get(f"/api/events?page={page}&page_size=2")
+            assert response.status_code == 200, response.text
+            seen.extend(e["id"] for e in response.json())
+
+        assert len(seen) == len(set(seen)) == 5, f"expected 5 distinct events across pages, got {seen}"
+        assert set(seen) == set(created_ids)
+
+    async def test_events_paging_is_disjoint_when_start_times_are_identical(self, api_client):
+        """start_time alone is not unique - all-day events on the same date tie exactly. Without
+        the `id` tiebreaker in the sort, skip/limit can hand back the same event twice and never
+        return another one at all."""
+        for _ in range(4):
+            response = await api_client.post("/api/events", json={
+                "title": "TEST_Same Instant",
+                "start_time": "2026-11-20T09:00:00Z",
+                "end_time": "2026-11-20T10:00:00Z",
+                "linked_note_ids": [],
+            })
+            assert response.status_code == 200, response.text
+
+        seen = []
+        for page in range(1, 3):
+            response = await api_client.get(f"/api/events?page={page}&page_size=2")
+            seen.extend(e["id"] for e in response.json())
+        assert len(seen) == len(set(seen)) == 4, f"tied start_times must still page cleanly: {seen}"
+
+    async def test_events_paging_respects_the_month_filter(self, api_client):
+        for month, day in (("11", "10"), ("11", "11"), ("12", "01")):
+            await api_client.post("/api/events", json={
+                "title": f"TEST_Filtered {month}-{day}",
+                "start_time": f"2026-{month}-{day}T09:00:00Z",
+                "end_time": f"2026-{month}-{day}T10:00:00Z",
+                "linked_note_ids": [],
+            })
+
+        page1 = await api_client.get("/api/events?month=11&year=2026&page=1&page_size=1")
+        page2 = await api_client.get("/api/events?month=11&year=2026&page=2&page_size=1")
+        page3 = await api_client.get("/api/events?month=11&year=2026&page=3&page_size=1")
+        assert len(page1.json()) == 1 and len(page2.json()) == 1
+        assert page3.json() == [], "the December event must not leak into a November pull"
+
+    async def test_trips_paging_is_exhaustive_and_disjoint(self, api_client):
+        created_ids = []
+        for i in range(3):
+            response = await api_client.post("/api/trips", json={"name": f"TEST_Paged Trip {i}"})
+            assert response.status_code == 200, response.text
+            created_ids.append(response.json()["id"])
+
+        seen = []
+        for page in range(1, 4):
+            response = await api_client.get(f"/api/trips?page={page}&page_size=1")
+            assert response.status_code == 200, response.text
+            seen.extend(t["id"] for t in response.json())
+
+        assert set(seen) == set(created_ids)
+        assert len(seen) == len(set(seen)) == 3
+
+    async def test_list_endpoints_still_return_bare_arrays(self, api_client):
+        """Released app builds parse these responses as lists. Pagination must not have turned
+        any of them into a paging envelope."""
+        await api_client.post("/api/notes", json={"title": "TEST_Shape", "content": "x"})
+        for path in ("/api/notes", "/api/events", "/api/trips"):
+            response = await api_client.get(path)
+            assert response.status_code == 200, response.text
+            assert isinstance(response.json(), list), f"{path} must stay a bare array"

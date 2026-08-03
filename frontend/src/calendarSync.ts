@@ -128,9 +128,19 @@ export async function runCalendarSync(opts: { force?: boolean } = {}): Promise<v
       const deviceEvents = await ExpoCalendar.getEventsAsync(calendarIds, rangeStart, rangeEnd);
 
       // Existing Nueco events, keyed by the device event id they were created/synced from.
-      // getAll() is capped at 100 server-side (pre-existing limit, not addressed here) - a user
-      // with more than 100 real events could see an already-imported device event re-created.
-      const memoEvents: any[] = await eventsApi.getAll();
+      //
+      // This has to be the WHOLE collection. An event missing from it reads as "never imported",
+      // and the plan below then re-creates it - so a pull that stopped early duplicates every
+      // imported event it failed to reach. (It used to stop early every time: the response is
+      // paginated at 100, and this read one page and assumed it was everything.) Rather than
+      // duplicate, give up and let the next run try again - nothing is written until the plan is
+      // applied, so bailing here costs only the run.
+      const memoPull = await eventsApi.getAllPaged();
+      if (!memoPull.complete) {
+        console.warn('Calendar sync: could not read every Nueco event; skipping this run');
+        return;
+      }
+      const memoEvents: any[] = memoPull.items;
       const byDeviceId = new Map<string, any>();
       for (const ev of memoEvents) {
         if (ev.device_calendar_event_id) byDeviceId.set(ev.device_calendar_event_id, ev);
