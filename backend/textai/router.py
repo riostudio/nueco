@@ -8,7 +8,13 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from core.deps import get_current_user
 from . import service
 from .service import AIEmptyResponseError, AIResponseParseError, InvalidTextActionError
-from .schemas import TextProcessRequest, TranscribeBase64Request, VoiceIntentClassifyRequest, VoiceIntentClassifyResponse
+from .schemas import (
+    TextProcessRequest,
+    TextProcessResponse,
+    TranscribeBase64Request,
+    VoiceIntentClassifyRequest,
+    VoiceIntentClassifyResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +73,10 @@ async def transcribe_audio(
         raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
 
 
-@router.post("/process-text")
+# exclude_none so organize/summarize keep answering exactly `{"text": ...}`: released app builds
+# type note_type as optional-absent, and this response model would otherwise start sending an
+# explicit null on the two actions that never classify.
+@router.post("/process-text", response_model=TextProcessResponse, response_model_exclude_none=True)
 async def process_text_route(request: TextProcessRequest, current_user: dict = Depends(get_current_user)):
     """Process text using AI - organize, summarize, or detect-and-restructure by note type (requires authentication)"""
     try:

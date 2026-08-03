@@ -9,12 +9,12 @@ import time
 import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Optional
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from pydantic import ValidationError
 
 from openai_client import get_openai_client
-from .schemas import FeedbackCreate
+from .schemas import VALID_SENTIMENTS, FeedbackCreate, FeedbackTriage
 
 logger = logging.getLogger(__name__)
 
@@ -57,14 +57,20 @@ class RateLimiter:
 _rate_limiter = RateLimiter()
 
 
-def _parse_ai_triage(raw: str) -> dict:
-    """Best-effort parse of the triage model's JSON reply, tolerating a markdown code fence."""
+def _parse_ai_triage(raw: str) -> FeedbackTriage:
+    """Parse and validate the triage model's JSON reply, tolerating a markdown code fence.
+
+    Raises (json.JSONDecodeError or pydantic.ValidationError) on anything that isn't a well-formed
+    triage; submit() treats that the same as the request having failed - the feedback is still
+    stored, just untriaged. Leaving the fields null is always better than storing a value that
+    can't be trusted to mean what its name says.
+    """
     cleaned = raw.strip()
     if cleaned.startswith("```"):
         cleaned = cleaned.strip("`")
         if cleaned.lower().startswith("json"):
             cleaned = cleaned[4:]
-    return json.loads(cleaned)
+    return FeedbackTriage.model_validate(json.loads(cleaned))
 
 
 class FeedbackService:
@@ -74,7 +80,7 @@ class FeedbackService:
     async def submit(self, user_id: str, body: FeedbackCreate) -> dict:
         """Store a feedback-toast response, AI-triaging any free-text comment (never blocks the
         submission if triage fails -- the record is saved either way)."""
-        if body.sentiment not in ("positive", "negative"):
+        if body.sentiment not in VALID_SENTIMENTS:
             raise InvalidSentimentError()
         if len(body.text) > MAX_FEEDBACK_TEXT_CHARS:
             raise FeedbackTextTooLongError()
@@ -116,10 +122,15 @@ class FeedbackService:
                     ],
                     temperature=0.2,
                 )
-                parsed = _parse_ai_triage(response.choices[0].message.content or "")
-                doc["aiCategory"] = parsed.get("category")
-                doc["aiPriority"] = parsed.get("priority")
-                doc["aiSummary"] = parsed.get("summary")
+                triage = _parse_ai_triage(response.choices[0].message.content or "")
+                doc["aiCategory"] = triage.category
+                doc["aiPriority"] = triage.priority
+                doc["aiSummary"] = triage.summary
+            except ValidationError as e:
+                # The reply parsed as JSON but isn't a triage. Log the field names it got wrong, not
+                # the values - the summary field echoes the user's own feedback text back.
+                bad_fields = sorted({str(loc) for err in e.errors() for loc in err["loc"]})
+                logger.error(f"Feedback AI triage rejected (fields: {', '.join(bad_fields)})")
             except Exception as e:
                 logger.error(f"Feedback AI triage failed: {e}")
 
