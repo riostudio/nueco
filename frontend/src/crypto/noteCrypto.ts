@@ -16,10 +16,17 @@ import { loadDek } from './keystore';
 import { E2EE_KEYS_ENABLED } from './flags';
 import { yieldToJS } from './yieldToJS';
 
-// Every this-many notes, yield to the event loop so decrypting a large collection
-// in one fullSync pass doesn't freeze touch handling / animations app-wide for the
-// whole loop - see the (tabs)/index.tsx and (tabs)/events.tsx focus-triggered sync.
+// Yield to the event loop periodically so decrypting a large collection in one fullSync pass
+// doesn't freeze touch handling / animations app-wide for the whole loop - see the
+// (tabs)/index.tsx and (tabs)/events.tsx focus-triggered sync.
+//
+// Counting notes alone is the wrong budget: cost is driven by ciphertext SIZE, and a note with
+// inline base64 images is orders of magnitude bigger than a text one. 25 image-bearing notes
+// between yields is a multi-hundred-millisecond stall - exactly the "the app hitches right after
+// I saved something" symptom - while 25 short notes is nothing. Yield on whichever limit is hit
+// first, so the gap between yields is bounded by work done rather than by item count.
 const DECRYPT_YIELD_EVERY = 25;
+const DECRYPT_YIELD_BYTES = 128 * 1024;
 
 export {
   encryptNoteFields,
@@ -57,9 +64,18 @@ export async function decryptNotesFromServer<T extends EncryptableNote>(notes: T
   const dek = await loadDek();
   if (!dek) return notes;
   const out: T[] = [];
+  let sinceYield = 0;
+  let bytesSinceYield = 0;
   for (let i = 0; i < notes.length; i++) {
-    out.push(decryptNoteFields(notes[i], dek));
-    if ((i + 1) % DECRYPT_YIELD_EVERY === 0) await yieldToJS();
+    const note = notes[i];
+    bytesSinceYield += typeof note.content === 'string' ? note.content.length : 0;
+    out.push(decryptNoteFields(note, dek));
+    sinceYield++;
+    if (sinceYield >= DECRYPT_YIELD_EVERY || bytesSinceYield >= DECRYPT_YIELD_BYTES) {
+      sinceYield = 0;
+      bytesSinceYield = 0;
+      await yieldToJS();
+    }
   }
   return out;
 }

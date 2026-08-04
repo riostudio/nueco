@@ -119,15 +119,46 @@ async def transcribe_bytes(audio_bytes: bytes, file_extension: str, language: Op
 
     try:
         with open(tmp_path, "rb") as audio_file:
-            kwargs = {"model": "whisper-1", "file": audio_file}
+            kwargs = {
+                "model": "whisper-1",
+                "file": audio_file,
+                # verbose_json is the only response format exposing per-segment
+                # no_speech_prob/avg_logprob - needed by _drop_silent_hallucinations below.
+                # Whisper is well-documented to hallucinate plausible-looking text (often in a
+                # random detected language, since there's no real speech to anchor language
+                # detection) instead of an empty string when fed silence/near-silent audio - a
+                # tap on the mic with nothing said would otherwise insert fabricated text.
+                "response_format": "verbose_json",
+            }
             # Only pass language when we actually have a hint - an empty/unrecognized value
             # would force Whisper into that language instead of just falling back to auto-detect.
             if language:
                 kwargs["language"] = language
             response = await client.audio.transcriptions.create(**kwargs)
-        return response.text or ""
+        return _drop_silent_hallucinations(response)
     finally:
         os.unlink(tmp_path)
+
+
+# Thresholds per TranscriptionSegment's own field docs (avg_logprob "lower than -1, consider
+# the logprobs failed") plus the commonly-used no_speech_prob cutoff for this exact failure
+# mode. Requiring BOTH conditions (not just one) avoids discarding real quiet/mumbled speech
+# that only trips one of the two.
+_NO_SPEECH_PROB_THRESHOLD = 0.6
+_AVG_LOGPROB_THRESHOLD = -1.0
+
+
+def _drop_silent_hallucinations(response) -> str:
+    segments = response.segments
+    if not segments:
+        # No segment data to filter on (shouldn't happen with verbose_json) - trust the plain
+        # transcript rather than silently dropping real speech.
+        return response.text or ""
+    kept = [
+        seg.text for seg in segments
+        if not (seg.no_speech_prob > _NO_SPEECH_PROB_THRESHOLD and seg.avg_logprob < _AVG_LOGPROB_THRESHOLD)
+    ]
+    return "".join(kept).strip()
 
 
 async def process_text(text: str, action: str) -> TextProcessResponse:

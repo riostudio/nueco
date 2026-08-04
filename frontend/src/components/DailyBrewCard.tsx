@@ -27,6 +27,7 @@ import { C, radius, borderWidth } from '../theme';
 import { DAY_NAMES, MONTH_NAMES } from '../dateNames';
 import { useAuth } from '../auth';
 import { getVerseForDate } from '../dailyBrew/verses';
+import { getQuoteForDate } from '../dailyBrew/quotes';
 import {
   isDismissedToday, markDismissedToday, isPersistPinned, getCachedBrew, setCachedBrew, pruneOldKeys,
   fetchEventsToday, fetchWeather, fetchNewsHeadlines, BrewEvent, NewsItem, CachedBrew,
@@ -214,6 +215,8 @@ export default function DailyBrewCard({ preview = false }: Props) {
 
   const verse = useMemo(() => getVerseForDate(new Date()), []);
   const showVerse = user?.daily_brew_show_verse === true;
+  const quote = useMemo(() => getQuoteForDate(new Date()), []);
+  const showQuote = user?.daily_brew_show_quote === true;
   const hasNewsPrefs = Boolean(user?.news_country) || Boolean(user?.news_outlet_ids?.length);
 
   const handleDone = async () => {
@@ -297,20 +300,44 @@ export default function DailyBrewCard({ preview = false }: Props) {
         </TouchableOpacity>
       )}
 
+      {showQuote && (
+        <View style={s.row}>
+          <MaterialIcons name="format-quote" size={17} color={C.textSec} />
+          <Text style={s.rowText} numberOfLines={2} ellipsizeMode="tail">
+            {quote.text} — {quote.author}
+          </Text>
+        </View>
+      )}
+
       {news !== 'loading' && (
         newsList.length > 0 ? (
           newsList.map((item, i) => (
-            <TouchableOpacity key={`${item.link}-${i}`} style={s.row} onPress={() => Linking.openURL(item.link)}>
+            <TouchableOpacity key={`${item.link}-${i}`} style={s.newsRow} onPress={() => Linking.openURL(item.link)}>
+              {/* Circular brand avatar, WhatsApp-Channels style. Logos were dropped earlier at
+                  17px, where outlet artwork was unreadable and every outlet's different
+                  proportions left the column ragged. At 44px circular they do the opposite: mastheads
+                  are recognisable at a glance and the circle crops every source to the same shape,
+                  so the left rail stays even no matter what artwork comes back from the feed. */}
               {item.logoUrl ? (
-                <Image source={{ uri: item.logoUrl }} style={s.newsLogo} />
+                <Image source={{ uri: item.logoUrl }} style={s.newsAvatar} />
               ) : (
-                <MaterialIcons name="newspaper" size={17} color={C.textSec} />
+                // Monogram fallback rather than a generic newspaper glyph: it keeps the rail
+                // aligned and still distinguishes one source from another.
+                <View style={[s.newsAvatar, s.newsAvatarFallback]}>
+                  <Text style={s.newsAvatarLetter}>
+                    {(item.sourceName || '?').trim().charAt(0).toUpperCase()}
+                  </Text>
+                </View>
               )}
-              <View style={s.rowTextCol}>
-                <Text style={s.rowMeta}>
-                  {item.sourceName}{formatRelativeTime(item.publishedAt) ? ` · ${formatRelativeTime(item.publishedAt)}` : ''}
-                </Text>
-                <Text style={s.rowText} numberOfLines={1}>{item.headline}</Text>
+              <View style={s.newsTextCol}>
+              {/* Headline first, at full weight. The source and time used to sit ABOVE it in grey,
+                  so the eye landed on "ABC News · 2h ago" before the thing worth reading. Two
+                  lines rather than one: a headline cut mid-sentence gives no basis for deciding
+                  whether to tap, which is the only decision this row exists to support. */}
+              <Text style={s.newsHeadline} numberOfLines={2}>{item.headline}</Text>
+              <Text style={s.newsMeta} numberOfLines={1}>
+                {item.sourceName}{formatRelativeTime(item.publishedAt) ? ` · ${formatRelativeTime(item.publishedAt)}` : ''}
+              </Text>
               </View>
             </TouchableOpacity>
           ))
@@ -320,7 +347,10 @@ export default function DailyBrewCard({ preview = false }: Props) {
             <Text style={s.rowTextMuted}>Headline unavailable right now</Text>
           </View>
         ) : (
-          <TouchableOpacity style={s.row} onPress={() => router.push('/news-source-settings' as Href)}>
+          // `news=1` opens the setup screen with its News section already expanded. That screen
+          // otherwise defaults the toggle from what's saved, so someone with only the verse
+          // switched on would tap a row saying "set up news" and land on news switched off.
+          <TouchableOpacity style={s.row} onPress={() => router.push('/news-source-settings?news=1' as Href)}>
             <MaterialIcons name="newspaper" size={17} color={C.textSec} />
             <Text style={s.rowText}>Set up News from home</Text>
           </TouchableOpacity>
@@ -339,8 +369,12 @@ export default function DailyBrewCard({ preview = false }: Props) {
 
 const s = StyleSheet.create({
   card: {
-    backgroundColor: C.surface, borderRadius: radius.md, padding: 12,
-    borderWidth: borderWidth.regular, borderColor: C.border, marginBottom: 10,
+    backgroundColor: C.surface, borderRadius: radius.md, padding: 12, marginBottom: 10,
+    // Border removed by request. Surface (#FFFFFF) and page (#FDFBF7) are close enough that a
+    // borderless card would nearly dissolve into the background, so a very soft shadow keeps the
+    // edge readable without reintroducing a visible grey line.
+    shadowColor: '#0A5443', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 },
+    elevation: 1,
   },
   dateHeading: { fontSize: 18, fontWeight: '600', color: C.text, marginBottom: 8 },
   weatherChip: {
@@ -357,7 +391,13 @@ const s = StyleSheet.create({
     backgroundColor: C.secondaryTint, borderRadius: 8, padding: 8, marginBottom: 6,
   },
   eventRowText: { flex: 1, fontSize: 14, fontWeight: '600', color: C.secondary },
-  newsLogo: { width: 17, height: 17, borderRadius: 4 },
+  newsRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 8 },
+  newsTextCol: { flex: 1, gap: 3 },
+  newsAvatar: { width: 44, height: 44, borderRadius: 22 },
+  newsAvatarFallback: { backgroundColor: C.secondaryTint, alignItems: 'center', justifyContent: 'center' },
+  newsAvatarLetter: { fontSize: 18, fontWeight: '700', color: C.primary },
+  newsHeadline: { fontSize: 14, lineHeight: 19, color: C.text, fontWeight: '500' },
+  newsMeta: { fontSize: 12, color: C.textSec },
   rowText: { flex: 1, fontSize: 14, color: C.text },
   rowTextMuted: { flex: 1, fontSize: 14, color: C.textSec },
   rowTextCol: { flex: 1 },

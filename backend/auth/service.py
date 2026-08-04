@@ -100,6 +100,7 @@ class AuthService:
             news_country=user.get("news_country"),
             news_outlet_ids=user.get("news_outlet_ids", []),
             daily_brew_show_verse=user.get("daily_brew_show_verse", False),
+            daily_brew_show_quote=user.get("daily_brew_show_quote", False),
             daily_brew_enabled=is_daily_brew_enabled()
         )
 
@@ -272,20 +273,37 @@ class AuthService:
         }
 
     async def verify_email(self, token: str) -> Tuple[bool, str, Optional[str]]:
-        """Verify email with token. Returns (success, message, user_email)"""
+        """Verify email with token. Returns (success, message, user_email)
+
+        Deliberately IDEMPOTENT: visiting the same link twice succeeds twice, and the token is
+        NOT deleted on use. This link is a plain GET in an email, and mail providers/security
+        scanners (Gmail, Microsoft Defender for Office 365, corporate mail gateways) routinely
+        prefetch links to scan them - that automated GET lands here before the human ever clicks.
+        The previous implementation $unset the token on first use, so the scanner's fetch consumed
+        it and the user's own click then found nothing and got "Invalid verification link" - the
+        account was actually verified, but the person was told it failed. Re-clicking, refreshing,
+        or back-then-forward hit the same wall.
+
+        Keeping the token is safe: once email_verified is true it grants nothing further (it can
+        only set a flag that's already set), and the expiry check below still stops a stale token
+        from verifying an account that never completed verification.
+        """
         user = await self.users.find_one({"verification_token": token})
         if not user:
             return False, "Invalid verification link", None
+
+        # Already verified (repeat click, or a scanner got here first) - report success rather
+        # than an expiry/failure error. Checked BEFORE expiry on purpose: an already-verified
+        # user clicking their link again a week later should see "verified", not "expired".
+        if user.get("email_verified", False):
+            return True, "Email verified successfully", user["email"]
 
         if user.get("verification_token_expiry") and user["verification_token_expiry"] < datetime.utcnow():
             return False, "Verification link has expired. Please request a new one.", None
 
         await self.users.update_one(
             {"email": user["email"]},
-            {
-                "$set": {"email_verified": True},
-                "$unset": {"verification_token": "", "verification_token_expiry": ""}
-            }
+            {"$set": {"email_verified": True}}
         )
 
         logger.info(f"Email verified: {user['email']}")
@@ -382,7 +400,7 @@ class AuthService:
         return True, "Name updated", self._user_to_response(updated).model_dump()
 
     async def update_news_preferences(
-        self, user_id: str, country: str, outlet_ids: list, show_verse: bool
+        self, user_id: str, country: str, outlet_ids: list, show_verse: bool, show_quote: bool = False
     ) -> Tuple[bool, str, Optional[dict]]:
         """Update the Daily Brew "News from home" selection (country + chosen outlet ids)
         and the opt-in Bible verse toggle, mirroring update_name's shape."""
@@ -396,6 +414,7 @@ class AuthService:
                 "news_country": country,
                 "news_outlet_ids": outlet_ids,
                 "daily_brew_show_verse": show_verse,
+                "daily_brew_show_quote": show_quote,
                 "updated_at": datetime.utcnow(),
             }}
         )

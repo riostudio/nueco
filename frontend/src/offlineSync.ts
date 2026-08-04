@@ -145,6 +145,7 @@ export async function clearLocalData(): Promise<void> {
   _notesCache = null;
   _eventsCache = null;
   _tripsCache = null;
+  _queueCache = null;
 }
 
 // Reads a JSON file, falling back to (and migrating from) a legacy AsyncStorage
@@ -287,11 +288,24 @@ export async function saveLocalTrips(trips: LocalTrip[]): Promise<void> {
 
 // ---- Sync Queue ----
 
+// Same in-memory mirror the notes/events/trips collections get above, and for a sharper version
+// of the same reason. A queued note create/update carries the note's FULL payload - including a
+// body with inline base64 images - so the queue file is as big as the notes file, and every
+// single write went through it twice: enqueueOperation reads the whole thing (JSON.parse) to
+// merge, then writes the whole thing back (JSON.stringify). That is on the interaction path for
+// every note save, every autosave, every link, every pin toggle. Cached reads hand back a
+// shallow copy (never the live array) because callers splice/filter/push what they get.
+let _queueCache: SyncQueueItem[] | null = null;
+
 export async function getSyncQueue(): Promise<SyncQueueItem[]> {
-  return readJsonFile<SyncQueueItem[]>(FILES.SYNC_QUEUE, [], KEYS.SYNC_QUEUE);
+  if (_queueCache) return [..._queueCache];
+  const queue = await readJsonFile<SyncQueueItem[]>(FILES.SYNC_QUEUE, [], KEYS.SYNC_QUEUE);
+  _queueCache = queue;
+  return [...queue];
 }
 
 export async function saveSyncQueue(queue: SyncQueueItem[]): Promise<void> {
+  _queueCache = [...queue];
   await writeJsonFile(FILES.SYNC_QUEUE, queue);
 }
 
@@ -327,17 +341,19 @@ export async function enqueueOperation(item: Omit<SyncQueueItem, 'retries'>): Pr
 // ---- Note Operations (Offline-aware) ----
 
 export async function upsertLocalNote(note: LocalNote): Promise<void> {
-  const notes = await getLocalNotes();
-  const idx = notes.findIndex(n => n.id === note.id);
-  if (idx >= 0) {
-    // Conflict resolution: keep whichever is newer
-    if (isNewer(note.updated_at, notes[idx].updated_at)) {
-      notes[idx] = note;
+  return withNotesLock(async () => {
+    const notes = await getLocalNotes();
+    const idx = notes.findIndex(n => n.id === note.id);
+    if (idx >= 0) {
+      // Conflict resolution: keep whichever is newer
+      if (isNewer(note.updated_at, notes[idx].updated_at)) {
+        notes[idx] = note;
+      }
+    } else {
+      notes.push(note);
     }
-  } else {
-    notes.push(note);
-  }
-  await saveLocalNotes(notes);
+    await saveLocalNotes(notes);
+  });
 }
 
 export async function deleteLocalNote(id: string): Promise<void> {
@@ -381,16 +397,17 @@ export async function updateNoteOffline(
   data: Partial<LocalNote>,
   opts: { push?: boolean } = {},
 ): Promise<void> {
+  const resolvedId = resolveNoteId(id);
   const now = new Date().toISOString();
   const notes = await getLocalNotes();
-  const existing = notes.find(n => n.id === id);
+  const existing = notes.find(n => n.id === resolvedId);
   if (!existing) return;
 
   const updated: LocalNote = { ...existing, ...data, updated_at: now };
   await upsertLocalNote(updated);
 
   await enqueueOperation({
-    id,
+    id: resolvedId,
     entity: 'note',
     // A note still local (never synced) stays a pending 'create' - enqueueOperation
     // merges this into its existing create op rather than emitting a doomed 'update'.
@@ -414,23 +431,24 @@ export async function updateNoteOffline(
 // server with an id that doesn't exist there, 404'd, and surfaced as "Failed to delete note.
 // Please try again." even though there was nothing wrong - the delete succeeds locally either way.
 export async function deleteNoteOffline(id: string, opts: { push?: boolean } = {}): Promise<void> {
+  const resolvedId = resolveNoteId(id);
   const notes = await getLocalNotes();
-  const existing = notes.find(n => n.id === id);
+  const existing = notes.find(n => n.id === resolvedId);
 
   if (existing?._isLocal) {
     // Never synced - remove locally and drop the now-pointless pending create from the queue.
-    await deleteLocalNote(id);
+    await deleteLocalNote(resolvedId);
     const queue = await getSyncQueue();
-    await saveSyncQueue(queue.filter(q => !(q.id === id && q.entity === 'note')));
+    await saveSyncQueue(queue.filter(q => !(q.id === resolvedId && q.entity === 'note')));
     return;
   }
 
   // Mark pending-delete locally so it disappears from the UI immediately, even before the
   // server confirms.
-  const updated = notes.map(n => (n.id === id ? { ...n, _pendingDelete: true } : n));
+  const updated = notes.map(n => (n.id === resolvedId ? { ...n, _pendingDelete: true } : n));
   await saveLocalNotes(updated);
 
-  await enqueueOperation({ id, entity: 'note', operation: 'delete', timestamp: new Date().toISOString() });
+  await enqueueOperation({ id: resolvedId, entity: 'note', operation: 'delete', timestamp: new Date().toISOString() });
 
   if (opts.push !== false && (await isOnline())) {
     try {
@@ -438,7 +456,7 @@ export async function deleteNoteOffline(id: string, opts: { push?: boolean } = {
     } catch {
       // Sync failed - delete stays queued, will retry via background sync.
     }
-    await deleteLocalNote(id);
+    await deleteLocalNote(resolvedId);
   }
 }
 
@@ -748,12 +766,15 @@ async function processNoteOperation(item: SyncQueueItem): Promise<void> {
       // keeps its plaintext fields; we only adopt the server-assigned id below.
       const created = await notesApi.create(await encryptNoteForServer(item.payload));
       // Update local storage: replace temp ID with server ID
-      const notes = await getLocalNotes();
-      const idx = notes.findIndex(n => n.id === item.id);
-      if (idx >= 0) {
-        notes[idx] = { ...notes[idx], id: created.id, _isLocal: false };
-        await saveLocalNotes(notes);
-      }
+      await withNotesLock(async () => {
+        const notes = await getLocalNotes();
+        const idx = notes.findIndex(n => n.id === item.id);
+        if (idx >= 0) {
+          notes[idx] = { ...notes[idx], id: created.id, _isLocal: false };
+          await saveLocalNotes(notes);
+          _noteIdAliases.set(item.id, created.id);
+        }
+      });
       break;
     }
     case 'update': {

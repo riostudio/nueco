@@ -5,7 +5,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect, type Href } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../src/auth';
 import { accountApi } from '../src/api';
 import { isAnalyticsEnabled, setAnalyticsEnabled } from '../src/analytics';
@@ -13,6 +14,7 @@ import { isPersistPinned, setPersistPinned } from '../src/dailyBrew/dailyBrew';
 import { clearLocalData } from '../src/offlineSync';
 import { exportMyData } from '../src/dataExport';
 import { BACKEND_BASE_URL } from '../src/backendBaseUrl';
+import { ReminderVoicePicker } from '../src/components/ReminderVoicePicker';
 import { C, radius, borderWidth } from '../src/theme';
 
 // Served from the backend itself (same origin as the API) - see backend/server.py's
@@ -39,6 +41,27 @@ export default function PrivacyDataScreen() {
 
   useEffect(() => { isAnalyticsEnabled().then(setAnalyticsOn); }, []);
   useEffect(() => { if (user) isPersistPinned(user.id).then(setDailyBrewPinned); }, [user]);
+
+  // Reminder voice lives entirely on-device (a recorded clip or a chosen system voice), so its
+  // preference is read straight from local storage rather than the user record.
+  const [voiceRemindersOn, setVoiceRemindersOn] = useState(false);
+  useFocusEffect(useCallback(() => {
+    AsyncStorage.getItem('reminder_voice_pref').then(raw => {
+      try { setVoiceRemindersOn(raw ? JSON.parse(raw)?.mode !== 'off' : false); } catch { setVoiceRemindersOn(false); }
+    }).catch(() => {});
+  }, []));
+
+  const toggleVoiceReminders = useCallback(async (next: boolean) => {
+    setVoiceRemindersOn(next);
+    if (!next) {
+      // Turning off keeps any recorded clip on disk - re-enabling shouldn't force them to record
+      // again. Only the mode changes.
+      await AsyncStorage.setItem('reminder_voice_pref', JSON.stringify({ mode: 'off' })).catch(() => {});
+      return;
+    }
+    // Turning on reveals the picker inline below; the picker persists the real choice itself
+    // once the user selects a mode, so nothing more to write here.
+  }, []);
 
   const confirmEditName = useCallback(async () => {
     const trimmed = nameInput.trim();
@@ -196,6 +219,32 @@ export default function PrivacyDataScreen() {
             </>
           )}
 
+          <View style={s.row}>
+            <MaterialIcons name="record-voice-over" size={24} color={C.textSec} />
+            <View style={{ flex: 1, marginLeft: 16 }}>
+              <Text style={s.rowLabelPlain}>Speak my reminders</Text>
+              <Text style={s.rowSub}>
+                Read reminders aloud in your own recorded voice, or one from this phone. Works
+                offline, and nothing is sent anywhere.
+              </Text>
+            </View>
+            <Switch
+              value={voiceRemindersOn}
+              onValueChange={toggleVoiceReminders}
+              trackColor={{ false: C.borderSub, true: C.primary + '80' }}
+              thumbColor={voiceRemindersOn ? C.primary : '#f4f3f4'}
+              testID="voice-reminders-toggle"
+            />
+          </View>
+
+          {voiceRemindersOn && (
+            <View style={s.inlinePicker}>
+              <ReminderVoicePicker onModeChange={m => setVoiceRemindersOn(m !== 'off')} />
+            </View>
+          )}
+
+          <View style={s.divider} />
+
           <TouchableOpacity testID="export-data-btn" style={s.row} onPress={handleExport} disabled={exporting}>
             <MaterialIcons name="download" size={24} color={C.textSec} />
             <Text style={s.rowLabel}>Export my data</Text>
@@ -307,6 +356,7 @@ const s = StyleSheet.create({
   rowLabel: { fontSize: 18, color: C.text, marginLeft: 16, flex: 1, fontWeight: '500' },
   rowLabelPlain: { fontSize: 18, color: C.text },
   rowSub: { fontSize: 14, color: C.textSec, marginTop: 2 },
+  inlinePicker: { paddingHorizontal: 16, paddingBottom: 8 },
   divider: { height: 1, backgroundColor: C.borderSub + '40', marginVertical: 4 },
   pwInput: {
     width: '100%', height: 52, borderWidth: borderWidth.thick, borderColor: C.borderSub, borderRadius: radius.md,

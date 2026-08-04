@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo, forwardRef, u
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   ScrollView, KeyboardAvoidingView, Platform, Alert, ActivityIndicator,
-  Keyboard, Share, Modal, Image, Animated, Easing, Dimensions,
+  Keyboard, Modal, Image, Animated, Easing, Dimensions,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -14,11 +14,22 @@ import { useNavigation } from '@react-navigation/native';
 import { useAudioRecorder, AudioModule, RecordingPresets, setAudioModeAsync } from 'expo-audio';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
+// Not react-native's own `Share` nor expo-sharing: neither can combine file attachments with a
+// text message in one native call (see handleShare's comment). react-native-share's
+// `Share.open({urls, message})` does - multiple files plus text, one share-sheet prompt, both
+// platforms.
+import RNShare from 'react-native-share';
 import * as WebBrowser from 'expo-web-browser';
+import * as Print from 'expo-print';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { notesApi, eventsApi, transcribeApi, textProcessApi, voiceIntentApi, attachmentsApi, uploadAttachmentWithProgress, type UploadFile } from '../src/api';
+import { PdfExtractorWebView, type PdfExtractorApi } from '../src/pdf/PdfExtractorWebView';
+import { RecordingWaveform } from '../src/components/RecordingWaveform';
+import { loadDek } from '../src/crypto/keystore';
+import { decryptFileToTemp } from '../src/crypto/attachmentCrypto';
 import { setPendingVoiceExtraction } from '../src/pendingVoiceEvents';
 import { parseChecklistFromSpeech, buildChecklistHtml } from '../src/checklistFromSpeech';
+import { looksLikeScheduling } from '../src/voice/schedulingHints';
 import { takePendingSketch } from '../src/pendingSketch';
 import { takePendingLinkedEventIds } from '../src/pendingLinkedEvents';
 import { decryptEventsFromServer } from '../src/crypto/eventCrypto';
@@ -58,6 +69,7 @@ import {
   trackVoiceRecordingCompleted,
   trackVoiceRecordingCancelled,
   trackVoiceTranscriptionInserted,
+  trackOnboardingStep,
 } from '../src/analytics';
 
 // Extension → MIME, aligned with the backend's attachment allowlist. Used to recover a usable
@@ -102,6 +114,73 @@ async function prepareWrappedImage(uri: string, width: number, height: number): 
   }
 }
 
+// Matches the base64 data-URI `src` of every embedded image in a note's HTML body. Both image
+// paths into the note body render this same shape - the wrapped-image node's
+// `<img data-wrapped-image src="data:image/jpeg;base64,...">` (photo/gallery inserts, see
+// prepareWrappedImage above) and the stock ImageBridge's plain `<img src="data:image/png;base64,...">`
+// (sketch.tsx's canvas export) - so one regex covers both. Used by handleShare below to pull real
+// image bytes out of the HTML for the OS share sheet, which can't render arbitrary HTML or accept
+// a raw base64 string, only file:// URIs.
+const EMBEDDED_IMAGE_SRC_RE = /<img\b[^>]*\bsrc="(data:image\/[a-zA-Z0-9.+-]+;base64,[^"]+)"/gi;
+
+function extractEmbeddedImageDataUris(html: string): string[] {
+  const uris: string[] = [];
+  const re = new RegExp(EMBEDDED_IMAGE_SRC_RE);
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html))) {
+    uris.push(m[1]);
+  }
+  return uris;
+}
+
+// data:image/jpeg;base64,... -> the pieces needed to write a real file + tell the share sheet
+// what it is. UTI is iOS's per-type identifier for expo-sharing; Android only needs the mimeType.
+const IMAGE_UTI_BY_SUBTYPE: Record<string, string> = {
+  jpeg: 'public.jpeg', jpg: 'public.jpeg', png: 'public.png', gif: 'com.compuserve.gif', webp: 'org.webmproject.webp',
+};
+
+function parseImageDataUri(dataUri: string): { base64: string; ext: string; mimeType: string; uti: string } | null {
+  const match = /^data:(image\/([a-zA-Z0-9.+-]+));base64,(.+)$/s.exec(dataUri);
+  if (!match) return null;
+  const mimeType = match[1];
+  const subtype = match[2].toLowerCase();
+  const ext = subtype === 'jpeg' ? 'jpg' : subtype;
+  return { base64: match[3], ext, mimeType, uti: IMAGE_UTI_BY_SUBTYPE[subtype] || 'public.image' };
+}
+
+// Writes one embedded image out to a real file in cache so it can be handed to the native share
+// sheet as an attachment - most share targets (WhatsApp, Word, Facebook) can't accept a raw
+// base64 string or a data: URI, only a file:// URI. Returns null (rather than throwing) so a
+// malformed/unsupported data URI just gets skipped instead of failing the whole share.
+async function writeSharedImageTempFile(dataUri: string, index: number): Promise<{ uri: string; mimeType: string } | null> {
+  const parsed = parseImageDataUri(dataUri);
+  if (!parsed) return null;
+  try {
+    const fileUri = `${FileSystem.cacheDirectory}nueco-share-img-${Date.now()}-${index}.${parsed.ext}`;
+    await FileSystem.writeAsStringAsync(fileUri, parsed.base64, { encoding: FileSystem.EncodingType.Base64 });
+    return { uri: fileUri, mimeType: parsed.mimeType };
+  } catch (e) {
+    console.warn('Failed to write shared image temp file:', e);
+    return null;
+  }
+}
+
+// Downloads one attachment (stored remotely - S3 via a presigned url) to a local file so it can
+// join the same combined share-sheet call as the images below - react-native-share's `urls`
+// array needs real file:// URIs, not a remote https:// link, to attach the file's actual bytes
+// rather than just a clickable url in the share text.
+async function downloadSharedAttachmentTempFile(url: string, filename: string): Promise<string | null> {
+  try {
+    const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const fileUri = `${FileSystem.cacheDirectory}nueco-share-att-${Date.now()}-${safeName}`;
+    const { uri } = await FileSystem.downloadAsync(url, fileUri);
+    return uri;
+  } catch (e) {
+    console.warn('Failed to download shared attachment temp file:', filename, e);
+    return null;
+  }
+}
+
 // Imperative handle the parent uses to drive the editor (voice/AI insert + toolbar buttons).
 type EditorApi = {
   getHTML: () => Promise<string>;
@@ -120,6 +199,7 @@ type EditorApi = {
   insertWrappedImage: (src: string, naturalWidth: number, naturalHeight: number) => void;
   undo: () => void;
   redo: () => void;
+  focus: () => void;
 };
 type EditorUiState = {
   isFocused: boolean; isBoldActive: boolean; isItalicActive: boolean; isBulletListActive: boolean;
@@ -158,6 +238,174 @@ const ESTIMATED_SKETCH_IMAGE_HEIGHT = Math.round(ESTIMATED_NOTE_BODY_WIDTH * (3 
 
 function escapeHtml(t: string): string {
   return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Turns a note title into a filesystem-safe filename (no extension) for the exported PDF -
+// expo-print itself writes the rendered PDF to an opaquely-named temp file, so this is what
+// handleExportPdf below renames it to, since that name is what the user actually sees (and
+// keeps) when saving/sharing it via the OS sheet. Strips characters invalid on either
+// platform's filesystem and collapses whitespace; falls back to 'Note' for an untitled note
+// or a title that sanitizes down to nothing (e.g. all emoji/symbols).
+function sanitizeFilename(name: string): string {
+  const cleaned = name.trim().replace(/[\\/:*?"<>|\r\n]/g, ' ').replace(/\s+/g, ' ').trim();
+  return (cleaned || 'Note').slice(0, 80);
+}
+
+// Assembles the printable HTML document behind "Export to PDF". The note body is already rich
+// HTML with inline base64 images (see EMBEDDED_IMAGE_SRC_RE above), so this just wraps it as-is
+// with a title heading and the same supplementary sections handleShare's plain-text share
+// renders (tags, source-post card, linked events), plus print CSS.
+//
+// Notes can now be assembled from several imported PDFs' worth of extracted text (each with its
+// own headings and images), so this can render many pages, not just a short single-screen note:
+// nothing here truncates `bodyHtml`, nothing is constrained to a fixed height, and the CSS below
+// uses both the legacy `page-break-*` and modern `break-*` properties (the native WebView engines
+// expo-print renders through - WKWebView on iOS, Chromium on Android - are more reliably driven
+// by the legacy ones for pagination) to keep headings from stranding at a page's bottom and to
+// keep a single image/event/card block from being split across a page boundary where avoidable.
+//
+// Remote attachments (S3-backed, not part of this HTML) can't be embedded as file bytes in a
+// static PDF the way inline images can - they're listed by filename only, same tradeoff
+// handleShare's share text makes for the same reason.
+function buildNoteExportHtml(params: {
+  title: string;
+  bodyHtml: string;
+  tags: Tag[];
+  linkedEvents: CalendarEvent[];
+  sourcePost: SourcePost | null;
+  attachments: Attachment[];
+  formatEventDateTime: (dateStr: string) => string;
+  formatReminderMinutes: (minutes: number | null) => string;
+}): string {
+  const { title, bodyHtml, tags, linkedEvents, sourcePost, attachments, formatEventDateTime, formatReminderMinutes } = params;
+
+  const tagsHtml = tags.length > 0
+    ? `<div class="tags">${tags.map(t =>
+        `<span class="tag" style="background:${escapeHtml(t.color)}22;border-color:${escapeHtml(t.color)};color:${escapeHtml(t.color)}">${escapeHtml(t.name)}</span>`
+      ).join('')}</div>`
+    : '';
+
+  const sourcePostHtml = sourcePost
+    ? `<div class="card source-post">
+        <div class="source-post-label">🔗 ${escapeHtml(sourcePost.label)}</div>
+        ${sourcePost.title ? `<div class="source-post-title">${escapeHtml(sourcePost.title)}</div>` : ''}
+        <div class="source-post-url">${escapeHtml(sourcePost.url)}</div>
+      </div>`
+    : '';
+
+  const eventsHtml = linkedEvents.length > 0
+    ? linkedEvents.map((ev, i) => {
+        const recurrenceSummary = formatRecurrenceSummary(ev.recurrence);
+        return `<div class="card event">
+          <div class="event-title">📅 ${linkedEvents.length > 1 ? `Event ${i + 1}: ` : ''}${escapeHtml(ev.title)}</div>
+          <div class="event-row"><strong>Start:</strong> ${escapeHtml(formatEventDateTime(ev.start_time))}</div>
+          <div class="event-row"><strong>End:</strong> ${escapeHtml(formatEventDateTime(ev.end_time))}</div>
+          ${ev.location ? `<div class="event-row"><strong>Location:</strong> ${escapeHtml(ev.location)}</div>` : ''}
+          ${ev.reminder_minutes ? `<div class="event-row"><strong>Reminder:</strong> ${escapeHtml(formatReminderMinutes(ev.reminder_minutes))}</div>` : ''}
+          ${recurrenceSummary ? `<div class="event-row">${escapeHtml(recurrenceSummary)}</div>` : ''}
+          ${ev.description ? `<div class="event-row">${escapeHtml(ev.description)}</div>` : ''}
+        </div>`;
+      }).join('')
+    : '';
+
+  const attachmentsHtml = attachments.length > 0
+    ? `<div class="attachments">
+        <div class="section-label">📎 Attachments</div>
+        <ul>${attachments.map(a => `<li>${escapeHtml(a.filename)}</li>`).join('')}</ul>
+      </div>`
+    : '';
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, Helvetica, Arial, sans-serif;
+    color: #1a1a1a;
+    margin: 32px;
+    line-height: 1.5;
+    font-size: 15px;
+  }
+  h1.note-title {
+    font-size: 26px;
+    margin: 0 0 12px;
+    word-break: break-word;
+    page-break-after: avoid;
+    break-after: avoid-page;
+  }
+  /* Notes assembled from multiple imported documents carry their own headings - keep each one
+     glued to the paragraph that follows it rather than left stranded at a page's bottom. */
+  .body h1, .body h2, .body h3, .body h4, .body h5, .body h6 {
+    page-break-after: avoid;
+    page-break-inside: avoid;
+    break-after: avoid-page;
+    break-inside: avoid;
+  }
+  .tags { margin-bottom: 16px; }
+  .tag {
+    display: inline-block;
+    border: 1px solid;
+    border-radius: 12px;
+    padding: 2px 10px;
+    margin: 0 6px 6px 0;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .body { margin-bottom: 20px; }
+  .body img {
+    max-width: 100%;
+    height: auto;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+  .body figure {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+  .body table {
+    border-collapse: collapse;
+    width: 100%;
+    page-break-inside: auto;
+  }
+  .body tr { page-break-inside: avoid; break-inside: avoid; }
+  .body td, .body th { border: 1px solid #ccc; padding: 6px; }
+  .section-label {
+    font-weight: 700;
+    font-size: 13px;
+    text-transform: uppercase;
+    color: #666;
+    margin: 20px 0 8px;
+    page-break-after: avoid;
+    break-after: avoid-page;
+  }
+  .card {
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 12px;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+  .source-post { background: #fafafa; }
+  .source-post-label { font-weight: 700; margin-bottom: 4px; }
+  .source-post-title { margin-bottom: 4px; }
+  .source-post-url { color: #555; font-size: 13px; word-break: break-all; }
+  .event-title { font-weight: 700; margin-bottom: 6px; }
+  .event-row { font-size: 13px; margin-bottom: 2px; }
+  .attachments ul { margin: 0; padding-left: 20px; font-size: 13px; }
+</style>
+</head>
+<body>
+  <h1 class="note-title">${escapeHtml(title || 'Untitled Note')}</h1>
+  ${tagsHtml}
+  ${sourcePostHtml}
+  <div class="body">${bodyHtml}</div>
+  ${eventsHtml}
+  ${attachmentsHtml}
+</body>
+</html>`;
 }
 
 // Drives a bottom sheet's backdrop fade + card slide together. Opening decelerates in
@@ -277,6 +525,7 @@ const NoteBodyEditor = forwardRef<EditorApi, {
     insertWrappedImage: (src: string, naturalWidth: number, naturalHeight: number) => editor.insertWrappedImage(src, naturalWidth, naturalHeight),
     undo: () => editor.undo(),
     redo: () => editor.redo(),
+    focus: () => editor.focus('end'),
   }), [editor]);
 
   useEffect(() => { if (html != null) onChange(html); }, [html]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -310,7 +559,7 @@ const NoteBodyEditor = forwardRef<EditorApi, {
 export default function EditorScreen() {
   const router = useRouter();
   const navigation = useNavigation();
-  const { noteId, shared } = useLocalSearchParams<{ noteId: string; shared?: string }>();
+  const { noteId, shared, onboarding } = useLocalSearchParams<{ noteId: string; shared?: string; onboarding?: string }>();
   const isNew = !noteId || noteId === 'new';
 
   const [title, setTitle] = useState('');
@@ -328,6 +577,10 @@ export default function EditorScreen() {
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isProcessingText, setIsProcessingText] = useState(false);
   const [showAiSuggestion, setShowAiSuggestion] = useState(false);
+  // The dictation just inserted, plus the note's content immediately before it. Together they let
+  // "Tidy up" replace that dictation in place rather than appending a tidied duplicate.
+  const [lastDictation, setLastDictation] = useState<string | null>(null);
+  const [preTidyContent, setPreTidyContent] = useState<string | null>(null);
   const [transcribedText, setTranscribedText] = useState('');
   const [images, setImages] = useState<string[]>([]);
   // A social post shared into the app (Instagram/Facebook/…) rendered as a card above the body.
@@ -342,9 +595,22 @@ export default function EditorScreen() {
   const eventPickerTranslateY = useRef(new Animated.Value(400)).current;
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
+  // Which attachment is mid download+decrypt, so its row can show a spinner and repeat taps
+  // don't kick off a second fetch of the same file.
+  const [openingAttachmentId, setOpeningAttachmentId] = useState<string | null>(null);
   // In-flight uploads (shared files + in-app picks): shown as filename + radial progress.
   const [pendingUploads, setPendingUploads] = useState<{ id: string; name: string; progress: number }[]>([]);
-  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  // Import PDF (pickImportPdf below): true while any selected PDF is still being extracted;
+  // pdfImportProgress.done/total drive a "N of M" label since a batch import can cover several
+  // files at once.
+  const [isImportingPdf, setIsImportingPdf] = useState(false);
+  const [pdfImportProgress, setPdfImportProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
+  // isMeteringEnabled is required for getStatus().metering to be populated - without it the
+  // live waveform has nothing real to draw and would be decoration.
+  const audioRecorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true });
+  const getMetering = useCallback(() => {
+    try { return audioRecorder.getStatus?.()?.metering; } catch { return undefined; }
+  }, [audioRecorder]);
   
   // Recording duration tracking for analytics
   const recordingStartTime = useRef<number | null>(null);
@@ -367,6 +633,8 @@ export default function EditorScreen() {
   // saving. The editor lives in <NoteBodyEditor>, mounted with the loaded content as initialContent
   // (below). We drive it imperatively via editorApiRef and mirror its UI state for the toolbar.
   const editorApiRef = useRef<EditorApi | null>(null);
+  // Drives the hidden on-device PDF text extractor mounted at the bottom of this screen.
+  const pdfExtractorRef = useRef<PdfExtractorApi | null>(null);
   const [editorUi, setEditorUi] = useState<EditorUiState>({
     isFocused: false, isBoldActive: false, isItalicActive: false, isBulletListActive: false, isTaskListActive: false,
     isTableActive: false,
@@ -461,8 +729,24 @@ export default function EditorScreen() {
     seedPlainRef.current = plainTextFromContent(seedHtml);
   }, [seedHtml]);
 
-  // Editor edits (debounced HTML from <NoteBodyEditor>) → keep contentRef fresh + autosave. Ignore
-  // the initial-content echo so loading a pristine note doesn't mark it dirty or create an empty one.
+  // Editor edits (debounced HTML from <NoteBodyEditor>) → trigger autosave. Ignore the
+  // initial-content echo so loading a pristine note doesn't mark it dirty or create an empty one.
+  //
+  // This write is load-bearing and must stay. It is the ONLY thing that tracks ordinary editing -
+  // typing and, crucially, DELETING - since nothing else sets contentRef.current for a plain edit
+  // (appendToEditor and friends only cover programmatic inserts).
+  //
+  // It was briefly removed on the theory that useEditorContent's debounced getHTML() could
+  // resolve out of order and clobber contentRef.current with a stale snapshot, and that every
+  // read was anyway preceded by a fresh syncLatestContent(). That was wrong on the second point -
+  // handleShare reads contentRef.current directly - and removing it broke deletion outright:
+  // clearing a note's text left contentRef.current still holding the old text, so sharing (and
+  // saving, whenever syncLatestContent's getHTML lost its race) resurrected content the user had
+  // just deleted.
+  //
+  // The out-of-order concern is handled where it actually matters instead: every save path calls
+  // syncLatestContent() for an authoritative fresh read immediately before persisting, so a stale
+  // echo landing here can at worst be briefly wrong, never persisted as truth.
   const handleBodyChange = useCallback((html: string) => {
     contentRef.current = html;
     if (!userEditedRef.current && plainTextFromContent(html) === seedPlainRef.current) return;
@@ -875,6 +1159,10 @@ export default function EditorScreen() {
         has_scheduled_event: linkedEventIdsRef.current.length > 0,
         has_image_attached: imagesRef.current.length > 0,
         is_shared: isSharedRef.current,
+        // Set the first time voice content lands in this note (see insertTranscription /
+        // the checklist branch), so the funnel can distinguish a dictated first note from a
+        // typed one - the entire point of the voice-first onboarding.
+        source: usedVoiceRef.current ? 'voice' : 'typed',
       });
     } else if (noteIdRef.current) {
       await updateNoteOffline(noteIdRef.current, draft, { push: opts.push });
@@ -1009,6 +1297,55 @@ export default function EditorScreen() {
   };
 
   // Insert plain text (voice transcription / AI output) into the rich editor as new paragraphs.
+  // Reveals dictated text progressively instead of dropping it in as a finished block. The whole
+  // point of the voice flow is that the app LISTENED to you; text that materialises word by word
+  // reads that way, whereas an instant paste reads like a form being filled in.
+  //
+  // Cost is deliberately bounded. Each frame is a full setContent (the bridge has no
+  // insert-at-cursor primitive for arbitrary HTML), so this animates over a FIXED number of
+  // frames regardless of transcript length - a 400-word dictation costs exactly as many bridge
+  // calls as a 5-word one, just with more words revealed per frame. Nothing is saved mid-stream;
+  // one authoritative write happens at the end, so an interrupted animation can never persist a
+  // half-revealed transcript.
+  const STREAM_FRAMES = 18;
+  const STREAM_TOTAL_MS = 750;
+
+  const appendToEditorStreamed = (text: string): Promise<void> => {
+    const clean = (text || '').trim();
+    if (!clean) return Promise.resolve();
+
+    const buildHtml = (body: string) =>
+      body.split(/\n{2,}/).map(p => `<p>${escapeHtml(p).replace(/\n/g, '<br>')}</p>`).join('');
+
+    const base = contentRef.current.replace(/<p><\/p>\s*$/i, '');
+    const finalContent = base + buildHtml(clean);
+
+    // Set the authoritative value up front. If anything interrupts the animation (navigating away
+    // mid-stream, a save firing), the note already holds the complete text rather than whatever
+    // frame we happened to stop on.
+    contentRef.current = finalContent;
+
+    const words = clean.split(/(\s+)/); // keep whitespace so rebuilt text spaces correctly
+    const perFrame = Math.max(1, Math.ceil(words.length / STREAM_FRAMES));
+    const frameMs = Math.max(16, Math.round(STREAM_TOTAL_MS / STREAM_FRAMES));
+
+    return new Promise<void>(resolve => {
+      let shown = 0;
+      const tick = () => {
+        shown += perFrame;
+        if (shown >= words.length) {
+          editorApiRef.current?.setContent(finalContent);
+          saveImmediately();
+          resolve();
+          return;
+        }
+        editorApiRef.current?.setContent(base + buildHtml(words.slice(0, shown).join('')));
+        setTimeout(tick, frameMs);
+      };
+      tick();
+    });
+  };
+
   const appendToEditor = (text: string) => {
     const clean = (text || '').trim();
     if (!clean) return;
@@ -1067,8 +1404,17 @@ export default function EditorScreen() {
   };
 
   const handleShare = async () => {
+    // Pull the very latest body straight from the editor first. Every save path already does this;
+    // sharing didn't, so it read whatever contentRef.current last happened to hold - which meant
+    // edits made in the moments before tapping Share (most visibly, deleting text) could be
+    // missing from the shared copy.
+    await syncLatestContent();
     const plainContent = plainTextFromContent(contentRef.current);
-    if (!title && !plainContent && linkedEvents.length === 0) {
+    // plainTextFromContent strips all tags, including <img> - so an image-only note (a photo/
+    // sketch with no title, caption, or linked event) would otherwise trip this "nothing to
+    // share" guard despite having real content to share. Check for embedded images too.
+    const hasEmbeddedImage = /<img\b[^>]*\bsrc="data:image\//i.test(contentRef.current);
+    if (!title && !plainContent && linkedEvents.length === 0 && !hasEmbeddedImage) {
       Alert.alert('Nothing to Share', 'Please add a title or content to your note first.');
       return;
     }
@@ -1123,48 +1469,169 @@ export default function EditorScreen() {
       }
     });
 
-    // Append secure download links for attachments (valid ~7 days)
+    // Attachments join the same combined share below as real file attachments now (not just a
+    // link) - still note them by name in the text too, so the message reads sensibly even on a
+    // share target that only shows the text part (e.g. pasting into an email body).
     if (attachments.length > 0) {
       shareText += '\n📎 Attachments\n';
       for (const att of attachments) {
-        try {
-          const { url } = await attachmentsApi.downloadUrl(att.key);
-          shareText += `${att.filename}: ${url}\n`;
-        } catch {
-          shareText += `${att.filename}: (link unavailable)\n`;
-        }
+        shareText += `${att.filename}\n`;
       }
     }
 
+    // Pull every embedded image's real bytes out of the HTML (most share targets - WhatsApp,
+    // Word, Facebook - read `content` as HTML-with-embedded-base64, which they can't render; they
+    // need real file:// URIs) and download every attachment locally, then hand everything to
+    // react-native-share's `urls` array alongside the text in ONE native call. Unlike
+    // expo-sharing (one file, no text field) or react-native's own Share.share (silently drops
+    // `url` on Android - see node_modules/react-native/Libraries/Share/Share.js), react-native-
+    // share's Share.open combines multiple files + a message in a single share-sheet prompt on
+    // both platforms - no more "first image only" limitation, no more two sequential prompts.
+    const imageDataUris = extractEmbeddedImageDataUris(contentRef.current);
+    const imageFiles = (
+      await Promise.all(imageDataUris.map((uri, i) => writeSharedImageTempFile(uri, i)))
+    ).filter((f): f is { uri: string; mimeType: string } => f !== null);
+
+    const attachmentFiles = (
+      await Promise.all(attachments.map(async att => {
+        try {
+          const { url } = await attachmentsApi.downloadUrl(att.key);
+          return await downloadSharedAttachmentTempFile(url, att.filename);
+        } catch (e) {
+          console.warn('Attachment share download failed:', att.filename, e);
+          return null;
+        }
+      }))
+    ).filter((uri): uri is string => uri !== null);
+
+    const shareUrls = [...imageFiles.map(f => f.uri), ...attachmentFiles];
+
     try {
-      const result = await Share.share({
-        message: shareText.trim(),
+      const result = await RNShare.open({
         title: title || 'My Note',
+        message: shareText.trim(),
+        urls: shareUrls.length > 0 ? shareUrls : undefined,
+        failOnCancel: false,
       });
 
-      if (result.action === Share.sharedAction) {
-        // Track the share event
-        const shareMethod = result.activityType || 'other';
+      // react-native-share resolves (rather than rejecting) on user cancel when failOnCancel is
+      // false, with `success: false` - only track an actual completed share.
+      if (result?.success) {
+        const shareMethod = (result.message || '').toLowerCase();
         let method: 'link' | 'email' | 'message' | 'social' | 'other' = 'other';
-        
+
         if (shareMethod.includes('mail') || shareMethod.includes('email')) {
           method = 'email';
-        } else if (shareMethod.includes('message') || shareMethod.includes('sms') || shareMethod.includes('chat')) {
+        } else if (shareMethod.includes('message') || shareMethod.includes('sms') || shareMethod.includes('chat') || shareMethod.includes('whatsapp')) {
           method = 'message';
         } else if (shareMethod.includes('facebook') || shareMethod.includes('twitter') || shareMethod.includes('instagram') || shareMethod.includes('social')) {
           method = 'social';
         } else if (shareMethod.includes('link') || shareMethod.includes('copy')) {
           method = 'link';
         }
-        
+
         trackNoteShared(method);
-        console.log('Shared via:', result.activityType);
+        console.log('Shared via:', result.message);
       }
     } catch (error) {
       console.error('Share error:', error);
       Alert.alert('Share Failed', 'Unable to share the note. Please try again.');
     }
   };
+
+  // Renders the note to a real PDF via expo-print - a great fit here specifically because the
+  // note body is ALREADY HTML with inline base64 images (see EMBEDDED_IMAGE_SRC_RE), so
+  // printToFileAsync renders them natively into the PDF with no extra image-handling work, unlike
+  // handleShare's image extraction above. Handed to the OS share sheet afterward via
+  // react-native-share (already imported/used by handleShare) rather than expo-sharing, so both
+  // export paths in this file go through the same native sheet call - expo-sharing would work
+  // for this single-file case too, but there's no reason to bring in a second share mechanism
+  // for one file when RNShare.open already does the job and both surface the OS's normal
+  // "Save to Files" (iOS) / "Save to device" (Android) option alongside send-to-app targets.
+  const handleExportPdf = async () => {
+    // Same reason as handleShare: read the freshest body from the editor before building the
+    // document, so an export can't contain text the user just deleted.
+    await syncLatestContent();
+    const plainContent = plainTextFromContent(contentRef.current);
+    // Same "nothing real to export" guard as handleShare, including its image-only-note carve
+    // out - plainTextFromContent strips <img> tags too, so a photo/sketch note with no title,
+    // caption, or linked event would otherwise trip this despite having real content.
+    const hasEmbeddedImage = /<img\b[^>]*\bsrc="data:image\//i.test(contentRef.current);
+    if (!title && !plainContent && linkedEvents.length === 0 && !hasEmbeddedImage) {
+      Alert.alert('Nothing to Export', 'Please add a title or content to your note first.');
+      return;
+    }
+
+    try {
+      const html = buildNoteExportHtml({
+        title,
+        bodyHtml: contentRef.current,
+        tags,
+        linkedEvents,
+        sourcePost,
+        attachments,
+        formatEventDateTime,
+        formatReminderMinutes,
+      });
+
+      const { uri } = await Print.printToFileAsync({ html });
+
+      // expo-print writes to an opaquely-named temp file (e.g. a random UUID) - copy it to a
+      // name based on the note's title so THAT'S what the user sees (and keeps) in the OS
+      // save/share sheet, not a meaningless random name.
+      const pdfUri = `${FileSystem.cacheDirectory}${sanitizeFilename(title)}.pdf`;
+      const existing = await FileSystem.getInfoAsync(pdfUri);
+      if (existing.exists) {
+        await FileSystem.deleteAsync(pdfUri, { idempotent: true });
+      }
+      await FileSystem.copyAsync({ from: uri, to: pdfUri });
+
+      // urls (plural, one-element array) rather than the singular `url` - matches handleShare's
+      // own call above, and avoids relying on which of the two a given share target actually
+      // reads. Explicit `type`/`filename` so PDF-picky targets (WhatsApp in particular refuses
+      // files it can't type-detect) see a real .pdf with the note's title, not an untyped blob.
+      const pdfFilename = `${sanitizeFilename(title)}.pdf`;
+      const result = await RNShare.open({
+        title: title || 'My Note',
+        urls: [pdfUri],
+        type: 'application/pdf',
+        filename: pdfFilename,
+        failOnCancel: false,
+      });
+
+      if (result?.success) {
+        trackNoteShared('other');
+      }
+    } catch (error) {
+      console.error('PDF export error:', error);
+      Alert.alert('Export Failed', 'Unable to export the note as a PDF. Please try again.');
+    }
+  };
+
+  // Onboarding hand-off: arriving with ?onboarding=1 means the user just tapped "Capture my
+  // first note", so open the mic for them instead of making them find the button. Permission was
+  // already requested and granted on the onboarding screen, so startRecording's own request
+  // resolves immediately. Guarded by a ref so it can only ever fire once per mount.
+  // True once any voice-transcribed text has been inserted into this note.
+  const usedVoiceRef = useRef(false);
+  const onboardingAutoStartedRef = useRef(false);
+  useEffect(() => {
+    if (onboarding !== '1' || onboardingAutoStartedRef.current) return;
+    if (!editorUi.isReady) return; // wait for the editor bridge, same gate the other effects use
+    onboardingAutoStartedRef.current = true;
+    // A short beat so the screen transition finishes first - starting the recorder mid-push
+    // drops the first moment of audio on Android.
+    const t = setTimeout(() => {
+      // Focus the body first so the keyboard is already up while recording. The transcript lands
+      // in a field the user can immediately edit - no extra tap to "get into" the note afterwards,
+      // and it makes clear from the outset that dictation produces ordinary editable text rather
+      // than some separate kind of voice item.
+      editorApiRef.current?.focus();
+      startRecording();
+    }, 450);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onboarding, editorUi.isReady]);
 
   const startRecording = async () => {
     try {
@@ -1231,6 +1698,12 @@ export default function EditorScreen() {
         appendHtmlToEditor(buildChecklistHtml(checklistMatch.items));
         const wordCount = result.text.split(/\s+/).filter(Boolean).length;
         trackVoiceTranscriptionInserted(lastRecordingDuration.current, wordCount);
+        usedVoiceRef.current = true;
+        if (onboarding === '1') {
+          trackOnboardingStep('recorded');
+          trackOnboardingStep('note_saved');
+          trackOnboardingStep('completed');
+        }
         return;
       }
 
@@ -1239,7 +1712,12 @@ export default function EditorScreen() {
       // trip: flight Friday...") - if so, hand off to the voice-event confirm screen instead of
       // inserting the words into the note. A classification failure (network hiccup, etc.) must
       // never block ordinary dictation, so it just falls through to the existing flow below.
-      if (result.text.trim()) {
+      // Skip the classifier entirely when the transcript contains nothing temporal. It is a second
+      // sequential network round-trip on top of transcription, and most dictations are ordinary
+      // notes with no date, time or scheduling verb in them - so this halves the wait for the
+      // common case. looksLikeScheduling errs toward true, so a wrong guess only costs the call we
+      // would have made anyway (see its own comment for why that asymmetry matters).
+      if (result.text.trim() && looksLikeScheduling(result.text)) {
         try {
           const referenceDate = new Date().toISOString().slice(0, 10); // device's local "today"
           const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -1255,9 +1733,32 @@ export default function EditorScreen() {
         }
       }
 
-      // Show AI suggestion modal for ordinary dictation
+      // Nothing was actually said. The backend now filters Whisper's silence hallucinations
+      // (see textai/service.py's _drop_silent_hallucinations), so a quiet recording legitimately
+      // comes back empty - without this branch that fell through to the "Transcription Complete!"
+      // dialog quoting an empty string and offering to reorganise nothing. That's a confusing
+      // dead end generally, and a bad first impression specifically: a new user's very first
+      // attempt is exactly when they're most likely to hesitate and say nothing.
+      if (!result.text.trim()) {
+        setIsTranscribing(false);
+        setTranscribedText('');
+        Alert.alert("Didn't catch that", 'We couldn’t hear anything that time. Tap the mic and try again.');
+        return;
+      }
+
+      // Insert straight away rather than asking first.
+      //
+      // The old flow opened a "Transcription Complete! Want AI to improve this?" modal on EVERY
+      // capture - a decision imposed on the common path, when the overwhelmingly common answer is
+      // "just keep what I said". Now the words appear immediately (streamed, see
+      // appendToEditorStreamed) and tidying becomes an optional follow-up action instead of a
+      // gate. The content snapshot below is what makes that follow-up undo-able: tidying replaces
+      // exactly this dictation, leaving anything already in the note untouched.
       setIsTranscribing(false);
-      setShowAiSuggestion(true);
+      setPreTidyContent(contentRef.current);
+      setLastDictation(result.text);
+      insertTranscription(result.text);
+      await appendToEditorStreamed(result.text);
     } catch (e) {
       console.error('Transcription failed:', e);
       Alert.alert('Error', 'Voice transcription failed. Please try again.');
@@ -1266,33 +1767,69 @@ export default function EditorScreen() {
   };
 
   // Handle AI text processing
+  // Records that voice content landed in this note. Hoisted to component scope because dictation
+  // is now inserted straight from stopRecording, not only from the (removed) confirmation modal.
+  const insertTranscription = (textToInsert: string) => {
+    const wordCount = textToInsert.split(/\s+/).filter(Boolean).length;
+    trackVoiceTranscriptionInserted(lastRecordingDuration.current, wordCount);
+    usedVoiceRef.current = true;
+    if (onboarding === '1') {
+      trackOnboardingStep('recorded');
+      trackOnboardingStep('note_saved');
+      trackOnboardingStep('completed');
+    }
+  };
+
+  /**
+   * Replaces the dictation that was just inserted with an AI-tidied version.
+   *
+   * Rebuilds from the snapshot taken before insertion rather than appending, so tidying swaps the
+   * dictation in place instead of adding a second copy - and anything already in the note is
+   * untouched.
+   */
+  const tidyLastDictation = async () => {
+    if (!lastDictation || preTidyContent === null) return;
+    setIsProcessingText(true);
+    try {
+      const result = await textProcessApi.processText(lastDictation, 'organize');
+      const tidied = (result?.text || '').trim();
+      if (!tidied) return;
+      contentRef.current = preTidyContent;
+      await appendToEditorStreamed(tidied);
+      // One tidy per dictation: the snapshot is spent, and a second pass would re-tidy
+      // already-tidied text against a snapshot that no longer matches what's on screen.
+      setLastDictation(null);
+      setPreTidyContent(null);
+    } catch (e) {
+      console.error('Tidy failed:', e);
+      Alert.alert('Could not tidy', 'Your note is unchanged. Please try again.');
+    } finally {
+      setIsProcessingText(false);
+    }
+  };
+
   const handleAiProcess = async (action: 'organize' | 'summarize' | 'keep') => {
     setShowAiSuggestion(false);
     
-    // Helper function to track and insert transcription
-    const insertTranscription = (textToInsert: string) => {
-      const wordCount = textToInsert.split(/\s+/).filter(Boolean).length;
-      trackVoiceTranscriptionInserted(lastRecordingDuration.current, wordCount);
-    };
-    
     if (action === 'keep') {
-      // Just add the transcribed text as-is
-      appendToEditor(transcribedText);
+      // Streamed rather than pasted - see appendToEditorStreamed's comment on why dictation
+      // specifically benefits from the text arriving word by word.
       insertTranscription(transcribedText);
+      await appendToEditorStreamed(transcribedText);
       return;
     }
 
     try {
       setIsProcessingText(true);
       const result = await textProcessApi.processText(transcribedText, action);
-      appendToEditor(result.text);
       insertTranscription(result.text);
+      await appendToEditorStreamed(result.text);
     } catch (e) {
       console.error('Text processing failed:', e);
       Alert.alert('Error', 'AI processing failed. Adding original text.');
       // Fallback to original text
-      appendToEditor(transcribedText);
       insertTranscription(transcribedText);
+      await appendToEditorStreamed(transcribedText);
     } finally {
       setIsProcessingText(false);
       setTranscribedText('');
@@ -1340,7 +1877,12 @@ export default function EditorScreen() {
     // this screen has a live count of - trackNoteImageAttached's count arg is cumulative gallery
     // size for that case, so this just signals "one image attached", not a running total.
     trackNoteImageAttached(1);
-    saveImmediately();
+    // Same reasoning as the sketch-insert path above: insertWrappedImage's DOM insertion happens
+    // async inside the WebView, so saveImmediately's syncLatestContent (getHTML) can race it and
+    // silently persist pre-image content. A short beat first gives the WebView time to insert -
+    // longer than the sketch delay since this payload (a full downscaled photo, up to ~1600px) is
+    // heavier than a sketch data-uri.
+    setTimeout(() => saveImmediately(), 400);
   };
 
   // Open the original social post in the browser.
@@ -1449,13 +1991,159 @@ export default function EditorScreen() {
   };
 
   // Open an attachment (image/video/audio/pdf/doc) via a presigned GET URL.
+  // Attachments are stored encrypted (see api.ts's uploadAttachmentWithProgress), so opening one
+  // is now download → decrypt locally → hand the plaintext copy to the OS, rather than pointing a
+  // browser at the bucket URL (which would just show ciphertext). decryptFileToTemp passes a
+  // legacy header-less file straight through, so attachments uploaded before encryption shipped
+  // still open normally.
   const openAttachment = async (att: Attachment) => {
+    if (openingAttachmentId) return; // already fetching one - ignore double taps
+    setOpeningAttachmentId(att.id);
+    let cipherUri: string | null = null;
     try {
       const { url } = await attachmentsApi.downloadUrl(att.key);
-      await WebBrowser.openBrowserAsync(url);
+      const dek = await loadDek();
+      if (!dek) {
+        // No key on this device (E2EE off, or keystore not bootstrapped) - nothing was encrypted
+        // on the way up either, so the old open-the-URL path is still correct.
+        await WebBrowser.openBrowserAsync(url);
+        return;
+      }
+
+      const dl = await FileSystem.downloadAsync(url, `${FileSystem.cacheDirectory}nueco-dl-${Date.now()}`);
+      cipherUri = dl.uri;
+      const plain = await decryptFileToTemp(dl.uri, dek, att.filename);
+      await RNShare.open({
+        url: plain.uri,
+        type: att.mime_type,
+        filename: att.filename,
+        title: att.filename,
+        failOnCancel: false,
+      });
     } catch (e) {
       console.error('Open attachment failed:', e);
       Alert.alert('Could not open', 'Unable to open this file right now. Please try again.');
+    } finally {
+      // The downloaded ciphertext is never needed again once decrypted.
+      if (cipherUri) {
+        FileSystem.deleteAsync(cipherUri, { idempotent: true }).catch(() => {});
+      }
+      setOpeningAttachmentId(null);
+    }
+  };
+
+  // Import PDF: picks one or more PDFs, extracts each one's text ON-DEVICE (PDF.js running in a
+  // hidden WebView - see src/pdf/PdfExtractorWebView.tsx), then inserts the combined result into
+  // the note body as real editable text. Nothing is uploaded: the document never leaves the phone
+  // and this works offline, which is what note content being E2EE demands - routing the file
+  // through our server to read it would have contradicted that guarantee.
+  const MAX_PDF_AT_ONCE = 10;
+  // Guard before reading the file into memory as base64 (which inflates it ~4/3) and handing that
+  // string across the WebView bridge - a huge PDF would spike memory on both sides.
+  const MAX_PDF_BYTES = 25 * 1024 * 1024;
+  // Sequential, deliberately. This used to run a bounded pool of 3 concurrent extractions, which
+  // made sense when each one was a network request to our own server. Extraction is now on-device
+  // (see src/pdf/PdfExtractorWebView.tsx) and runs in a single WebView - there's no second
+  // processor to hand work to, so overlapping requests would just contend for the same thread and
+  // inflate peak memory (every in-flight PDF's bytes held at once). Progress is still reported as
+  // "done/total" for consistency with the existing overlay copy.
+  const pickImportPdf = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: 'application/pdf',
+        copyToCacheDirectory: true,
+        multiple: true,
+      });
+      // Defensive on `assets` shape like pickAttachment above - canceled or empty selection is a
+      // no-op either way.
+      if (result.canceled || !result.assets || result.assets.length === 0) return;
+
+      let assets = result.assets;
+      if (assets.length > MAX_PDF_AT_ONCE) {
+        Alert.alert('Too many files', `You can import up to ${MAX_PDF_AT_ONCE} PDFs at once. Importing the first ${MAX_PDF_AT_ONCE}.`);
+        assets = assets.slice(0, MAX_PDF_AT_ONCE);
+      }
+
+      setIsImportingPdf(true);
+      setPdfImportProgress({ done: 0, total: assets.length });
+
+      // Indexed by original selection order (not completion order, which concurrency scrambles)
+      // so the final insertion preserves the order the user picked the files in.
+      const outcomes: Array<{ name: string; text?: string; error?: string }> = new Array(assets.length);
+      let doneCount = 0;
+
+      const extractOne = async (index: number) => {
+        const asset = assets[index];
+        const name = asset.name || `Document ${index + 1}.pdf`;
+        try {
+          if (asset.size && asset.size > MAX_PDF_BYTES) {
+            outcomes[index] = { name, error: 'file too large (max 25 MB)' };
+            return;
+          }
+          // Read locally and hand the bytes to the on-device extractor - nothing goes to the
+          // network, so this works offline and the document never leaves the phone.
+          const base64 = await FileSystem.readAsStringAsync(asset.uri, {
+            encoding: FileSystem.EncodingType.Base64,
+          });
+          const text = await pdfExtractorRef.current?.extractText(base64);
+          outcomes[index] = { name, text: text ?? '' };
+        } catch (e: any) {
+          console.error('PDF extraction failed:', name, e);
+          const msg = String(e?.message || '');
+          let reason = 'extraction failed';
+          if (msg.includes('timed out')) reason = 'took too long to read';
+          else if (/password|encrypt/i.test(msg)) reason = 'password-protected';
+          else if (/invalid|corrupt|structure/i.test(msg)) reason = 'not a valid PDF';
+          outcomes[index] = { name, error: reason };
+        } finally {
+          doneCount += 1;
+          setPdfImportProgress({ done: doneCount, total: assets.length });
+        }
+      };
+
+      for (let i = 0; i < assets.length; i++) {
+        await extractOne(i);
+      }
+
+      const succeeded = outcomes.filter(o => o.text && o.text.trim());
+      const emptyPdfs = outcomes.filter(o => !o.error && (!o.text || !o.text.trim()));
+      const failedPdfs = outcomes.filter(o => o.error);
+
+      if (succeeded.length > 0) {
+        // ONE combined insertion for the whole batch (not one appendHtmlToEditor call per PDF) -
+        // appendToEditor/appendHtmlToEditor each do a synchronous setContent + saveImmediately,
+        // and rapid back-to-back calls race each other over contentRef.current (see their own
+        // comments above). Each document gets a heading (its filename, escaped) so a note built
+        // from several PDFs reads as distinct sections instead of one undifferentiated wall of
+        // text.
+        const html = succeeded
+          .map(o => {
+            const body = o.text!.trim()
+              .split(/\n{2,}/)
+              .map(p => `<p>${escapeHtml(p).replace(/\n/g, '<br>')}</p>`)
+              .join('');
+            return `<h3>${escapeHtml(o.name)}</h3>${body}`;
+          })
+          .join('');
+        appendHtmlToEditor(html);
+      }
+
+      const problems: string[] = [
+        ...emptyPdfs.map(o => `${o.name}: no text found - it may be a scanned image`),
+        ...failedPdfs.map(o => `${o.name}: ${o.error}`),
+      ];
+      if (problems.length > 0) {
+        Alert.alert(
+          succeeded.length > 0 ? 'Some PDFs were skipped' : 'No text found',
+          problems.join('\n'),
+        );
+      }
+    } catch (e) {
+      console.error('PDF import failed:', e);
+      Alert.alert('Import failed', 'Could not import the selected PDF(s). Please try again.');
+    } finally {
+      setIsImportingPdf(false);
+      setPdfImportProgress({ done: 0, total: 0 });
     }
   };
 
@@ -1688,14 +2376,18 @@ export default function EditorScreen() {
     router.back();
   };
 
-  // New note: cursor lands in the Title field right away, so typing can start immediately without
-  // an extra tap. Delayed slightly to clear the screen's push-in transition - focusing before it
-  // settles gets silently dropped on Android.
+  // New note: cursor lands in the body right away (not the Title field), so typing can start
+  // immediately without an extra tap, and starts in the field most new notes actually begin
+  // with. Delayed slightly to clear the screen's push-in transition - focusing before it
+  // settles gets silently dropped on Android. Waits on the bridge being ready (not just the
+  // fixed delay) since focus() posts a message into the WebView - firing before the webview/
+  // editor bridge has mounted would silently drop it the same way setContent does (see
+  // NoteBodyEditor's initialContent comment).
   useEffect(() => {
-    if (!isNew) return;
-    const t = setTimeout(() => titleInputRef.current?.focus(), 300);
+    if (!isNew || !editorUi.isReady) return;
+    const t = setTimeout(() => editorApiRef.current?.focus(), 300);
     return () => clearTimeout(t);
-  }, [isNew]);
+  }, [isNew, editorUi.isReady]);
 
   // No full-screen loader: render the editor chrome immediately. The body seeds instantly from the
   // local copy (local-first in loadNote) and metadata fills in as it resolves - so the screen opens
@@ -1880,7 +2572,13 @@ export default function EditorScreen() {
                     >
                       <MaterialIcons name={attachmentIcon(att.mime_type)} size={22} color={C.secondary} />
                       <Text style={s.attachmentName} numberOfLines={1}>{att.filename}</Text>
-                      <MaterialIcons name="open-in-new" size={18} color={C.borderSub} />
+                      {/* Opening now means download + decrypt, which is not instant for a large
+                          file - show progress rather than leaving the row looking unresponsive. */}
+                      {openingAttachmentId === att.id ? (
+                        <ActivityIndicator size="small" color={C.secondary} />
+                      ) : (
+                        <MaterialIcons name="open-in-new" size={18} color={C.borderSub} />
+                      )}
                       <TouchableOpacity
                         testID={`remove-attachment-${att.id}`}
                         onPress={() => removeAttachment(att)}
@@ -2013,10 +2711,11 @@ export default function EditorScreen() {
               style={s.formatBar}
               contentContainerStyle={s.formatBarContent}
             >
-              {/* Attach/Tag/Calendar/Link Event/Share/Add Image lead the bar - also live in the
-                  icon action row below, but that row only shows once the keyboard is hidden -
-                  i.e. exactly when the user ISN'T mid-edit. Duplicated here (same handlers, not
-                  moved) so they're reachable without having to dismiss the keyboard first. */}
+              {/* Attach/Tag/Calendar/Link Event/Share/Export PDF/Add Image lead the bar - also
+                  live in the icon action row below, but that row only shows once the keyboard is
+                  hidden - i.e. exactly when the user ISN'T mid-edit. Duplicated here (same
+                  handlers, not moved) so they're reachable without having to dismiss the
+                  keyboard first. */}
               <TouchableOpacity
                 testID="fmt-attach"
                 style={s.fmtBtn}
@@ -2051,6 +2750,21 @@ export default function EditorScreen() {
               </TouchableOpacity>
               <TouchableOpacity testID="fmt-share" style={s.fmtBtn} onPress={handleShare}>
                 <MaterialIcons name="share" size={24} color={C.text} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                testID="fmt-import-pdf"
+                style={s.fmtBtn}
+                onPress={pickImportPdf}
+                disabled={isImportingPdf}
+              >
+                {isImportingPdf ? (
+                  <ActivityIndicator size="small" color={C.secondary} />
+                ) : (
+                  <MaterialIcons name="upload-file" size={24} color={C.text} />
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity testID="fmt-export-pdf" style={s.fmtBtn} onPress={handleExportPdf}>
+                <MaterialIcons name="picture-as-pdf" size={24} color={C.text} />
               </TouchableOpacity>
               <TouchableOpacity testID="fmt-add-image" style={s.fmtBtn} onPress={() => setShowImagePicker(true)}>
                 <MaterialIcons name="add-photo-alternate" size={24} color={C.text} />
@@ -2159,10 +2873,11 @@ export default function EditorScreen() {
             </ScrollView>
           )}
 
-          {/* Icon action row - Attachment, Add Tag, Schedule, Link Event, Pin, Image, Share, Delete
-              (once saved). Icon-only, spread across the full row width; still horizontally
-              scrollable so all of them stay reachable if they don't all fit on a narrow screen.
-              Shows when keyboard is hidden - the format toolbar above takes over while typing. */}
+          {/* Icon action row - Attachment, Add Tag, Schedule, Link Event, Pin, Image, Share,
+              Export PDF, Delete (once saved). Icon-only, spread across the full row width; still
+              horizontally scrollable so all of them stay reachable if they don't all fit on a
+              narrow screen. Shows when keyboard is hidden - the format toolbar above takes over
+              while typing. */}
           {!isKeyboardVisible && (
             <ScrollView
               horizontal
@@ -2215,6 +2930,21 @@ export default function EditorScreen() {
               <TouchableOpacity testID="share-btn" style={s.iconActionBtn} onPress={handleShare}>
                 <MaterialIcons name="share" size={24} color={C.text} />
               </TouchableOpacity>
+              <TouchableOpacity
+                testID="import-pdf-btn"
+                style={s.iconActionBtn}
+                onPress={pickImportPdf}
+                disabled={isImportingPdf}
+              >
+                {isImportingPdf ? (
+                  <ActivityIndicator size="small" color={C.secondary} />
+                ) : (
+                  <MaterialIcons name="upload-file" size={24} color={C.text} />
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity testID="export-pdf-btn" style={s.iconActionBtn} onPress={handleExportPdf}>
+                <MaterialIcons name="picture-as-pdf" size={24} color={C.text} />
+              </TouchableOpacity>
               {noteExists && (
                 <TouchableOpacity testID="delete-note-btn" style={s.iconActionBtn} onPress={handleDelete}>
                   <MaterialIcons name="delete" size={24} color={C.error} />
@@ -2232,6 +2962,20 @@ export default function EditorScreen() {
                 <ActivityIndicator size="small" color={C.primary} />
                 <Text style={s.transcribingText}>Converting speech to text...</Text>
               </View>
+            ) : isRecording ? (
+              // While recording, the live waveform replaces the static button label: it responds
+              // to the actual mic input, so it doubles as proof the app is hearing you.
+              <View style={s.recordingBar}>
+                <RecordingWaveform getMetering={getMetering} />
+                <Button
+                  testID="voice-input-btn"
+                  variant="cta"
+                  tone="danger"
+                  icon="stop"
+                  label="Stop Recording"
+                  onPress={stopRecording}
+                />
+              </View>
             ) : (
               <Button
                 testID="voice-input-btn"
@@ -2247,6 +2991,22 @@ export default function EditorScreen() {
       </KeyboardAvoidingView>
       
       {/* AI Processing Indicator */}
+      {/* Offered AFTER the words are already in the note, not as a gate before them. Dismissable,
+          and it disappears once used or once the user moves on - a suggestion, not a decision the
+          user has to make on every single capture. */}
+      {lastDictation && !isProcessingText && (
+        <View style={s.tidyBar}>
+          <Text style={s.tidyBarText} numberOfLines={1}>Added from your voice</Text>
+          <TouchableOpacity onPress={tidyLastDictation} style={s.tidyBarAction} testID="tidy-dictation">
+            <MaterialIcons name="auto-fix-high" size={16} color={C.primary} />
+            <Text style={s.tidyBarActionText}>Tidy up</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={() => { setLastDictation(null); setPreTidyContent(null); }} hitSlop={10}>
+            <MaterialIcons name="close" size={18} color={C.borderSub} />
+          </TouchableOpacity>
+        </View>
+      )}
+
       {isProcessingText && (
         <View style={s.processingOverlay}>
           <View style={s.processingCard}>
@@ -2255,7 +3015,22 @@ export default function EditorScreen() {
           </View>
         </View>
       )}
-      
+
+      {/* Import PDF (pickImportPdf) loading state - "done/total" rather than "extracting file N"
+          since PDF_EXTRACT_CONCURRENCY runs several extractions at once (see that comment). */}
+      {isImportingPdf && (
+        <View style={s.processingOverlay}>
+          <View style={s.processingCard}>
+            <ActivityIndicator size="large" color={C.primary} />
+            <Text style={s.processingText}>
+              {pdfImportProgress.total > 1
+                ? `Extracting text… (${pdfImportProgress.done}/${pdfImportProgress.total})`
+                : 'Extracting text from PDF…'}
+            </Text>
+          </View>
+        </View>
+      )}
+
       {/* AI Suggestion Modal */}
       <Modal
         visible={showAiSuggestion}
@@ -2490,6 +3265,11 @@ export default function EditorScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Headless, zero-sized: parses imported PDFs on-device (see its own file for why a WebView).
+          Mounted unconditionally so PDF.js is already parsed and ready by the time the user taps
+          Import PDF, rather than paying that startup cost inside the import itself. */}
+      <PdfExtractorWebView ref={pdfExtractorRef} />
     </SafeAreaView>
   );
 }
@@ -2737,6 +3517,7 @@ const s = StyleSheet.create({
     backgroundColor: C.bg, borderWidth: 1, borderColor: C.borderSub + '30',
   },
   tableCtrlLabel: { fontSize: 12, color: C.text },
+  recordingBar: { gap: 10, alignSelf: 'stretch' },
   voiceBar: {
     paddingHorizontal: 24, paddingVertical: 12,
     backgroundColor: C.bg,
@@ -2769,6 +3550,16 @@ const s = StyleSheet.create({
   },
   transcribingText: { fontSize: 18, color: C.textSec, marginLeft: 12 },
   // AI Suggestion Modal Styles
+  tidyBar: {
+    position: 'absolute', left: 16, right: 16, bottom: 96,
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: C.surfaceHi, borderRadius: 12, paddingVertical: 10, paddingHorizontal: 14,
+    shadowColor: '#0A5443', shadowOpacity: 0.12, shadowRadius: 10, shadowOffset: { width: 0, height: 3 },
+    elevation: 3,
+  },
+  tidyBarText: { flex: 1, fontSize: 13, color: C.textSec },
+  tidyBarAction: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  tidyBarActionText: { fontSize: 14, fontWeight: '600', color: C.primary },
   processingOverlay: {
     position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
     backgroundColor: 'rgba(0,0,0,0.5)',

@@ -12,6 +12,8 @@ import { decryptEventFromServer } from '../src/crypto/eventCrypto';
 import { createEventOffline, updateEventOffline, deleteEventOffline, getLocalEvents, setLocalEventNotificationId, processSyncQueue } from '../src/offlineSync';
 import { bumpDeviceCalendarSync } from '../src/deviceCalendarSync';
 import { nextOccurrenceOnOrAfter } from '../src/recurrence';
+import { reminderSoundConfig } from '../src/reminderVoice';
+import { setPendingLinkedEventIds } from '../src/pendingLinkedEvents';
 import { C, radius, borderWidth } from '../src/theme';
 import { MONTH_NAMES, DAY_NAMES } from '../src/dateNames';
 import { ReminderMinutes, Recurrence, RecurrenceFreq, CalendarEvent } from '../src/types';
@@ -101,6 +103,8 @@ function addOneHour(d: Date): Date {
 // used to leave the plural stale, and editor.tsx prefers the plural whenever it has any entries,
 // so the just-linked event would vanish on the note's next reload and then be permanently
 // orphaned the moment that note autosaves (which dual-writes the plural back to its old value).
+//
+// Deliberately NOT awaited by its callers - see stageEventLinkToNote below.
 async function linkEventToExistingNote(noteId: string, eventId: string): Promise<void> {
   const note = await notesApi.get(noteId);
   const existingIds: string[] = note.linked_event_ids?.length
@@ -108,6 +112,32 @@ async function linkEventToExistingNote(noteId: string, eventId: string): Promise
     : (note.linked_event_id ? [note.linked_event_id] : []);
   const nextIds = Array.from(new Set([...existingIds, eventId]));
   await notesApi.update(noteId, { linked_event_ids: nextIds, linked_event_id: nextIds[0] ?? null });
+}
+
+/**
+ * Link a just-created event back to the note this screen was opened from, without making the
+ * user wait for it.
+ *
+ * `linkEventToExistingNote` above is two network round-trips (GET the note, PUT it back). Both
+ * of its callers used to await it: `handleBack` right before `router.back()` - so tapping Back
+ * after adding an event visibly hung on the network - and the debounced autosave, which holds
+ * `withSaveLock`, the same lock `handleBack` waits on before it can do anything at all. Neither
+ * needs the result.
+ *
+ * The half that has to be immediate isn't the server write, it's telling editor.tsx about the
+ * new id, and that's in-process: `setPendingLinkedEventIds` is consumed by editor.tsx's focus
+ * effect BEFORE its "reload this note from the server" branch, which is what makes dropping the
+ * await safe - the editor never re-reads the note from a server that hasn't got the link yet, so
+ * there's no stale read to race. This is the same handoff voice-event.tsx already uses when it
+ * creates several events at once (see pendingLinkedEvents.ts).
+ *
+ * The server write still happens, just in the background, and editor.tsx's own next save writes
+ * the same `linked_event_ids` from its (now updated) state regardless - so this is belt-and-
+ * braces, not the only route to durability.
+ */
+function stageEventLinkToNote(noteId: string, eventId: string): void {
+  setPendingLinkedEventIds([eventId]);
+  linkEventToExistingNote(noteId, eventId).catch(() => {});
 }
 
 // ---- Web input components ----
@@ -589,9 +619,33 @@ export default function EventEditorScreen() {
       const reminderTime = new Date(effectiveStart.getTime() - minutesBefore * 60 * 1000);
       let newId: string | null = null;
       if (reminderTime > new Date()) {
+        // Baked in at schedule time - when this fires in the background the OS plays the sound
+        // itself, with none of our code running to choose one.
+        const soundCfg = await reminderSoundConfig();
         newId = await Notifications.scheduleNotificationAsync({
-          content: { title: '⏰ Event Reminder', body: `"${eventTitle}" starts in ${getReminderLabel(minutesBefore)}`, sound: true },
-          trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: reminderTime },
+          content: {
+            title: '⏰ Event Reminder',
+            body: `"${eventTitle}" starts in ${getReminderLabel(minutesBefore)}`,
+            sound: soundCfg.sound,
+            // Must match the payload refreshRecurringReminders (src/notifications.ts) writes: the
+            // foreground/tap handlers key off `kind` to know this is a reminder they should open
+            // AND speak aloud. Without it a reminder scheduled here is silent and un-tappable,
+            // which is exactly what happened when only the recurring path carried the payload.
+            // `eventId` is empty on the very first save (the event has no id until
+            // createEventOffline returns), which is why the caller reschedules once immediately
+            // after creating. The speech half works either way.
+            data: {
+              kind: 'event-reminder',
+              eventId: eventIdRef.current || undefined,
+              speakTitle: eventTitle,
+              speakWhen: `starts in ${getReminderLabel(minutesBefore)}`,
+            },
+          },
+          trigger: {
+            type: Notifications.SchedulableTriggerInputTypes.DATE,
+            date: reminderTime,
+            channelId: soundCfg.channelId,
+          },
         });
       }
       localNotificationIdRef.current = newId;
@@ -738,6 +792,7 @@ export default function EventEditorScreen() {
           // encryption happens inside these, callers pass plaintext.
           const eventData = buildEventData(st, et, newDeviceCalEventId, !isCreatedRef.current);
 
+          const wasNew = !isCreatedRef.current;
           if (!isCreatedRef.current) {
             const created = await createEventOffline({ ...eventData, linked_note_ids: eventData.linked_note_ids ?? [] }, { push: true });
             eventIdRef.current = created.id;
@@ -745,7 +800,7 @@ export default function EventEditorScreen() {
             setEventExists(true);
 
             if (params.noteId && params.noteId !== 'new') {
-              try { await linkEventToExistingNote(params.noteId, created.id); } catch {}
+              stageEventLinkToNote(params.noteId, created.id);
             } else if (params.noteId === 'new') {
               // Bare `else` here used to also catch the events-tab entry point (no noteId at
               // all), writing a marker that the next unrelated note opened would silently pick
@@ -757,6 +812,17 @@ export default function EventEditorScreen() {
             }
           } else {
             await updateEventOffline(eventIdRef.current, eventData, { push: true });
+          }
+
+          // The reminder scheduled above was built before this event had an id, so its payload
+          // carries no eventId and tapping it could not open anything. Now that the id exists,
+          // reschedule once so the notification is tappable (speech already worked either way).
+          if (wasNew && newNotificationId && reminderMinutesRef.current && !isWeb) {
+            const rec = getRecurrenceValue();
+            newNotificationId = await scheduleReminder(
+              titleRef.current.trim(), st, reminderMinutesRef.current,
+              rec, rec ? Intl.DateTimeFormat().resolvedOptions().timeZone : null,
+            );
           }
 
           // `local_notification_id` is device-local-only (see LocalEvent's comment in
@@ -807,9 +873,15 @@ export default function EventEditorScreen() {
             const eventData = buildEventData(st, et, devId, !isCreatedRef.current);
             if (!isCreatedRef.current) {
               const created = await createEventOffline({ ...eventData, linked_note_ids: eventData.linked_note_ids ?? [] }, { push: true });
+              // This runs on the tap that is about to navigate, so it only does what has to
+              // happen before the screen changes: hand editor.tsx the new id. The note's own
+              // server-side update rides along in the background (see stageEventLinkToNote).
               if (params.noteId && params.noteId !== 'new') {
-                try { await linkEventToExistingNote(params.noteId, created.id); } catch {}
+                stageEventLinkToNote(params.noteId, created.id);
               } else if (params.noteId === 'new') {
+                // Still awaited: editor.tsx's focus effect READS this key the moment we navigate
+                // back, so a fire-and-forget write here would be a real race (a local
+                // AsyncStorage write is cheap - it's the network round-trips above that weren't).
                 const AsyncStorage = require('@react-native-async-storage/async-storage').default;
                 await AsyncStorage.setItem('pendingLinkedEventId', created.id);
               }

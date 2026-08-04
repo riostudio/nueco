@@ -14,6 +14,7 @@ import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { pushApi } from './api';
+import { speakReminder, reminderSpeechFor } from './reminderVoice';
 import { getLocalEvents, setLocalEventNotificationId } from './offlineSync';
 import { nextOccurrenceOnOrAfter } from './recurrence';
 import type { CalendarEvent } from './types';
@@ -24,7 +25,22 @@ if (Platform.OS !== 'web') {
 }
 
 const STORED_TOKEN_KEY = 'expo_push_token';
+/** Launch notification already acted on this app session (see setupNotificationTapHandler). */
+let handledLaunchNotificationId: string | null = null;
 export const EVENT_REMINDER_CHANNEL = 'event-reminders';
+/**
+ * Separate channel carrying the spoken reminder sound.
+ *
+ * A NEW id is required, not a tweak to the one above: on Android a channel's sound is fixed at
+ * creation and every later update is ignored, so an existing install would keep the default tone
+ * forever. Bumping the id is the only way to change it.
+ *
+ * This is also the ONLY way a voice plays at the moment a reminder fires while the app is
+ * backgrounded or killed - the OS plays this file itself, because our JavaScript is not running.
+ * That's also why the phrase is generic: the event title isn't known when the app is built.
+ */
+import { EVENT_REMINDER_VOICE_CHANNEL, REMINDER_SOUND_FILE, reminderSoundConfig } from './reminderVoice';
+export { EVENT_REMINDER_VOICE_CHANNEL, REMINDER_SOUND_FILE };
 
 /** Show reminders as a banner (with sound) while the app is open. */
 export function setupNotificationHandler(): void {
@@ -33,6 +49,7 @@ export function setupNotificationHandler(): void {
     handleNotification: async () => ({
       shouldShowBanner: true,
       shouldShowList: true,
+      // Always on: the notification's own sound is the only reminder audio now, in every state.
       shouldPlaySound: true,
       shouldSetBadge: false,
     }),
@@ -59,6 +76,12 @@ export async function registerForPushNotifications(): Promise<void> {
       await Notifications.setNotificationChannelAsync(EVENT_REMINDER_CHANNEL, {
         name: 'Event reminders',
         importance: Notifications.AndroidImportance.HIGH,
+      });
+      // Spoken variant. Created up front so it's ready the first time a user enables the option.
+      await Notifications.setNotificationChannelAsync(EVENT_REMINDER_VOICE_CHANNEL, {
+        name: 'Spoken event reminders',
+        importance: Notifications.AndroidImportance.HIGH,
+        sound: REMINDER_SOUND_FILE,
       });
     }
 
@@ -140,13 +163,29 @@ export async function refreshRecurringReminders(): Promise<void> {
         if (event.local_notification_id) {
           try { await Notifications.cancelScheduledNotificationAsync(event.local_notification_id); } catch {}
         }
+        // Resolved per notification: the sound has to be baked in at schedule time, since the OS
+        // plays it with no code of ours running.
+        const soundCfg = await reminderSoundConfig();
         const newId = await Notifications.scheduleNotificationAsync({
           content: {
             title: '⏰ Event Reminder',
             body: `"${event.title}" starts in ${reminderLabel(event.reminder_minutes)}`,
-            sound: true,
+            sound: soundCfg.sound,
+            // Carried so the foreground/tap handlers can speak the reminder without re-reading
+            // the event from the DB (see src/reminderVoice.ts for why only those two moments
+            // can ever run our code).
+            data: {
+              kind: 'event-reminder',
+              eventId: event.id,
+              speakTitle: event.title,
+              speakWhen: `starts in ${reminderLabel(event.reminder_minutes)}`,
+            },
           },
-          trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: reminderTime },
+          trigger: {
+            type: Notifications.SchedulableTriggerInputTypes.DATE,
+            date: reminderTime,
+            channelId: soundCfg.channelId,
+          },
         });
         await setLocalEventNotificationId(event.id, newId);
       } catch (e) {
@@ -164,14 +203,64 @@ export async function refreshRecurringReminders(): Promise<void> {
  */
 export function setupNotificationTapHandler(onOpenEvent: (eventId: string) => void): () => void {
   if (!Notifications) return () => {};
-  const handle = (data: any) => {
-    if (data?.kind === 'event-reminder' && data?.eventId) onOpenEvent(String(data.eventId));
+
+  // Takes the whole notification CONTENT, not just `data`: reminders scheduled by an older app
+  // version (already queued in the OS, impossible to retro-fit) and backend pushes carry no
+  // speech fields, so the visible title/body is the only thing left to read out.
+  // A reminder that arrives while the app is OPEN and is then TAPPED reaches both listeners
+  // below, so without this the same reminder is announced twice, overlapping itself.
+  const spokenIds = new Set<string>();
+
+  const speak = (content: any, notificationId?: string) => {
+    if (notificationId) {
+      if (spokenIds.has(notificationId)) return;
+      spokenIds.add(notificationId);
+    }
+    const data = content?.data;
+    // Every notification this app produces is an event reminder, so an untagged one (i.e. queued
+    // before the payload existed) is still spoken; anything explicitly tagged as something else
+    // is not.
+    if (data?.kind && data.kind !== 'event-reminder') return;
+    void speakReminder(
+      reminderSpeechFor({
+        speakTitle: data?.speakTitle == null ? null : String(data.speakTitle),
+        speakWhen: data?.speakWhen == null ? null : String(data.speakWhen),
+        title: content?.title ?? null,
+        body: content?.body ?? null,
+      }),
+    );
   };
+
+  const handle = (content: any, notificationId?: string) => {
+    speak(content, notificationId);
+    const data = content?.data;
+    if (data?.eventId) onOpenEvent(String(data.eventId));
+  };
+
+  // Fires only while the app is in the FOREGROUND. This is one of the two moments our code can
+  // run for a reminder at all - the OS handles background delivery entirely on its own.
+  // No delivery-time speech, in ANY app state. The notification carries the bundled voice clip,
+  // and on Android 8+ the channel controls sound - the foreground handler cannot reliably
+  // suppress it across OEMs, so speaking here risked the clip and the speech playing over each
+  // other. One sound when a reminder fires, always: the clip.
+  //
+  // Speech survives only on TAP below, where nothing else is playing and the chosen voice can
+  // read out the actual event title - which is also what keeps the voice picker meaningful.
   const sub = Notifications.addNotificationResponseReceivedListener((response) => {
-    handle(response.notification.request.content.data);
+    handle(response.notification.request.content, response.notification.request.identifier);
   });
+  // Cold start from a tapped notification. Guarded by identifier because this resolves on every
+  // mount of the layout that installs these handlers, and the OS keeps returning the SAME launch
+  // response - without the guard a remount re-opens the event and, now that it speaks too,
+  // re-announces a reminder the user dealt with long ago.
   Notifications.getLastNotificationResponseAsync()
-    .then((response) => response && handle(response.notification.request.content.data))
+    .then((response) => {
+      if (!response) return;
+      const id = response.notification.request.identifier;
+      if (id && id === handledLaunchNotificationId) return;
+      handledLaunchNotificationId = id ?? null;
+      handle(response.notification.request.content);
+    })
     .catch(() => {});
-  return () => sub.remove();
+  return () => { sub.remove(); };
 }

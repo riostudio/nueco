@@ -4,7 +4,6 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  SafeAreaView,
   TextInput,
   KeyboardAvoidingView,
   Platform,
@@ -12,6 +11,9 @@ import {
   Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+// react-native's own SafeAreaView is iOS-only - a no-op on Android, which is why the back
+// arrow sat under the status bar there. This one insets on both platforms.
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { authApi } from '../src/auth';
 import { C, radius, borderWidth } from '../src/theme';
@@ -83,7 +85,7 @@ export default function SignupScreen() {
   // Success screen after account creation
   if (isSuccess) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
         <View style={styles.successContainer}>
           <View style={styles.successIcon}>
             <MaterialIcons name="check-circle" size={80} color={C.success} />
@@ -103,7 +105,7 @@ export default function SignupScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}

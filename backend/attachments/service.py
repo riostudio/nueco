@@ -15,6 +15,11 @@ S3_BUCKET = os.getenv("S3_BUCKET")
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 ATTACHMENT_PREFIX = "note-attachments"
 MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024  # 100 MB (videos are large)
+# Total across ALL of an account's attachments. Without this, per-file size was the only limit
+# and a single account could park unbounded storage in the bucket for free, forever - the one
+# cost that keeps accruing after the user stops using the app. Env-overridable so the ceiling can
+# be raised for a paid tier without a code change.
+MAX_TOTAL_ATTACHMENT_BYTES = int(os.getenv("MAX_TOTAL_ATTACHMENT_BYTES", 2 * 1024 * 1024 * 1024))
 ALLOWED_ATTACHMENT_MIME = {
     # images
     "image/jpeg", "image/png", "image/gif", "image/webp", "image/heic",
@@ -54,6 +59,10 @@ class UnsupportedAttachmentTypeError(Exception):
     pass
 
 
+class AttachmentQuotaExceededError(Exception):
+    """The account's total storage would be exceeded by this upload."""
+
+
 class AttachmentAccessDeniedError(Exception):
     pass
 
@@ -70,7 +79,7 @@ def get_s3_client():
     return boto3.client("s3", region_name=AWS_REGION)
 
 
-def presign_upload(user_id: str, filename: str, mime_type: str, size: int) -> dict:
+def presign_upload(user_id: str, filename: str, mime_type: str, size: int, used_bytes: int = 0) -> dict:
     """Validate a file and return a presigned POST for direct-to-S3 upload. The object key is
     generated server-side under the caller's prefix so a client can never write outside its own
     namespace."""
@@ -80,6 +89,16 @@ def presign_upload(user_id: str, filename: str, mime_type: str, size: int) -> di
 
     if size <= 0 or size > MAX_ATTACHMENT_BYTES:
         raise AttachmentTooLargeError(f"File too large (max {MAX_ATTACHMENT_BYTES // (1024 * 1024)}MB)")
+
+    # Checked BEFORE issuing the presigned URL: once the client holds one, S3 accepts the upload
+    # directly and the server never sees it again, so this is the only point where the account
+    # total can still be enforced.
+    if used_bytes + size > MAX_TOTAL_ATTACHMENT_BYTES:
+        remaining = max(0, MAX_TOTAL_ATTACHMENT_BYTES - used_bytes)
+        raise AttachmentQuotaExceededError(
+            f"Not enough storage. You have {remaining // (1024 * 1024)}MB left of "
+            f"{MAX_TOTAL_ATTACHMENT_BYTES // (1024 * 1024 * 1024)}GB. Delete some attachments to free space."
+        )
 
     ext = (filename.rsplit(".", 1)[-1] if "." in filename else "").lower()
     if ext not in ALLOWED_ATTACHMENT_EXT or mime_type not in ALLOWED_ATTACHMENT_MIME:
@@ -171,3 +190,33 @@ def delete_user_attachments(user_id: str) -> None:
             s3.delete_objects(Bucket=S3_BUCKET, Delete={"Objects": batch})
     except Exception as e:
         logger.error(f"S3 attachment cleanup failed for user {user_id}: {e}")
+
+
+async def used_storage_bytes(db, user_id: str) -> int:
+    """Total bytes this account currently has stored in attachments.
+
+    Takes `db` as a parameter rather than importing a client, per the dependency-injection rule in
+    CLAUDE.md - this file otherwise has no database dependency at all.
+
+    Aggregates server-side instead of pulling notes and summing in Python: a note carries base64
+    images inline, so fetching every note just to read `attachments[].size_bytes` would move
+    megabytes over the wire on every single upload.
+
+    Counts what the NOTES claim, which is the same source the client sees and can delete. An
+    orphaned S3 object (upload succeeded, note write failed) is therefore not counted - it would
+    otherwise be uncountable-and-undeletable from the user's point of view, which is a worse
+    failure than slightly under-counting.
+    """
+    pipeline = [
+        {"$match": {"user_id": user_id, "has_attachments": True}},
+        {"$unwind": "$attachments"},
+        {"$group": {"_id": None, "total": {"$sum": "$attachments.size_bytes"}}},
+    ]
+    try:
+        rows = await db.notes.aggregate(pipeline).to_list(1)
+    except Exception as e:
+        # Never block an upload because the usage lookup failed - fail open on the quota rather
+        # than making a transient database hiccup look like "you are out of space".
+        logger.warning("Attachment usage lookup failed for %s: %s", user_id, e)
+        return 0
+    return int(rows[0]["total"]) if rows else 0

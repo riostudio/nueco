@@ -1,0 +1,30 @@
+name: Backend checks
+
+on:
+  pull_request:
+    paths: ['backend/**']
+  push:
+    branches: [main]
+    paths: ['backend/**']
+
+jobs:
+  user-scoping:
+    name: User-scoping ratchet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Fails when a NEW query against user-owned data is written without a tenant scope.
+      # MongoDB has no row-level security, so this class of bug fails OPEN - the query returns
+      # more rows, nothing errors, and no test notices. Pure stdlib (ast), so no install step.
+      - name: No new unscoped queries
+        working-directory: backend
+        run: python3 scripts/check_user_scoping.py
+
+      # Cheap guard against a broken deploy: every module must at least parse.
+      - name: Syntax check
+        working-directory: backend
+        run: python3 -m compileall -q .

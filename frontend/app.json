@@ -15,7 +15,8 @@
         "NSMicrophoneUsageDescription": "Record voice notes hands-free",
         "NSCalendarsUsageDescription": "Link notes to calendar events",
         "NSCameraUsageDescription": "Take photos to add to your notes",
-        "NSPhotoLibraryUsageDescription": "Select photos to add to your notes"
+        "NSPhotoLibraryUsageDescription": "Select photos to add to your notes",
+        "NSLocationWhenInUseUsageDescription": "Show local weather on your Daily Brew, suggest news sources from your country, and fill in a place when you add an event"
       }
     },
     "android": {
@@ -78,7 +79,10 @@
       [
         "expo-notifications",
         {
-          "color": "#0A5443"
+          "color": "#0A5443",
+          "sounds": [
+            "./assets/sounds/nueco_reminder.wav"
+          ]
         }
       ],
       "expo-web-browser",
@@ -96,8 +100,19 @@
             "NSExtensionActivationSupportsMovieWithMaxCount": 1,
             "NSExtensionActivationSupportsFileWithMaxCount": 10
           },
-          "androidIntentFilters": ["text/*", "image/*", "audio/*", "video/*", "application/*"],
-          "androidMultiIntentFilters": ["image/*", "audio/*", "video/*", "application/*"],
+          "androidIntentFilters": [
+            "text/*",
+            "image/*",
+            "audio/*",
+            "video/*",
+            "application/*"
+          ],
+          "androidMultiIntentFilters": [
+            "image/*",
+            "audio/*",
+            "video/*",
+            "application/*"
+          ],
           "disableIOS": false,
           "disableAndroid": false
         }

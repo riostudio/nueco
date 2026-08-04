@@ -20,7 +20,7 @@ import OfflineBanner from '../../src/components/OfflineBanner';
 import FeedbackToast from '../../src/components/FeedbackToast';
 import DailyBrewCard from '../../src/components/DailyBrewCard';
 import FeedbackCommentModal from '../../src/components/FeedbackCommentModal';
-import { getSyncQueue, getLocalNotes, LocalNote } from '../../src/offlineSync';
+import { getSyncQueue, getLocalNotes, getLocalEvents, LocalNote } from '../../src/offlineSync';
 import { parseSourcePost } from '../../src/share/socialSource';
 import { plainTextFromContent } from '../../src/textContent';
 import { takeNewNoteId } from '../../src/newNoteSignal';
@@ -68,13 +68,96 @@ function stripMd(text: string): string {
   return plainTextFromContent(text);
 }
 
+// Just the fields a note card's linked-event strip renders. Deliberately structural rather than
+// `CalendarEvent`, so the locally cached `LocalEvent` (whose `reminder_minutes` is a plain
+// `number`) and a freshly-decrypted server `CalendarEvent` can both fill it.
+type LinkedEventSummary = {
+  id: string;
+  title: string;
+  start_time: string;
+  end_time: string;
+  reminder_minutes?: number | null;
+};
+
+// Shallow "would any card look different?" comparison for the linked-events map.
+function sameEventsMap(
+  a: Record<string, LinkedEventSummary>,
+  b: Record<string, LinkedEventSummary>,
+): boolean {
+  const aKeys = Object.keys(a);
+  if (aKeys.length !== Object.keys(b).length) return false;
+  return aKeys.every((k) => {
+    const x = a[k];
+    const y = b[k];
+    return (
+      !!y &&
+      x.title === y.title &&
+      x.start_time === y.start_time &&
+      x.end_time === y.end_time &&
+      (x.reminder_minutes ?? null) === (y.reminder_minutes ?? null)
+    );
+  });
+}
+
+// ---- Card text derivation (memoized) ----
+//
+// A card's title/preview comes from running the shared-post marker parser AND the full
+// HTML -> plain-text pipeline (several whole-string regex passes) over the note's ENTIRE
+// `content`. For a note with inline base64 images that string is megabytes, so this is the
+// single most expensive thing the list does - and it was being redone for every card on every
+// render, including renders triggered by things that have nothing to do with note bodies (the
+// linked-events map landing, the newly-created glow animation, the delete modal opening).
+//
+// The derived text only changes when the note itself changes, so cache it per note version.
+// `updated_at` + content length is enough of a version key: every write path stamps updated_at,
+// and the length catches the (theoretical) same-millisecond rewrite.
+//
+// The search haystack is derived here too rather than in the filter, so the ONE run of the
+// pipeline serves both. Caching it costs nothing: the expensive input is the base64 image data
+// inside `<img>` tags, and the pipeline's output has all tags stripped out of it.
+type CardText = { titleText: string; previewText: string; searchText: string };
+
+const PREVIEW_CHARS = 120;
+// Generous on purpose: what's cached is the tag-stripped text (kilobytes, not the megabytes of
+// base64 that made deriving it expensive), and a cap smaller than the library would thrash -
+// every search pass would evict the entries the next one needs.
+const CARD_TEXT_CACHE_MAX = 1500;
+const cardTextCache = new Map<string, CardText>();
+
+function cardTextFor(note: LocalNote): CardText {
+  const content = note.content || '';
+  const key = `${note.id}|${note.updated_at}|${content.length}|${note.title || ''}`;
+  const cached = cardTextCache.get(key);
+  if (cached) return cached;
+
+  const src = parseSourcePost(content).sourcePost;
+  const body = stripMd(content);
+  const derived: CardText = {
+    // A shared social post has no title/body of its own - surface its platform + caption so
+    // the list entry isn't blank.
+    titleText: note.title || src?.title || src?.label || 'Untitled Note',
+    previewText: (body || (src ? (src.title ? `${src.label} · ${src.title}` : src.label) : ''))
+      .substring(0, PREVIEW_CHARS),
+    searchText: body.toLowerCase(),
+  };
+
+  // Bounded so an unusually large library can't grow this without limit; Map iterates in
+  // insertion order, so this drops the oldest entry.
+  if (cardTextCache.size >= CARD_TEXT_CACHE_MAX) {
+    const oldest = cardTextCache.keys().next().value;
+    if (oldest !== undefined) cardTextCache.delete(oldest);
+  }
+  cardTextCache.set(key, derived);
+  return derived;
+}
+
 export default function NotesScreen() {
   const router = useRouter();
   const isFocused = useIsFocused();
   const { isSyncReady } = useAuth();
   const { notes, online, isSyncing, syncError, syncAndReload, deleteNote, updateNote } = useOfflineNotes();
   const [pendingCount, setPendingCount] = useState(0);
-  const [eventsMap, setEventsMap] = useState<Record<string, CalendarEvent>>({});
+  const [eventsMap, setEventsMap] = useState<Record<string, LinkedEventSummary>>({});
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -138,41 +221,58 @@ export default function NotesScreen() {
       const queue = await getSyncQueue();
       setPendingCount(queue.length);
       
-      // Fetch events for notes that have linked_event_id.
-      // Read fresh notes from AsyncStorage - the `notes` closure is stale here
+      // Resolve the events for notes that have linked_event_id.
+      // Read fresh notes from the local store - the `notes` closure is stale here
       // because setNotes() was called asynchronously inside syncAndReload().
       const freshNotes = await getLocalNotes();
       const eventIds = freshNotes
         .filter((n) => n.linked_event_id)
         .map((n) => n.linked_event_id as string);
-      
+
       if (eventIds.length > 0) {
-        const uniqueIds = [...new Set(eventIds)];
-        
-        // Use batch API to fetch all events in one request (fixes N+1 query)
-        try {
-          const events = await decryptEventsFromServer<CalendarEvent>(await eventsApi.getBatch(uniqueIds));
-          const eventsData: Record<string, CalendarEvent> = {};
-          events.forEach((event: CalendarEvent) => {
-            eventsData[event.id] = event;
-          });
-          setEventsMap(eventsData);
-        } catch (e) {
-          console.error('Failed to batch load events:', e);
-          // Fallback to individual requests if batch fails
-          const eventsData: Record<string, CalendarEvent> = {};
-          await Promise.all(
-            uniqueIds.map(async (eventId) => {
-              try {
-                const event = await decryptEventFromServer(await eventsApi.get(eventId));
-                eventsData[eventId] = event;
-              } catch (err) {
-                console.error('Failed to load event:', eventId, err);
-              }
-            })
-          );
-          setEventsMap(eventsData);
+        const wantedIds = new Set(eventIds);
+        const uniqueIds = [...wantedIds];
+
+        // Local first. syncAndReload above has just reconciled the local event store with the
+        // server, so it already holds these events - this used to go straight to the network on
+        // every single call (screen focus, the 30s poll, every pull-to-refresh), which meant a
+        // request plus a full list re-render sitting on top of the back-navigation from the
+        // editor/event-editor. It also means the linked-event strip on a card still renders
+        // offline, where the network path silently left it blank.
+        const eventsData: Record<string, LinkedEventSummary> = {};
+        const localEvents = await getLocalEvents();
+        for (const ev of localEvents) {
+          if (!ev._pendingDelete && wantedIds.has(ev.id)) eventsData[ev.id] = ev;
         }
+
+        // Only reach for the network for ids the local store doesn't know about yet.
+        const missingIds = uniqueIds.filter((id) => !eventsData[id]);
+        if (missingIds.length > 0) {
+          // Use batch API to fetch all events in one request (fixes N+1 query)
+          try {
+            const events = await decryptEventsFromServer<CalendarEvent>(await eventsApi.getBatch(missingIds));
+            events.forEach((event: CalendarEvent) => {
+              eventsData[event.id] = event;
+            });
+          } catch (e) {
+            console.error('Failed to batch load events:', e);
+            // Fallback to individual requests if batch fails
+            await Promise.all(
+              missingIds.map(async (eventId) => {
+                try {
+                  const event = await decryptEventFromServer(await eventsApi.get(eventId));
+                  eventsData[eventId] = event;
+                } catch (err) {
+                  console.error('Failed to load event:', eventId, err);
+                }
+              })
+            );
+          }
+        }
+
+        // Publishing an equivalent-but-new object here re-rendered every card for nothing (and
+        // each card re-derives its preview from the note's full HTML body).
+        setEventsMap((prev) => (sameEventsMap(prev, eventsData) ? prev : eventsData));
       }
     } catch (e) {
       console.error('Failed to load notes:', e);
@@ -295,7 +395,10 @@ export default function NotesScreen() {
             const q = debouncedSearch.toLowerCase();
             return (
               n.title?.toLowerCase().includes(q) ||
-              plainTextFromContent(n.content || '').toLowerCase().includes(q) ||
+              // Memoized (see cardTextFor): this used to re-run the whole HTML -> plain-text
+              // pipeline over every note's full body - base64 images included - on every
+              // debounced keystroke.
+              cardTextFor(n).searchText.includes(q) ||
               n.tags?.some((tag) => tag.name?.toLowerCase().includes(q))
             );
           })
@@ -348,12 +451,7 @@ export default function NotesScreen() {
 
   const renderCard = useCallback((note: LocalNote) => {
     const linkedEvent = note.linked_event_id ? eventsMap[note.linked_event_id] : null;
-    // A shared social post has no title/body of its own - surface its platform + caption so
-    // the list entry isn't blank.
-    const src = parseSourcePost(note.content || '').sourcePost;
-    const body = stripMd(note.content || '');
-    const titleText = note.title || src?.title || src?.label || 'Untitled Note';
-    const previewText = body || (src ? (src.title ? `${src.label} · ${src.title}` : src.label) : '');
+    const { titleText, previewText } = cardTextFor(note);
 
     const isGlow = note.id === glowNoteId;
     const CardTag: any = isGlow ? AnimatedTouchable : TouchableOpacity;
@@ -404,7 +502,7 @@ export default function NotesScreen() {
         </View>
         {previewText ? (
           <Text style={s.cardPreview} numberOfLines={2}>
-            {previewText.substring(0, 120)}
+            {previewText}
           </Text>
         ) : null}
         
@@ -449,11 +547,10 @@ export default function NotesScreen() {
     );
   }, [eventsMap, glowNoteId, glowAnim, router, handleTogglePin, handleDeletePress]);
 
-  const renderListItem = useCallback(({ item }: { item: LocalNote }) => {
-    // Skip pinned notes as they're rendered in the header.
-    if (item.is_pinned) return null;
-    return renderCard(item);
-  }, [renderCard]);
+  // `data` is `otherNotes`, so pinned notes (rendered in the list header) never reach here -
+  // they used to be fed in and rendered as `null`, which still cost FlatList a cell + a
+  // measurement pass each.
+  const renderListItem = useCallback(({ item }: { item: LocalNote }) => renderCard(item), [renderCard]);
 
   // Only block on a spinner when there's genuinely nothing cached yet; otherwise render the cached
   // notes instantly (offline-first) and let the background sync refresh them.
@@ -497,8 +594,15 @@ export default function NotesScreen() {
       <FlatList
         style={s.scroll}
         contentContainerStyle={s.scrollContent}
-        data={filteredNotes}
+        data={otherNotes}
         keyExtractor={(item) => item.id}
+        // Windowing: a card's text is derived from the note's whole HTML body, so rendering the
+        // entire library up front (the default windowSize of 21 screens' worth) is the difference
+        // between a handful of cards and hundreds being built during the transition into this tab.
+        initialNumToRender={8}
+        maxToRenderPerBatch={8}
+        updateCellsBatchingPeriod={50}
+        windowSize={7}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -507,19 +611,23 @@ export default function NotesScreen() {
           />
         }
         ListEmptyComponent={
-          <View style={s.empty}>
-            <MaterialIcons name="note-add" size={72} color={C.borderSub} />
-            <Text style={s.emptyTitle}>
-              {search ? 'No notes found' : 'No notes yet'}
-            </Text>
-            <Text style={s.emptySub}>
-              {search
-                ? 'Try a different search term'
-                : syncError
-                  ? `Sync error: ${syncError}`
-                  : 'Tap the button below to create your first note!'}
-            </Text>
-          </View>
+          // Guarded on `filteredNotes`, not on `data` (= otherNotes): a library where every note
+          // is pinned has an empty `data` but is very much not empty on screen.
+          filteredNotes.length > 0 ? null : (
+            <View style={s.empty}>
+              <MaterialIcons name="note-add" size={72} color={C.borderSub} />
+              <Text style={s.emptyTitle}>
+                {search ? 'No notes found' : 'No notes yet'}
+              </Text>
+              <Text style={s.emptySub}>
+                {search
+                  ? 'Try a different search term'
+                  : syncError
+                    ? `Sync error: ${syncError}`
+                    : 'Tap the button below to create your first note!'}
+              </Text>
+            </View>
+          )
         }
         ListHeaderComponent={
           <View>
@@ -630,9 +738,16 @@ const s = StyleSheet.create({
   section: { fontSize: 18, fontWeight: '600', color: C.textSec, marginBottom: 8, marginTop: 4 },
   card: {
     backgroundColor: C.surface, borderRadius: radius.md, padding: 12,
-    borderWidth: borderWidth.regular, borderColor: C.border, marginBottom: 10,
+    marginBottom: 10,
+    // Border removed by request. Surface (#FFFFFF) and page (#FDFBF7) are close enough that a
+    // borderless card would nearly dissolve into the background, so a very soft shadow keeps the
+    // edge readable without reintroducing a visible grey line.
+    shadowColor: '#0A5443', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 },
+    elevation: 1,
   },
-  pinnedCard: { borderColor: C.primary, backgroundColor: C.surfaceHi },
+  // Pinned keeps an explicit border: it's the only thing marking a pinned note apart from the
+  // tinted background, and the base card no longer supplies a border width for it to recolour.
+  pinnedCard: { borderWidth: borderWidth.regular, borderColor: C.primary, backgroundColor: C.surfaceHi },
   cardHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
   cardActions: {
     flexDirection: 'row',

@@ -3,7 +3,7 @@
  *   node --experimental-default-type=module src/crypto/noteCryptoCore.test.ts
  * (Node 24 strips TS types natively.) Exits non-zero on any failure.
  */
-import { generateDek, decryptString, ENC_VERSION } from './e2ee.ts';
+import { generateDek, decryptString, encryptString, ENC_VERSION } from './e2ee.ts';
 import {
   encryptNoteFields,
   decryptNoteFields,
@@ -146,6 +146,43 @@ console.log('migration selector (notesNeedingMigration):');
   ok('skips already-encrypted notes', !pending.some((n) => n.enc_version === 1));
   ok('empty input -> empty', notesNeedingMigration([]).length === 0);
   ok('all-encrypted input -> empty (idempotent re-run)', notesNeedingMigration(notes.filter((n) => n.enc_version === 1)).length === 0);
+}
+
+{
+  console.log('\nattachment filename encryption');
+  const dek = generateDek();
+
+  const note = {
+    title: 't',
+    content: 'c',
+    attachments: [
+      { id: 'a1', key: 'k1', filename: 'MRI results.pdf', mime_type: 'application/pdf', size_bytes: 10 },
+    ],
+  };
+
+  const enc = encryptNoteFields(note as any, dek) as any;
+  ok('filename is encrypted', enc.attachments[0].filename !== 'MRI results.pdf');
+  ok('filename decrypts back', decryptString(enc.attachments[0].filename, dek) === 'MRI results.pdf');
+  ok('non-sensitive attachment metadata stays readable', enc.attachments[0].key === 'k1' && enc.attachments[0].size_bytes === 10);
+
+  const dec = decryptNoteFields(enc, dek) as any;
+  ok('round-trips through decryptNoteFields', dec.attachments[0].filename === 'MRI results.pdf');
+
+  // Backward compat: a note encrypted BEFORE filename encryption shipped carries enc_version 1
+  // with a plaintext filename. It must survive decryption untouched, not become the placeholder.
+  const legacy = {
+    enc_version: 1,
+    title: encryptString('t', dek),
+    content: encryptString('c', dek),
+    attachments: [{ id: 'a1', key: 'k1', filename: 'old-plaintext.pdf' }],
+  };
+  const legacyDec = decryptNoteFields(legacy as any, dek) as any;
+  ok('legacy plaintext filename passes through unchanged', legacyDec.attachments[0].filename === 'old-plaintext.pdf');
+  ok('legacy plaintext filename is not replaced by the placeholder', legacyDec.attachments[0].filename !== UNDECRYPTABLE_PLACEHOLDER);
+
+  // Idempotence: re-encrypting an already-encrypted filename must not double-wrap it.
+  const twice = encryptNoteFields({ ...note, attachments: enc.attachments } as any, dek) as any;
+  ok('already-encrypted filename is not double-encrypted', decryptString(twice.attachments[0].filename, dek) === 'MRI results.pdf');
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

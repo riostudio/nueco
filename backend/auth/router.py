@@ -145,10 +145,9 @@ async def verify_email(token: str, db: AsyncIOMotorDatabase = Depends(get_db)):
     service = AuthService(db)
     success, message, email = await service.verify_email(token)
     
-    app_url = os.getenv("APP_BASE_URL")
-    if not app_url:
-        raise HTTPException(status_code=500, detail="APP_BASE_URL environment variable is required")
-    
+    # No APP_BASE_URL lookup here any more: this page links into the app by URI scheme, not by
+    # web URL, so requiring that env var would only mean email verification 500s over something
+    # it no longer uses.
     if not success:
         return f"""
         <!DOCTYPE html>
@@ -190,6 +189,7 @@ async def verify_email(token: str, db: AsyncIOMotorDatabase = Depends(get_db)):
             .avatar {{ width: 80px; height: 80px; border-radius: 50%; background: #4CAF50; color: white; font-size: 40px; font-weight: 700; display: flex; justify-content: center; align-items: center; margin: 0 auto 20px; }}
             h1 {{ color: #121212; font-size: 24px; margin-bottom: 16px; }}
             p {{ color: #37474F; font-size: 16px; line-height: 1.5; }}
+            .hint {{ font-size: 14px; color: #78909C; opacity: 0; transition: opacity .3s; margin-top: 16px; }}
             .btn {{ display: inline-block; margin-top: 24px; padding: 16px 32px; background: #D84315; color: white; text-decoration: none; border-radius: 12px; font-size: 18px; font-weight: 600; }}
         </style>
     </head>
@@ -198,8 +198,23 @@ async def verify_email(token: str, db: AsyncIOMotorDatabase = Depends(get_db)):
             <div class="avatar">{first_letter}</div>
             <h1>Email Verified!</h1>
             <p>Your email has been verified successfully. You can now log in to Nueco.</p>
-            <a href="{app_url}" class="btn">Open Nueco</a>
+            <!-- Deep link into the app (scheme from frontend/app.json), NOT app_url: that's
+                 APP_BASE_URL, i.e. this API's own host, so the button used to navigate to the
+                 backend root and show FastAPI's {{"detail":"Not Found"}} - the verification had
+                 actually succeeded, but the very next tap looked like an error. -->
+            <a href="nueco://" class="btn" id="open-app">Open Nueco</a>
+            <p class="hint" id="hint">If nothing happens, open Nueco from your home screen.</p>
         </div>
+        <script>
+            // A custom scheme silently does nothing when the app isn't installed (e.g. the link
+            // was opened on a desktop browser), so surface the fallback instead of leaving the
+            // user tapping a dead button. Shown only after a tap, so it isn't noise up front.
+            document.getElementById('open-app').addEventListener('click', function () {{
+                setTimeout(function () {{
+                    document.getElementById('hint').style.opacity = '1';
+                }}, 1200);
+            }});
+        </script>
     </body>
     </html>
     """
@@ -334,7 +349,7 @@ async def update_news_preferences(
     Bible verse toggle."""
     service = AuthService(db)
     success, message, user = await service.update_news_preferences(
-        current_user["id"], request.country, request.outlet_ids, request.show_verse
+        current_user["id"], request.country, request.outlet_ids, request.show_verse, request.show_quote
     )
     if not success:
         raise HTTPException(status_code=404, detail=message)

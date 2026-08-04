@@ -307,8 +307,12 @@ const s = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: C.surface, borderRadius: radius.md,
     paddingVertical: 12, paddingHorizontal: 16,
-    borderWidth: borderWidth.regular, borderColor: C.border,
     marginHorizontal: 24, marginBottom: 10,
+    // Border removed by request. Surface (#FFFFFF) and page (#FDFBF7) are close enough that a
+    // borderless card would nearly dissolve into the background, so a very soft shadow keeps the
+    // edge readable without reintroducing a visible grey line.
+    shadowColor: '#0A5443', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 },
+    elevation: 1,
   },
   eventTimeCol: { marginRight: 14, alignItems: 'flex-start', minWidth: 64 },
   timeStart: { fontSize: 15, fontWeight: '700', color: C.secondary },

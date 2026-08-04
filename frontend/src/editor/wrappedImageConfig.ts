@@ -80,8 +80,20 @@ export const WrappedImageNode = Node.create({
     // always a string, and leaving that coercion implicit is the kind of thing that quietly
     // breaks (a node re-parsed from saved `content` HTML looking "resized"/reverted) without ever
     // throwing an error to notice it by.
+    //
+    // priority: the stock ImageBridge (@tiptap/extension-image, part of TenTapStartKit - see
+    // app/editor.tsx's noteBridgeExtensions) registers its own catch-all `img[src]` parse rule,
+    // which also matches this node's rendered <img data-wrapped-image src=... > tag. Both rules
+    // default to ProseMirror's standard priority (50), so ties are broken by extension
+    // registration order - and the stock ImageBridge is listed before WrappedImageBridge, so its
+    // generic rule silently won on every reload, downgrading wrappedImage nodes to plain `image`
+    // nodes (dropping `align` entirely, since stock Image has no such attribute, and falling back
+    // to `width`-as-fixed-pixels instead of the wrap/full-width CSS) - exactly the "image looks
+    // resized after reopening the note" bug. A higher priority makes this more-specific selector
+    // win regardless of registration order.
     return [{
       tag: 'img[data-wrapped-image]',
+      priority: 100,
       getAttrs: (el: HTMLElement) => {
         const parsedWidth = parseInt(el.getAttribute('width') || '', 10);
         const align = el.getAttribute('align');

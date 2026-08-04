@@ -10,6 +10,7 @@ export {
   getAnalyticsConsent,
   hasAnalyticsDecision,
   trackNoteCreated,
+  trackOnboardingStep,
   trackNoteEdited,
   trackNoteDeleted,
   trackNoteSearched,

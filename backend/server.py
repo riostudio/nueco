@@ -209,6 +209,7 @@ api_router.include_router(textai_router)
 from attachments.router import router as attachments_router
 api_router.include_router(attachments_router)
 
+
 app.include_router(api_router)
 
 
