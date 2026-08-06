@@ -287,7 +287,7 @@ export default function NewsSourceSettingsScreen() {
       }
     } catch (e) {
       console.error('Failed to add custom feed:', e);
-      setCustomFeedError(extractErrorDetail(e, 'Could not add that feed. Please try again.'));
+      setCustomFeedError(extractErrorDetail(e, 'Couldn’t add that feed. Check the address and have another go.'));
     } finally {
       setAddingCustomFeed(false);
     }
@@ -528,7 +528,7 @@ export default function NewsSourceSettingsScreen() {
               ) : (
                 <View style={s.banner}>
                   <Text style={[s.bannerText, { flex: 1 }]}>
-                    Couldn&apos;t detect your location — try &quot;Change&quot; below to pick manually.
+                    Couldn&apos;t find your location. Tap Change to pick it yourself.
                   </Text>
                   <TouchableOpacity onPress={() => setShowCountryPicker(true)}>
                     <Text style={s.changeLink}>Change</Text>

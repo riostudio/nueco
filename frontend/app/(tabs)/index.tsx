@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, TextInput,
+  View, Text, Image, StyleSheet, TouchableOpacity, TextInput,
   FlatList, RefreshControl, ActivityIndicator, Modal, Animated, Alert, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -13,6 +13,8 @@ import { eventsApi, feedbackApi } from '../../src/api';
 import { decryptEventFromServer, decryptEventsFromServer } from '../../src/crypto/eventCrypto';
 import { CalendarEvent } from '../../src/types';
 import { C, radius, borderWidth } from '../../src/theme';
+import { prefixEmoji } from '../../src/events/eventEmoji';
+import { ListSkeleton } from '../../src/components/Skeleton';
 import { UserAvatar, useAuth } from '../../src/auth';
 import { trackNoteSearched, trackNoteDeleted, trackEvent } from '../../src/analytics';
 import { useOfflineNotes } from '../../src/useOfflineNotes';
@@ -115,7 +117,40 @@ function sameEventsMap(
 // The search haystack is derived here too rather than in the filter, so the ONE run of the
 // pipeline serves both. Caching it costs nothing: the expensive input is the base64 image data
 // inside `<img>` tags, and the pipeline's output has all tags stripped out of it.
-type CardText = { titleText: string; previewText: string; searchText: string };
+type CardText = { titleText: string; previewText: string; searchText: string; thumbUri: string | null; imageCount: number };
+
+// Pulls the first embedded image out of a note body for the card thumbnail. Derived inside
+// cardTextFor's memo rather than at render time on purpose: this scans the same megabyte-scale
+// content string the text pipeline does, and doing it per-card-per-render would undo exactly the
+// cost the memo was added to remove.
+//
+// Note the thumbnail can NOT come from `note.attachments` - those bytes are E2EE ciphertext on
+// S3 (see src/crypto/attachmentCrypto.ts), so their URLs render as nothing. Only images already
+// inline in the note are displayable without fetching and decrypting.
+const FIRST_INLINE_IMAGE = /<img\b[^>]*\bsrc="(data:image\/[a-zA-Z0-9.+-]+;base64,[^"]+)"/i;
+
+function thumbnailFor(note: LocalNote, content: string): string | null {
+  // `images[]` first: it's already a standalone base64 thumbnail, so no scan of the body needed.
+  const gallery = note.images?.find(i => typeof i === 'string' && i.startsWith('data:image'));
+  if (gallery) return gallery;
+  const inline = FIRST_INLINE_IMAGE.exec(content);
+  return inline ? inline[1] : null;
+}
+
+// Global twin of FIRST_INLINE_IMAGE, for counting rather than grabbing the first hit. Separate
+// object because a /g regex carries lastIndex between calls, and sharing one with the single-match
+// lookup above would make each call resume where the previous left off.
+const ALL_INLINE_IMAGES = /<img\b[^>]*\bsrc="data:image\//gi;
+
+// Pictures a card should own up to, whether they arrived through "Add image" or the file picker.
+// Mirrors thumbnailFor's either/or precedence deliberately: `images[]` and the inline <img> tags
+// are two representations of the same pictures depending on which path/app version wrote the note,
+// so summing them would double-count a single photo.
+function imageCountFor(note: LocalNote, content: string): number {
+  const gallery = note.images?.length ?? 0;
+  if (gallery > 0) return gallery;
+  return content.match(ALL_INLINE_IMAGES)?.length ?? 0;
+}
 
 const PREVIEW_CHARS = 120;
 // Generous on purpose: what's cached is the tag-stripped text (kilobytes, not the megabytes of
@@ -139,6 +174,8 @@ function cardTextFor(note: LocalNote): CardText {
     previewText: (body || (src ? (src.title ? `${src.label} · ${src.title}` : src.label) : ''))
       .substring(0, PREVIEW_CHARS),
     searchText: body.toLowerCase(),
+    thumbUri: thumbnailFor(note, content),
+    imageCount: imageCountFor(note, content),
   };
 
   // Bounded so an unusually large library can't grow this without limit; Map iterates in
@@ -451,7 +488,10 @@ export default function NotesScreen() {
 
   const renderCard = useCallback((note: LocalNote) => {
     const linkedEvent = note.linked_event_id ? eventsMap[note.linked_event_id] : null;
-    const { titleText, previewText } = cardTextFor(note);
+    const { titleText, previewText, thumbUri, imageCount } = cardTextFor(note);
+    // Pictures and files counted together: from the card's point of view they're all just things
+    // hanging off the note, and the user doesn't sort them by which picker put them there.
+    const attachmentCount = (note.attachments?.length ?? 0) + imageCount;
 
     const isGlow = note.id === glowNoteId;
     const CardTag: any = isGlow ? AnimatedTouchable : TouchableOpacity;
@@ -500,10 +540,15 @@ export default function NotesScreen() {
             </TouchableOpacity>
           </View>
         </View>
-        {previewText ? (
-          <Text style={s.cardPreview} numberOfLines={2}>
-            {previewText}
-          </Text>
+        {(previewText || thumbUri) ? (
+          <View style={s.cardBody}>
+            {previewText ? (
+              <Text style={[s.cardPreview, thumbUri && s.cardPreviewWithThumb]} numberOfLines={2}>
+                {previewText}
+              </Text>
+            ) : <View style={{ flex: 1 }} />}
+            {thumbUri ? <Image source={{ uri: thumbUri }} style={s.cardThumb} /> : null}
+          </View>
         ) : null}
         
         {/* Linked Event Info */}
@@ -511,7 +556,7 @@ export default function NotesScreen() {
           <View style={s.eventInfo}>
             <View style={s.eventInfoRow}>
               <MaterialIcons name="event" size={16} color={C.secondary} />
-              <Text style={s.eventInfoTitle} numberOfLines={1}>{linkedEvent.title}</Text>
+              <Text style={s.eventInfoTitle} numberOfLines={1}>{prefixEmoji(linkedEvent.title)}</Text>
             </View>
             <View style={s.eventInfoRow}>
               <MaterialIcons name="schedule" size={14} color={C.textSec} />
@@ -529,7 +574,16 @@ export default function NotesScreen() {
             </View>
           </View>
         )}
-        
+
+        {/* Plain text on its own line, sharing the event block's left edge, rather than an icon and
+            a bare numeral off in the footer: "3" next to a paperclip asks the reader to decode a
+            symbol, and at a glance in the sun it reads as part of the timestamp beside it. */}
+        {attachmentCount > 0 && (
+          <Text style={s.attachCountText}>
+            {attachmentCount} {attachmentCount === 1 ? 'attachment' : 'attachments'}
+          </Text>
+        )}
+
         <View style={s.cardFoot}>
           <View style={s.tagsRow}>
             {note.tags.map((tag, i) => (
@@ -541,7 +595,9 @@ export default function NotesScreen() {
               </View>
             ))}
           </View>
-          <Text style={s.timeText}>{formatNoteTimeLabel(note.created_at, note.updated_at)}</Text>
+          <View style={s.cardMeta}>
+            <Text style={s.timeText}>{formatNoteTimeLabel(note.created_at, note.updated_at)}</Text>
+          </View>
         </View>
       </CardTag>
     );
@@ -556,11 +612,11 @@ export default function NotesScreen() {
   // notes instantly (offline-first) and let the background sync refresh them.
   if (loading && notes.length === 0) {
     return (
-      <SafeAreaView style={s.container}>
-        <View style={s.center}>
-          <ActivityIndicator size="large" color={C.primary} />
-          <Text style={s.loadText}>Loading notes...</Text>
+      <SafeAreaView style={s.container} edges={['top']}>
+        <View style={s.header}>
+          <Text style={s.headerTitle}>Notes</Text>
         </View>
+        <ListSkeleton count={4} variant="note" label="Loading your notes" />
       </SafeAreaView>
     );
   }
@@ -568,7 +624,7 @@ export default function NotesScreen() {
   return (
     <SafeAreaView style={s.container} edges={['top']}>
       <View style={s.header}>
-        <Text style={s.headerTitle}>My Notes</Text>
+        <Text style={s.headerTitle}>Notes</Text>
         <UserAvatar size={36} />
       </View>
 
@@ -617,14 +673,14 @@ export default function NotesScreen() {
             <View style={s.empty}>
               <MaterialIcons name="note-add" size={72} color={C.borderSub} />
               <Text style={s.emptyTitle}>
-                {search ? 'No notes found' : 'No notes yet'}
+                {search ? 'Nothing matched that' : 'Nothing here yet'}
               </Text>
               <Text style={s.emptySub}>
                 {search
-                  ? 'Try a different search term'
+                  ? 'Try another word.'
                   : syncError
-                    ? `Sync error: ${syncError}`
-                    : 'Tap the button below to create your first note!'}
+                    ? 'Couldn’t reach your notes just now. Nothing’s lost.'
+                    : 'Say something and it’ll be waiting.'}
               </Text>
             </View>
           )
@@ -636,7 +692,7 @@ export default function NotesScreen() {
               <>
                 <Text style={s.section}>Pinned</Text>
                 {pinnedNotes.map(renderCard)}
-                {otherNotes.length > 0 && <Text style={s.section}>All Notes</Text>}
+                {otherNotes.length > 0 && <Text style={s.section}>All notes</Text>}
               </>
             )}
           </View>
@@ -652,7 +708,7 @@ export default function NotesScreen() {
         activeOpacity={0.8}
       >
         <MaterialIcons name="add" size={32} color={C.primaryFg} />
-        <Text style={s.fabText}>New Note</Text>
+        <Text style={s.fabText}>New note</Text>
       </TouchableOpacity>
 
       <FeedbackToast
@@ -679,7 +735,7 @@ export default function NotesScreen() {
         <View style={s.modalOverlay}>
           <View style={s.modalContent}>
             <MaterialIcons name="delete" size={48} color={C.error} style={{ marginBottom: 16 }} />
-            <Text style={s.modalTitle}>Delete Note?</Text>
+            <Text style={s.modalTitle}>Delete this note?</Text>
             <Text style={s.modalMessage}>
               Are you sure you want to delete "{noteToDelete?.title}"? This action cannot be undone.
             </Text>
@@ -760,7 +816,17 @@ const s = StyleSheet.create({
     backgroundColor: C.bg,
   },
   cardTitle: { fontSize: 18, fontWeight: '700', color: C.text, flex: 1, marginRight: 8 },
-  cardPreview: { fontSize: 15, color: C.textSec, lineHeight: 20, marginBottom: 8 },
+  // The gap below lives here rather than on cardPreview: the thumbnail is taller than two lines of
+  // preview text, so a margin on the text alone left the image butting straight into the event
+  // block. On the row, whichever child is tallest sets the clearance.
+  cardBody: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 8 },
+  // Beside the preview rather than above it, so a card with an image is the same height as one
+  // without and the list keeps an even rhythm.
+  cardThumb: { width: 52, height: 52, borderRadius: 8, backgroundColor: C.border },
+  cardPreviewWithThumb: { flex: 1 },
+  cardMeta: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  attachCountText: { fontSize: 12, color: C.textSec, fontVariant: ['tabular-nums'], marginBottom: 8 },
+  cardPreview: { fontSize: 15, color: C.textSec, lineHeight: 20 },
   // Event info in card
   eventInfo: {
     backgroundColor: C.secondaryTint,

@@ -35,7 +35,7 @@ export const strings = {
   // Sync screen
   syncTitle: 'Welcome back',
   syncMessage: 'Syncing your notes...',
-  syncComplete: 'All caught up!',
+  syncComplete: 'Up to date',
   notesReady: 'notes ready',
   goToNotes: 'Go to my notes',
 
@@ -52,7 +52,7 @@ export const strings = {
   // Snackbar messages
   snackbarPasswordUpdated: 'Password updated successfully',
   snackbarWrongPassword: 'Current password is incorrect',
-  snackbarGenericError: 'Something went wrong. Please try again.',
+  snackbarGenericError: 'Something went wrong at our end. Have another go.',
 
   // Errors
   errorRequired: 'This field is required',

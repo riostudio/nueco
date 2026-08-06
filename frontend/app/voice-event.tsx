@@ -219,7 +219,7 @@ export default function VoiceEventScreen() {
       router.back();
     } catch (e) {
       console.error('Save voice event(s) failed:', e);
-      Alert.alert('Save Failed', 'Could not save. Please try again.');
+      Alert.alert('Couldn’t save that event', 'Your words are still here. Have another go.');
       isSavingRef.current = false; // allow a retry tap after a failure
       setSaving(false);
     }
@@ -251,7 +251,7 @@ export default function VoiceEventScreen() {
 
         {isItinerary && (
           <>
-            <Text style={s.label}>Trip Name</Text>
+            <Text style={s.label}>Trip name</Text>
             <TextInput
               testID="voice-trip-name-input"
               style={s.titleInput}
@@ -355,7 +355,7 @@ export default function VoiceEventScreen() {
               <View style={s.pickerModalOverlay}>
                 <View style={s.pickerModalContent}>
                   <View style={s.pickerModalHeader}>
-                    <Text style={s.pickerModalTitle}>Select Date</Text>
+                    <Text style={s.pickerModalTitle}>Select date</Text>
                     <TouchableOpacity onPress={() => { setShowDatePicker(false); setShowTimePicker(true); }}>
                       <Text style={s.pickerModalDone}>Next</Text>
                     </TouchableOpacity>
@@ -382,7 +382,7 @@ export default function VoiceEventScreen() {
               <View style={s.pickerModalOverlay}>
                 <View style={s.pickerModalContent}>
                   <View style={s.pickerModalHeader}>
-                    <Text style={s.pickerModalTitle}>Select Time</Text>
+                    <Text style={s.pickerModalTitle}>Select time</Text>
                     <TouchableOpacity onPress={() => { setShowTimePicker(false); setEditingIndex(null); }}>
                       <Text style={s.pickerModalDone}>Done</Text>
                     </TouchableOpacity>

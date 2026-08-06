@@ -84,6 +84,7 @@ export function useNoteObjects(noteIdRef: RefObject<string>, saveImmediately: ()
     saveImmediately();
   }, [saveImmediately]);
 
+
   const selectObject = useCallback((id: string) => {
     setSelectedObjectId(id);
     // Bring to front on select, per spec.

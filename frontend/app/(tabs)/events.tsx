@@ -6,12 +6,15 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useRouter, useFocusEffect } from 'expo-router';
+import { useRouter, useFocusEffect, type Href } from 'expo-router';
 import { useIsFocused } from '@react-navigation/native';
 import { deleteEventOffline, getLocalEvents, fullSync } from '../../src/offlineSync';
+import { eventsSignature, shouldFocusSync } from '../../src/events/eventsFeed';
 import { bumpDeviceCalendarSync } from '../../src/deviceCalendarSync';
 import { CalendarEvent } from '../../src/types';
 import { C, radius, borderWidth } from '../../src/theme';
+import { prefixEmoji } from '../../src/events/eventEmoji';
+import { ListSkeleton } from '../../src/components/Skeleton';
 import { MONTH_NAMES, DAY_NAMES } from '../../src/dateNames';
 import { UserAvatar } from '../../src/auth';
 import { SegmentedControl } from '../../src/components';
@@ -145,20 +148,31 @@ export default function EventsScreen() {
   // instantly (including anything still sitting in the offline retry queue - see
   // offlineSync.ts), then reconcile with the server. Replaces the previous network-only fetch
   // + its own ad-hoc AsyncStorage cache with the shared offline store.
+  // Signature-gated so an unchanged list doesn't re-render. getLocalEvents returns a fresh array
+  // every call, so setEvents always saw a new reference and rebuilt the whole grid on every focus.
+  const sigRef = useRef('');
+  const applyEvents = useCallback((list: Awaited<ReturnType<typeof getLocalEvents>>) => {
+    const next = list.filter(e => !e._pendingDelete) as CalendarEvent[];
+    const sig = eventsSignature(next);
+    if (sig === sigRef.current) return;
+    sigRef.current = sig;
+    setEvents(next);
+  }, []);
+
   const loadEvents = useCallback(async (force?: boolean) => {
     try {
-      const local = await getLocalEvents();
-      setEvents(local.filter(e => !e._pendingDelete) as CalendarEvent[]);
+      applyEvents(await getLocalEvents());
+      // Throttled across both event screens - see eventsFeed.ts. Pull-to-refresh passes force.
+      if (!shouldFocusSync(force)) return;
       await fullSync({ force });
-      const fresh = await getLocalEvents();
-      setEvents(fresh.filter(e => !e._pendingDelete) as CalendarEvent[]);
+      applyEvents(await getLocalEvents());
     } catch (e) {
       console.error('Failed to load events:', e);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [applyEvents]);
 
   useFocusEffect(useCallback(() => { loadEvents(); }, [loadEvents]));
 
@@ -262,10 +276,10 @@ export default function EventsScreen() {
   if (loading && events.length === 0) {
     return (
       <SafeAreaView style={s.container} edges={['top']}>
-        <View style={s.center}>
-          <ActivityIndicator size="large" color={C.primary} />
-          <Text style={s.loadText}>Loading events...</Text>
+        <View style={s.header}>
+          <Text style={s.headerTitle}>Events</Text>
         </View>
+        <ListSkeleton count={3} variant="event" label="Loading your events" />
       </SafeAreaView>
     );
   }
@@ -305,6 +319,16 @@ export default function EventsScreen() {
         keyExtractor={(item) => item.date}
         onScroll={handleScroll}
         scrollEventThrottle={16}
+        // Windowing, same reasoning as the notes list in (tabs)/index.tsx. Each item here is a
+        // whole day's group, so one "row" can be several event cards - the default windowSize of
+        // 21 screens' worth meant a full year of events was built up front on first focus.
+        initialNumToRender={6}
+        maxToRenderPerBatch={6}
+        updateCellsBatchingPeriod={50}
+        windowSize={7}
+        // Android only: on iOS this has a long history of blanking cells that scroll back
+        // into view, and the windowing props above already do the heavy lifting there.
+        removeClippedSubviews={Platform.OS === 'android'}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -316,10 +340,10 @@ export default function EventsScreen() {
           <View style={s.empty}>
             <MaterialIcons name="event-busy" size={72} color={C.borderSub} />
             <Text style={s.emptyTitle}>
-              {filter === 'upcoming' ? 'No upcoming events' : 'No events yet'}
+              {filter === 'upcoming' ? 'Nothing coming up' : 'Nothing here yet'}
             </Text>
             <Text style={s.emptySub}>
-              Tap the button below to schedule one!
+              Say when, and it’ll be here.
             </Text>
           </View>
         }
@@ -342,7 +366,7 @@ export default function EventsScreen() {
                 testID={`event-card-${event.id}`}
                 style={s.eventCard}
                 activeOpacity={0.7}
-                onPress={() => router.push({ pathname: '/event-editor', params: { eventId: event.id } })}
+                onPress={() => router.push(`/event?eventId=${event.id}` as Href)}
               >
                 <View style={s.eventTimeCol}>
                   <Text style={s.timeStart}>{primary}</Text>
@@ -350,7 +374,7 @@ export default function EventsScreen() {
                 </View>
 
                 <View style={s.eventBody}>
-                  <Text style={s.eventTitle} numberOfLines={1}>{event.title}</Text>
+                  <Text style={s.eventTitle} numberOfLines={1}>{prefixEmoji(event.title)}</Text>
                   {event.description ? (
                     <Text style={s.eventDesc} numberOfLines={1}>{event.description}</Text>
                   ) : null}
@@ -400,7 +424,7 @@ export default function EventsScreen() {
             <MaterialIcons name="add" size={32} color={C.primaryFg} />
           </View>
           <Animated.Text style={[s.fabText, { opacity: textOpacity }]}>
-            New Event
+            New event
           </Animated.Text>
         </TouchableOpacity>
       </Animated.View>
@@ -415,7 +439,7 @@ export default function EventsScreen() {
         <View style={s.modalOverlay}>
           <View style={s.modalContent}>
             <MaterialIcons name="delete" size={48} color={C.error} style={{ marginBottom: 16 }} />
-            <Text style={s.modalTitle}>Delete Event?</Text>
+            <Text style={s.modalTitle}>Delete this event?</Text>
             <Text style={s.modalMessage}>
               Are you sure you want to delete "{eventToDelete?.title}"? This action cannot be undone.
             </Text>

@@ -42,7 +42,7 @@ export default function PrivacyDataScreen() {
   useEffect(() => { isAnalyticsEnabled().then(setAnalyticsOn); }, []);
   useEffect(() => { if (user) isPersistPinned(user.id).then(setDailyBrewPinned); }, [user]);
 
-  // Reminder voice lives entirely on-device (a recorded clip or a chosen system voice), so its
+  // Reminder voice lives entirely on-device (a chosen system voice), so its
   // preference is read straight from local storage rather than the user record.
   const [voiceRemindersOn, setVoiceRemindersOn] = useState(false);
   useFocusEffect(useCallback(() => {
@@ -72,7 +72,7 @@ export default function PrivacyDataScreen() {
       await updateUserName(trimmed);
       setShowEditName(false);
     } catch {
-      setNameError('Could not update your name. Please try again.');
+      setNameError('Couldn’t save your name. It’s unchanged for now.');
     } finally {
       setSavingName(false);
     }
@@ -83,7 +83,7 @@ export default function PrivacyDataScreen() {
     try {
       await exportMyData(user);
     } catch {
-      Alert.alert('Export failed', 'Could not export your data. Please try again.');
+      Alert.alert('Couldn’t put your file together', 'Have another go whenever.');
     } finally {
       setExporting(false);
     }
@@ -117,7 +117,7 @@ export default function PrivacyDataScreen() {
       setDeleteError(
         msg.includes('401') || msg.toLowerCase().includes('incorrect')
           ? 'Incorrect password.'
-          : 'Could not delete account. Please try again.',
+          : 'Couldn’t delete your account. Nothing has changed.',
       );
       return;
     }
@@ -224,8 +224,8 @@ export default function PrivacyDataScreen() {
             <View style={{ flex: 1, marginLeft: 16 }}>
               <Text style={s.rowLabelPlain}>Speak my reminders</Text>
               <Text style={s.rowSub}>
-                Read reminders aloud in your own recorded voice, or one from this phone. Works
-                offline, and nothing is sent anywhere.
+                Reminders are read aloud in a voice you choose. Works offline, and nothing
+                is sent anywhere.
               </Text>
             </View>
             <Switch

@@ -204,7 +204,7 @@ export default function SketchScreen() {
     try {
       const image = canvasRef.current?.makeImageSnapshot();
       if (!image) {
-        Alert.alert('Error', 'Could not export the sketch. Please try again.');
+        Alert.alert('Couldn’t export that sketch', 'Have another go whenever.');
         setExporting(false);
         return;
       }
@@ -215,7 +215,7 @@ export default function SketchScreen() {
       router.back();
     } catch (e) {
       console.error('Sketch export failed:', e);
-      Alert.alert('Error', 'Could not export the sketch. Please try again.');
+      Alert.alert('Couldn’t export that sketch', 'Have another go whenever.');
       setExporting(false);
     }
   };

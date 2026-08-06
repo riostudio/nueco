@@ -199,7 +199,7 @@ export default function TripEditorScreen() {
             {isEditing ? (
               <TouchableOpacity testID="add-event-to-trip-btn" style={s.addEventBtn} onPress={openEventPicker} activeOpacity={0.7}>
                 <MaterialIcons name="add" size={18} color={C.secondary} />
-                <Text style={s.addEventBtnText}>Add Event</Text>
+                <Text style={s.addEventBtnText}>Add event</Text>
               </TouchableOpacity>
             ) : (
               <Text style={s.hintText}>Save to add events</Text>

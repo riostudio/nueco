@@ -101,7 +101,7 @@ export default function VoiceOnboardingScreen() {
         await markSeen();
         Alert.alert(
           'Microphone is off',
-          'No problem. You can still type your notes, and turn the microphone on later in your device settings.',
+          'You can type your notes instead. Turn the microphone on any time in Settings.',
           [{ text: 'Continue', onPress: () => router.replace('/(tabs)' as Href) }],
         );
         return;
@@ -115,7 +115,7 @@ export default function VoiceOnboardingScreen() {
       setStage('listening');
     } catch (e) {
       console.error('Onboarding record failed:', e);
-      Alert.alert('Could not start recording', 'Please try again.');
+      Alert.alert('Couldn’t start recording', 'Have another go whenever.');
     }
   }, [markSeen, recorder, router]);
 
@@ -135,7 +135,7 @@ export default function VoiceOnboardingScreen() {
       // an empty string.
       if (!result.text?.trim()) {
         setStage('ask');
-        Alert.alert("Didn't catch that", 'We couldn’t hear anything that time. Tap the mic and try again.');
+        Alert.alert('Nothing came through that time', 'Have another go whenever.');
         return;
       }
       setTranscript(result.text.trim());
@@ -144,7 +144,7 @@ export default function VoiceOnboardingScreen() {
     } catch (e) {
       console.error('Onboarding transcription failed:', e);
       setStage('ask');
-      Alert.alert('Could not transcribe', 'Please try again.');
+      Alert.alert('Couldn’t turn that into words', 'Have another go whenever.');
     }
   }, [recorder]);
 
@@ -187,7 +187,7 @@ export default function VoiceOnboardingScreen() {
       await leave('completed');
     } catch (e) {
       console.error('Onboarding save failed:', e);
-      Alert.alert('Could not save', 'Please try again.');
+      Alert.alert('Couldn’t save that one', 'Your words are still here. Have another go.');
       setSaving(false);
     }
   }, [saving, transcript, tidy, leave]);
@@ -212,8 +212,8 @@ export default function VoiceOnboardingScreen() {
               <MaterialIcons name="mic" size={36} color={C.primaryFg} />
             </View>
           </View>
-          <Text style={s.title}>Nueco is fastest when you talk.</Text>
-          <Text style={s.sub}>Say what’s on your mind and it becomes a note. No typing, no tidying.</Text>
+          <Text style={s.title}>Press the button. Say anything.</Text>
+          <Text style={s.sub}>That’s the whole thing.</Text>
         </View>
         <View style={s.actions}>
           {/* Stated at the moment of the ask rather than buried in settings. Framed as what the
@@ -228,10 +228,10 @@ export default function VoiceOnboardingScreen() {
           </View>
 
           <TouchableOpacity style={s.cta} onPress={beginRecording} activeOpacity={0.85} testID="onboarding-start-voice">
-            <Text style={s.ctaText}>Capture my first note</Text>
+            <Text style={s.ctaText}>Have a go</Text>
           </TouchableOpacity>
           <TouchableOpacity onPress={() => leave('skipped')} activeOpacity={0.7} testID="onboarding-skip">
-            <Text style={s.skipText}>I’d rather type</Text>
+            <Text style={s.skipText}>I’ll type instead</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -258,7 +258,7 @@ export default function VoiceOnboardingScreen() {
             {!busy && <RecordingWaveform getMetering={getMetering} />}
           </View>
 
-          <Text style={s.listening}>{busy ? 'Turning it into words…' : 'Listening…'}</Text>
+          <Text style={s.listening}>{busy ? 'Turning that into words' : 'Listening…'}</Text>
           {!busy && (
             // Deliberately free of dates and times: the voice-intent classifier reroutes anything
             // schedule-shaped to event creation, which would derail a first-run demo.
@@ -268,7 +268,7 @@ export default function VoiceOnboardingScreen() {
         <View style={s.actions}>
           {!busy && (
             <TouchableOpacity onPress={stopAndTranscribe} activeOpacity={0.7}>
-              <Text style={s.skipText}>Tap to stop</Text>
+              <Text style={s.skipText}>Stop</Text>
             </TouchableOpacity>
           )}
         </View>
@@ -281,7 +281,7 @@ export default function VoiceOnboardingScreen() {
   return (
     <SafeAreaView style={s.container} edges={['top', 'bottom']}>
       <ScrollView contentContainerStyle={s.reviewScroll} showsVerticalScrollIndicator={false}>
-        <Text style={s.reviewTitle}>Your first note</Text>
+        <Text style={s.reviewTitle}>Here’s what you said</Text>
 
         <View style={s.noteCard}>
           {!!preview.title && <Text style={s.noteCardTitle}>{preview.title}</Text>}
@@ -291,7 +291,7 @@ export default function VoiceOnboardingScreen() {
         <Text style={s.tidyPrompt}>Want Nueco to tidy this up?</Text>
 
         <TouchableOpacity style={s.tidyRow} onPress={() => setTidy('keep')} activeOpacity={0.8} testID="tidy-keep">
-          <Text style={[s.tidyLabel, tidy === 'keep' && s.tidyLabelOn]}>Keep it exactly as I said it</Text>
+          <Text style={[s.tidyLabel, tidy === 'keep' && s.tidyLabelOn]}>Leave it as I said it</Text>
           {tidy === 'keep' && <MaterialIcons name="check" size={20} color={C.primary} />}
         </TouchableOpacity>
 
@@ -303,7 +303,7 @@ export default function VoiceOnboardingScreen() {
 
       <View style={s.actions}>
         <TouchableOpacity style={s.cta} onPress={saveNote} disabled={saving} activeOpacity={0.85} testID="onboarding-save-note">
-          {saving ? <ActivityIndicator size="small" color={C.primaryFg} /> : <Text style={s.ctaText}>Save note</Text>}
+          {saving ? <ActivityIndicator size="small" color={C.primaryFg} /> : <Text style={s.ctaText}>Save</Text>}
         </TouchableOpacity>
       </View>
     </SafeAreaView>

@@ -61,7 +61,7 @@ export default function LoginScreen() {
       }
     } catch (error: any) {
       // Show error inline instead of Alert (Alert doesn't work on web)
-      const errorMessage = error.message || 'Invalid email or password. Please try again.';
+      const errorMessage = error.message || 'That email and password don’t match. Have another go.';
       if (errorMessage.includes('verify')) {
         setErrors({ general: 'Please verify your email before logging in. Check your inbox for the verification link.' });
       } else {
@@ -96,7 +96,7 @@ export default function LoginScreen() {
 
           {/* Title */}
           <View style={styles.titleSection}>
-            <Text style={styles.title}>Welcome Back</Text>
+            <Text style={styles.title}>Welcome back</Text>
             <Text style={styles.subtitle}>Log in to access your notes</Text>
           </View>
 
@@ -112,7 +112,7 @@ export default function LoginScreen() {
 
             {/* Email Input */}
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Email Address</Text>
+              <Text style={styles.label}>Email</Text>
               <View style={[styles.inputContainer, errors.email && styles.inputError]}>
                 <MaterialIcons name="email" size={24} color={C.borderSub} style={styles.inputIcon} />
                 <TextInput
@@ -174,7 +174,7 @@ export default function LoginScreen() {
             <View style={styles.signupLinkContainer}>
               <Text style={styles.signupText}>Don't have an account? </Text>
               <TouchableOpacity onPress={() => router.replace('/signup')}>
-                <Text style={styles.signupLink}>Sign Up</Text>
+                <Text style={styles.signupLink}>Sign up</Text>
               </TouchableOpacity>
             </View>
           </View>

@@ -50,7 +50,7 @@ export default function CalendarSyncSettingsScreen() {
       const cals = await getAllDeviceCalendars();
       setCalendars(cals);
       if (!cals.length) {
-        Alert.alert('Calendar', 'Calendar access is needed, or no calendars were found. You can enable access in Settings.');
+        Alert.alert('Nueco needs your calendar', 'To bring events in, turn calendars on in Settings.');
       }
     }
   }, []);
@@ -89,7 +89,7 @@ export default function CalendarSyncSettingsScreen() {
         <TouchableOpacity onPress={() => router.back()} style={s.backBtn}>
           <MaterialIcons name="arrow-back" size={28} color={C.textSec} />
         </TouchableOpacity>
-        <Text style={s.headerTitle}>Calendar Sync</Text>
+        <Text style={s.headerTitle}>Calendar</Text>
         <View style={{ width: 48 }} />
       </View>
 

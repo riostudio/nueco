@@ -551,6 +551,10 @@ const NoteBodyEditor = forwardRef<EditorApi, {
         scrollEnabled
         onMessage={handleWebviewMessage}
         exclusivelyUseCustomOnMessage={false}
+        // iOS only in effect, and load-bearing: WKWebView refuses to raise the soft keyboard for a
+        // focus() that didn't come from a real touch, so without this the cursor appears in the
+        // body and nothing to type with appears under it. Android raises the keyboard either way.
+        keyboardDisplayRequiresUserAction={false}
       />
     </View>
   );
@@ -635,6 +639,25 @@ export default function EditorScreen() {
   const editorApiRef = useRef<EditorApi | null>(null);
   // Drives the hidden on-device PDF text extractor mounted at the bottom of this screen.
   const pdfExtractorRef = useRef<PdfExtractorApi | null>(null);
+  // The extractor's WebView parses ~1.7MB of inlined PDF.js when it mounts. It used to mount with
+  // the editor, so every note anyone opened paid that cost whether or not a PDF was ever involved.
+  // Mounted on demand instead; the component already queues requests that arrive before it's ready.
+  const [pdfExtractorMounted, setPdfExtractorMounted] = useState(false);
+
+  // Mounts the PDF extractor on first use and waits for React to attach its ref. Polling rather
+  // than a state callback because the mount has to complete a render cycle before the imperative
+  // handle exists - there's nothing to await otherwise. Requests posted before the WebView reports
+  // ready are queued inside the component, so only the ref itself has to be waited on here.
+  const ensurePdfExtractor = useCallback(async (): Promise<PdfExtractorApi> => {
+    if (pdfExtractorRef.current) return pdfExtractorRef.current;
+    setPdfExtractorMounted(true);
+    const deadline = Date.now() + 5000;
+    while (!pdfExtractorRef.current) {
+      if (Date.now() > deadline) throw new Error('PDF reader did not start');
+      await new Promise(r => setTimeout(r, 30));
+    }
+    return pdfExtractorRef.current;
+  }, []);
   const [editorUi, setEditorUi] = useState<EditorUiState>({
     isFocused: false, isBoldActive: false, isItalicActive: false, isBulletListActive: false, isTaskListActive: false,
     isTableActive: false,
@@ -1415,7 +1438,7 @@ export default function EditorScreen() {
     // share" guard despite having real content to share. Check for embedded images too.
     const hasEmbeddedImage = /<img\b[^>]*\bsrc="data:image\//i.test(contentRef.current);
     if (!title && !plainContent && linkedEvents.length === 0 && !hasEmbeddedImage) {
-      Alert.alert('Nothing to Share', 'Please add a title or content to your note first.');
+      Alert.alert('Nothing to share yet', 'Please add a title or content to your note first.');
       return;
     }
 
@@ -1535,7 +1558,7 @@ export default function EditorScreen() {
       }
     } catch (error) {
       console.error('Share error:', error);
-      Alert.alert('Share Failed', 'Unable to share the note. Please try again.');
+      Alert.alert('Couldn’t share that note', 'Your note is unchanged.');
     }
   };
 
@@ -1558,7 +1581,7 @@ export default function EditorScreen() {
     // caption, or linked event would otherwise trip this despite having real content.
     const hasEmbeddedImage = /<img\b[^>]*\bsrc="data:image\//i.test(contentRef.current);
     if (!title && !plainContent && linkedEvents.length === 0 && !hasEmbeddedImage) {
-      Alert.alert('Nothing to Export', 'Please add a title or content to your note first.');
+      Alert.alert('Nothing to export yet', 'Please add a title or content to your note first.');
       return;
     }
 
@@ -1604,7 +1627,7 @@ export default function EditorScreen() {
       }
     } catch (error) {
       console.error('PDF export error:', error);
-      Alert.alert('Export Failed', 'Unable to export the note as a PDF. Please try again.');
+      Alert.alert('Couldn’t make the PDF', 'Your note is unchanged.');
     }
   };
 
@@ -1656,7 +1679,7 @@ export default function EditorScreen() {
       trackVoiceRecordingStarted();
     } catch (e) {
       console.error('Recording start failed:', e);
-      Alert.alert('Error', 'Could not start recording.');
+      Alert.alert('Couldn’t start recording', 'Have another go whenever.');
     }
   };
 
@@ -1679,7 +1702,7 @@ export default function EditorScreen() {
       
       if (!uri) {
         console.error('No recording URI available');
-        Alert.alert('Error', 'Recording failed. No audio file was created.');
+        Alert.alert('Nothing came through that time', 'Have another go whenever.');
         return;
       }
 
@@ -1742,7 +1765,7 @@ export default function EditorScreen() {
       if (!result.text.trim()) {
         setIsTranscribing(false);
         setTranscribedText('');
-        Alert.alert("Didn't catch that", 'We couldn’t hear anything that time. Tap the mic and try again.');
+        Alert.alert('Nothing came through that time', 'Have another go whenever.');
         return;
       }
 
@@ -1761,7 +1784,7 @@ export default function EditorScreen() {
       await appendToEditorStreamed(result.text);
     } catch (e) {
       console.error('Transcription failed:', e);
-      Alert.alert('Error', 'Voice transcription failed. Please try again.');
+      Alert.alert('Couldn’t turn that into words', 'Have another go whenever.');
       setIsTranscribing(false);
     }
   };
@@ -1802,7 +1825,7 @@ export default function EditorScreen() {
       setPreTidyContent(null);
     } catch (e) {
       console.error('Tidy failed:', e);
-      Alert.alert('Could not tidy', 'Your note is unchanged. Please try again.');
+      Alert.alert('Couldn’t tidy that one', 'Your note is exactly as you left it.');
     } finally {
       setIsProcessingText(false);
     }
@@ -1826,7 +1849,7 @@ export default function EditorScreen() {
       await appendToEditorStreamed(result.text);
     } catch (e) {
       console.error('Text processing failed:', e);
-      Alert.alert('Error', 'AI processing failed. Adding original text.');
+      Alert.alert('Couldn’t tidy that one', 'Your words went in as you said them.');
       // Fallback to original text
       insertTranscription(transcribedText);
       await appendToEditorStreamed(transcribedText);
@@ -1869,7 +1892,7 @@ export default function EditorScreen() {
     const asset = result.assets[0];
     const prepared = await prepareWrappedImage(asset.uri, asset.width, asset.height);
     if (!prepared) {
-      Alert.alert('Couldn’t add image', 'Please try again.');
+      Alert.alert('Couldn’t add that picture', 'Have another go.');
       return;
     }
     editorApiRef.current?.insertWrappedImage(prepared.dataUri, prepared.width, prepared.height);
@@ -2022,7 +2045,7 @@ export default function EditorScreen() {
       });
     } catch (e) {
       console.error('Open attachment failed:', e);
-      Alert.alert('Could not open', 'Unable to open this file right now. Please try again.');
+      Alert.alert('Couldn’t open that file', 'It’s still saved here.');
     } finally {
       // The downloaded ciphertext is never needed again once decrypted.
       if (cipherUri) {
@@ -2085,7 +2108,8 @@ export default function EditorScreen() {
           const base64 = await FileSystem.readAsStringAsync(asset.uri, {
             encoding: FileSystem.EncodingType.Base64,
           });
-          const text = await pdfExtractorRef.current?.extractText(base64);
+          const extractor = await ensurePdfExtractor();
+          const text = await extractor.extractText(base64);
           outcomes[index] = { name, text: text ?? '' };
         } catch (e: any) {
           console.error('PDF extraction failed:', name, e);
@@ -2140,7 +2164,7 @@ export default function EditorScreen() {
       }
     } catch (e) {
       console.error('PDF import failed:', e);
-      Alert.alert('Import failed', 'Could not import the selected PDF(s). Please try again.');
+      Alert.alert('Couldn’t read those PDFs', 'Your note is unchanged.');
     } finally {
       setIsImportingPdf(false);
       setPdfImportProgress({ done: 0, total: 0 });
@@ -2197,7 +2221,7 @@ export default function EditorScreen() {
               await clearLinkOnServer();
             } catch (e) {
               console.error('Unlink failed:', e);
-              Alert.alert('Error', 'Could not unlink the event. Please try again.');
+              Alert.alert('Couldn’t unlink that event', 'It’s still linked for now.');
               return;
             }
             setLinkedEventIds(remainingIds);
@@ -2218,7 +2242,7 @@ export default function EditorScreen() {
               await eventsApi.delete(event.id);
             } catch (e) {
               console.error('Delete event failed:', e);
-              Alert.alert('Error', 'Could not delete the event. Please try again.');
+              Alert.alert('Couldn’t delete that event', 'It’s still in your events.');
               return;
             }
             setLinkedEventIds(remainingIds);
@@ -2364,7 +2388,7 @@ export default function EditorScreen() {
     } catch (e) {
       console.error('Delete failed:', e);
       setDeletingNote(false);
-      Alert.alert('Error', 'Failed to delete note. Please try again.');
+      Alert.alert('Couldn’t delete that one', 'It’s still in your notes.');
       return; // Don't navigate away if delete failed
     }
     setDeletingNote(false);
@@ -2383,11 +2407,16 @@ export default function EditorScreen() {
   // fixed delay) since focus() posts a message into the WebView - firing before the webview/
   // editor bridge has mounted would silently drop it the same way setContent does (see
   // NoteBodyEditor's initialContent comment).
+  // Applies to an existing note too, so opening one is immediately typable rather than needing a
+  // tap into the body first. For an existing note this waits on `loading` as well: focusing before
+  // the body has seeded would put the cursor at the end of an empty document, and the content
+  // landing afterwards would move it.
   useEffect(() => {
-    if (!isNew || !editorUi.isReady) return;
+    if (!editorUi.isReady) return;
+    if (!isNew && loading) return;
     const t = setTimeout(() => editorApiRef.current?.focus(), 300);
     return () => clearTimeout(t);
-  }, [isNew, editorUi.isReady]);
+  }, [isNew, loading, editorUi.isReady]);
 
   // No full-screen loader: render the editor chrome immediately. The body seeds instantly from the
   // local copy (local-first in loadNote) and metadata fills in as it resolves - so the screen opens
@@ -2472,7 +2501,7 @@ export default function EditorScreen() {
               {showTagPicker && (
                 <View style={s.tagPicker}>
                   <View style={s.tagPickerHeader}>
-                    <Text style={s.tagPickerTitle}>Add Tag</Text>
+                    <Text style={s.tagPickerTitle}>Add tag</Text>
                     <TouchableOpacity
                       testID="close-tag-picker-btn"
                       onPress={() => setShowTagPicker(false)}
@@ -2595,7 +2624,7 @@ export default function EditorScreen() {
                   same in-box placement as Attachments above. */}
               {images.filter((_, i) => !(thumbInImages0 && i === 0)).length > 0 && (
                 <View style={s.imagesContainerInBox}>
-                  <Text style={s.imagesSectionTitle}>Attached Images</Text>
+                  <Text style={s.imagesSectionTitle}>Attached images</Text>
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.imagesScroll}>
                     {images.map((uri, index) => {
                       if (thumbInImages0 && index === 0) return null;
@@ -2636,7 +2665,7 @@ export default function EditorScreen() {
                 >
                   <View style={s.eventHeader}>
                     <MaterialIcons name="event" size={24} color={C.secondary} />
-                    <Text style={s.eventHeaderText}>Linked Event</Text>
+                    <Text style={s.eventHeaderText}>Linked event</Text>
                     <TouchableOpacity
                       testID={`remove-linked-event-btn-${ev.id}`}
                       onPress={() => handleRemoveLinkedEvent(ev.id)}
@@ -2852,23 +2881,23 @@ export default function EditorScreen() {
             >
               <TouchableOpacity testID="fmt-table-add-row" style={s.tableCtrlBtn} onPress={() => editorApiRef.current?.addRowAfter()}>
                 <MaterialIcons name="table-rows" size={20} color={C.text} />
-                <Text style={s.tableCtrlLabel}>Add Row</Text>
+                <Text style={s.tableCtrlLabel}>Add row</Text>
               </TouchableOpacity>
               <TouchableOpacity testID="fmt-table-add-col" style={s.tableCtrlBtn} onPress={() => editorApiRef.current?.addColumnAfter()}>
                 <MaterialIcons name="view-column" size={20} color={C.text} />
-                <Text style={s.tableCtrlLabel}>Add Col</Text>
+                <Text style={s.tableCtrlLabel}>Add column</Text>
               </TouchableOpacity>
               <TouchableOpacity testID="fmt-table-delete-row" style={s.tableCtrlBtn} onPress={() => editorApiRef.current?.deleteRow()}>
                 <MaterialIcons name="table-rows" size={20} color={C.error} />
-                <Text style={[s.tableCtrlLabel, { color: C.error }]}>Del Row</Text>
+                <Text style={[s.tableCtrlLabel, { color: C.error }]}>Delete row</Text>
               </TouchableOpacity>
               <TouchableOpacity testID="fmt-table-delete-col" style={s.tableCtrlBtn} onPress={() => editorApiRef.current?.deleteColumn()}>
                 <MaterialIcons name="view-column" size={20} color={C.error} />
-                <Text style={[s.tableCtrlLabel, { color: C.error }]}>Del Col</Text>
+                <Text style={[s.tableCtrlLabel, { color: C.error }]}>Delete column</Text>
               </TouchableOpacity>
               <TouchableOpacity testID="fmt-table-delete" style={s.tableCtrlBtn} onPress={() => editorApiRef.current?.deleteTable()}>
                 <MaterialIcons name="delete-outline" size={20} color={C.error} />
-                <Text style={[s.tableCtrlLabel, { color: C.error }]}>Delete Table</Text>
+                <Text style={[s.tableCtrlLabel, { color: C.error }]}>Delete table</Text>
               </TouchableOpacity>
             </ScrollView>
           )}
@@ -2960,7 +2989,7 @@ export default function EditorScreen() {
             {isTranscribing ? (
               <View style={s.transcribing}>
                 <ActivityIndicator size="small" color={C.primary} />
-                <Text style={s.transcribingText}>Converting speech to text...</Text>
+                <Text style={s.transcribingText}>Turning that into words</Text>
               </View>
             ) : isRecording ? (
               // While recording, the live waveform replaces the static button label: it responds
@@ -2972,7 +3001,7 @@ export default function EditorScreen() {
                   variant="cta"
                   tone="danger"
                   icon="stop"
-                  label="Stop Recording"
+                  label="Stop"
                   onPress={stopRecording}
                 />
               </View>
@@ -2982,7 +3011,7 @@ export default function EditorScreen() {
                 variant="cta"
                 tone={isRecording ? 'danger' : 'default'}
                 icon={isRecording ? 'stop' : 'mic'}
-                label={isRecording ? 'Stop Recording' : 'Voice Input'}
+                label={isRecording ? 'Stop' : 'Press to talk'}
                 onPress={isRecording ? stopRecording : startRecording}
               />
             )}
@@ -3011,7 +3040,7 @@ export default function EditorScreen() {
         <View style={s.processingOverlay}>
           <View style={s.processingCard}>
             <ActivityIndicator size="large" color={C.primary} />
-            <Text style={s.processingText}>AI is processing your text...</Text>
+            <Text style={s.processingText}>Tidying that up</Text>
           </View>
         </View>
       )}
@@ -3104,11 +3133,11 @@ export default function EditorScreen() {
           <Animated.View style={{ transform: [{ translateY: imagePickerTranslateY }] }}>
             <TouchableOpacity activeOpacity={1} style={s.imagePickerCard}>
               <View style={s.sheetHandle} />
-              <Text style={s.imagePickerTitle}>Add Image</Text>
+              <Text style={s.imagePickerTitle}>Add image</Text>
 
               <TouchableOpacity style={s.imagePickerOption} onPress={() => pickWrappedImage('camera')}>
                 <MaterialIcons name="camera-alt" size={28} color={C.primary} />
-                <Text style={s.imagePickerOptionText}>Take Photo</Text>
+                <Text style={s.imagePickerOptionText}>Take photo</Text>
               </TouchableOpacity>
 
               <TouchableOpacity style={s.imagePickerOption} onPress={() => pickWrappedImage('gallery')}>
@@ -3198,7 +3227,7 @@ export default function EditorScreen() {
         <View style={s.modalOverlay}>
           <View style={s.deleteModalContent}>
             <MaterialIcons name="delete" size={48} color={C.error} style={{ marginBottom: 16 }} />
-            <Text style={s.deleteModalTitle}>Delete Note?</Text>
+            <Text style={s.deleteModalTitle}>Delete this note?</Text>
             <Text style={s.deleteModalMessage}>
               Are you sure you want to delete "{title || 'this note'}"? This action cannot be undone.
             </Text>
@@ -3269,7 +3298,7 @@ export default function EditorScreen() {
       {/* Headless, zero-sized: parses imported PDFs on-device (see its own file for why a WebView).
           Mounted unconditionally so PDF.js is already parsed and ready by the time the user taps
           Import PDF, rather than paying that startup cost inside the import itself. */}
-      <PdfExtractorWebView ref={pdfExtractorRef} />
+      {pdfExtractorMounted && <PdfExtractorWebView ref={pdfExtractorRef} />}
     </SafeAreaView>
   );
 }

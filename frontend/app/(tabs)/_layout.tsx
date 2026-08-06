@@ -167,6 +167,14 @@ export default function TabLayout() {
       <Tabs
         screenOptions={{
           headerShown: false,
+          // Calendar and Events don't mount until first visited. Previously all three tab screens
+          // mounted during the very first render of the app, so opening to Notes also paid for
+          // building a month grid and an events list nobody had asked to see yet.
+          lazy: true,
+          // Stop rendering a tab once it's off screen. All three stay mounted after first visit
+          // (that's what keeps switching instant), but without this they keep re-rendering in the
+          // background on every state change in a shared store - work whose result nobody sees.
+          freezeOnBlur: true,
           // Lift the tab bar above the Android system navigation bar. An explicit height disables
           // react-navigation's automatic safe-area handling, so add the bottom inset ourselves.
           tabBarStyle: [styles.tabBar, { height: 80 + insets.bottom, paddingBottom: 16 + insets.bottom }],

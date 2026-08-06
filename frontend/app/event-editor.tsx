@@ -11,7 +11,7 @@ import { eventsApi, notesApi } from '../src/api';
 import { decryptEventFromServer } from '../src/crypto/eventCrypto';
 import { createEventOffline, updateEventOffline, deleteEventOffline, getLocalEvents, setLocalEventNotificationId, processSyncQueue } from '../src/offlineSync';
 import { bumpDeviceCalendarSync } from '../src/deviceCalendarSync';
-import { nextOccurrenceOnOrAfter } from '../src/recurrence';
+import { nextOccurrenceOnOrAfter, parseDateOnlyLocal } from '../src/recurrence';
 import { reminderSoundConfig } from '../src/reminderVoice';
 import { setPendingLinkedEventIds } from '../src/pendingLinkedEvents';
 import { C, radius, borderWidth } from '../src/theme';
@@ -86,6 +86,18 @@ const RECURRENCE_OPTIONS: { label: string; value: RecurrenceFreqOption }[] = [
 function pad2(n: number): string { return n.toString().padStart(2, '0'); }
 function toDateString(d: Date): string { return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; }
 function toTimeString(d: Date): string { return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; }
+// Local calendar date as "YYYY-MM-DD". Deliberately not toISOString().slice(0,10), which converts
+// to UTC first and lands on the wrong day for anyone east of Greenwich after mid-afternoon.
+function toDateOnly(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function nextDay(d: Date): Date {
+  const n = new Date(d);
+  n.setDate(n.getDate() + 1);
+  return n;
+}
+
 function formatDisplayDate(d: Date): string { return `${MONTH_NAMES[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`; }
 function formatDisplayTime(d: Date): string {
   const h = d.getHours();
@@ -184,6 +196,10 @@ export default function EventEditorScreen() {
     date?: string;
     noteId?: string;
     noteTitle?: string;
+    /** Which field the detail view wants opened - see app/event.tsx. */
+    focus?: string;
+    /** 'detail' when pushed from app/event.tsx, so Back returns there instead of the tab. */
+    from?: string;
   }>();
 
   const isEditing = !!params.eventId;
@@ -201,6 +217,12 @@ export default function EventEditorScreen() {
   const [saveStatus, setSaveStatus] = useState('');
   const [showSuccessOverlay, setShowSuccessOverlay] = useState(false);
   const [addToDeviceCal, setAddToDeviceCal] = useState(true);
+  // All-day was previously unreachable from this screen: the flag existed on the type and the
+  // lists rendered it, but nothing here could set it, and buildEventData never sent it. An all-day
+  // event imported from the device calendar therefore lost its flag on the first autosave.
+  const [allDay, setAllDay] = useState(false);
+  const allDayRef = useRef(false);
+  useEffect(() => { allDayRef.current = allDay; }, [allDay]);
   const [reminderMinutes, setReminderMinutes] = useState<ReminderMinutes | null>(15);
   const [deviceCalendarEventId, setDeviceCalendarEventId] = useState<string | null>(null);
   const [localNotificationId, setLocalNotificationId] = useState<string | null>(null);
@@ -208,6 +230,47 @@ export default function EventEditorScreen() {
   const [recurrenceDays, setRecurrenceDays] = useState<number[]>([]);
   const [recurrenceUntil, setRecurrenceUntil] = useState<Date | null>(null);
   const [showReminderPicker, setShowReminderPicker] = useState(false);
+
+  // --- deep-link focus (app/event.tsx taps a single row) ---
+  // Section offsets are captured on layout rather than guessed: the form's height varies with
+  // platform pickers, all-day state and whether recurrence is expanded, so any hard-coded scroll
+  // position would be wrong on most devices.
+  const scrollRef = useRef<ScrollView>(null);
+  const sectionY = useRef<Record<string, number>>({});
+  const titleInputRef = useRef<TextInput>(null);
+  const locationInputRef = useRef<TextInput>(null);
+  const descriptionInputRef = useRef<TextInput>(null);
+  const didFocusRef = useRef(false);
+
+  const captureSection = useCallback((key: string) => (e: any) => {
+    sectionY.current[key] = e?.nativeEvent?.layout?.y ?? 0;
+  }, []);
+
+  // Runs once, after the event has loaded and laid out. Waiting on `loading` matters: scrolling
+  // before the form has its real height lands somewhere arbitrary, and focusing an input whose
+  // value hasn't arrived yet puts the caret in an empty field that then fills underneath it.
+  useEffect(() => {
+    const focus = params.focus;
+    if (!focus || loading || didFocusRef.current) return;
+    didFocusRef.current = true;
+    const t = setTimeout(() => {
+      const y = sectionY.current[focus];
+      if (typeof y === 'number') {
+        // -12 so the section's label isn't flush against the top edge.
+        scrollRef.current?.scrollTo({ y: Math.max(0, y - 12), animated: true });
+      }
+      switch (focus) {
+        case 'title': titleInputRef.current?.focus(); break;
+        case 'location': locationInputRef.current?.focus(); break;
+        case 'description': descriptionInputRef.current?.focus(); break;
+        // Pickers open themselves - scrolling to a closed picker would leave the user to work out
+        // that they still have to tap it.
+        case 'reminder': setShowReminderPicker(true); break;
+        default: break;
+      }
+    }, 350);
+    return () => clearTimeout(t);
+  }, [params.focus, loading]);
   const [showRecurrencePicker, setShowRecurrencePicker] = useState(false);
   const [showRecurrenceUntilPicker, setShowRecurrenceUntilPicker] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -333,7 +396,7 @@ export default function EventEditorScreen() {
       setLocation(formatted);
     } catch (e) {
       console.error('Failed to get current location:', e);
-      Alert.alert('Location', 'Could not get your current location. Please try again.');
+      Alert.alert('Couldn’t find your location', 'You can type the address instead.');
     } finally {
       setFetchingLocation(false);
     }
@@ -354,8 +417,12 @@ export default function EventEditorScreen() {
       setTitle(event.title);
       setDescription(event.description);
       setLocation(event.location || '');
-      const start = new Date(event.start_time);
-      const end = new Date(event.end_time);
+      const isAllDay = !!event.all_day;
+      setAllDay(isAllDay);
+      // An all-day event's times are date-only "YYYY-MM-DD", which `new Date()` reads as UTC
+      // midnight and can shift a day backwards in local time.
+      const start = isAllDay ? parseDateOnlyLocal(event.start_time) : new Date(event.start_time);
+      const end = isAllDay ? parseDateOnlyLocal(event.end_time) : new Date(event.end_time);
       setDate(start);
       setEndDate(end);
       setStartTime(start);
@@ -448,7 +515,7 @@ export default function EventEditorScreen() {
       }
       if (status !== 'granted') {
         setShowImportPicker(false);
-        Alert.alert('Calendar', 'Calendar access is needed to import events. You can enable access in Settings.');
+        Alert.alert('Nueco needs your calendar', 'To bring events in, turn calendars on in Settings.');
         return;
       }
       const allCals = await ExpoCalendar.getCalendarsAsync(ExpoCalendar.EntityTypes.EVENT);
@@ -472,7 +539,7 @@ export default function EventEditorScreen() {
       setImportEvents(mapped);
     } catch (e) {
       console.error('Failed to load device events:', e);
-      Alert.alert('Calendar', 'Could not load calendar events.');
+      Alert.alert('Couldn’t load your calendar', 'Have another go in a moment.');
     } finally {
       setImportLoading(false);
     }
@@ -509,7 +576,7 @@ export default function EventEditorScreen() {
     try {
       const cals = await loadCalendars({ prompt: true });
       if (!cals.length) {
-        Alert.alert('Calendar', 'Calendar access is needed, or no writable calendar was found. You can enable access in Settings.');
+        Alert.alert('Nueco needs your calendar', 'To add events, turn calendars on in Settings.');
         return null;
       }
 
@@ -714,8 +781,12 @@ export default function EventEditorScreen() {
       title: titleRef.current.trim(),
       description: descriptionRef.current.trim(),
       location: locationRef.current.trim(),
-      start_time: st.toISOString(),
-      end_time: et.toISOString(),
+      // All-day events carry a calendar DATE, never an instant - sending an ISO timestamp would
+      // make them shift with the reader's timezone. End is the exclusive next day, matching how
+      // device calendars and recurrence.ts's eventOccursOnDay already read the pair.
+      all_day: allDayRef.current,
+      start_time: allDayRef.current ? toDateOnly(st) : st.toISOString(),
+      end_time: allDayRef.current ? toDateOnly(nextDay(st)) : et.toISOString(),
       // Only set on create, when the event is first being linked to the note it was opened
       // from. Omitted (not sent as []) on update, so the backend's exclude_unset preserves
       // whatever's already there - this field previously got resent unconditionally on every
@@ -899,12 +970,16 @@ export default function EventEditorScreen() {
       }
     }
 
-    if (params.noteId) {
+    // `replace` is right when this screen was pushed from the Events tab FAB - it stops Back
+    // returning to a half-built new event. It is wrong when the detail view pushed us here to
+    // edit one field: replacing pops the detail screen off the stack and strands the user on the
+    // Events tab, having lost the event they were reading.
+    if (params.noteId || params.from === 'detail') {
       router.back();
     } else {
       router.replace('/(tabs)/events');
     }
-  }, [params.noteId, router, addToDeviceCal, withSaveLock]);
+  }, [params.noteId, params.from, router, addToDeviceCal, withSaveLock]);
 
   // ---- Delete ----
 
@@ -986,7 +1061,7 @@ export default function EventEditorScreen() {
           </View>
         ) : null}
 
-        <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent} keyboardShouldPersistTaps="handled">
+        <ScrollView ref={scrollRef} style={s.scroll} contentContainerStyle={s.scrollContent} keyboardShouldPersistTaps="handled">
 
           {/* Import from device calendar (new events only) */}
           {!isEditing && !isWeb && (
@@ -998,9 +1073,11 @@ export default function EventEditorScreen() {
           )}
 
           {/* Title */}
-          <Text style={s.label}>Event Title</Text>
+          <Text style={s.label}>Event title</Text>
+          <View onLayout={captureSection('title')} />
           <TextInput
             testID="event-title-input"
+            ref={titleInputRef}
             style={s.input}
             placeholder="Enter event title..."
             placeholderTextColor={C.borderSub}
@@ -1009,7 +1086,20 @@ export default function EventEditorScreen() {
           />
 
           {/* Start Date */}
-          <Text style={s.label}>Start Date</Text>
+          <View onLayout={captureSection('date')} />
+          <View style={s.allDayRow}>
+            <MaterialIcons name="event-available" size={24} color={C.secondary} />
+            <Text style={s.allDayLabel}>All day</Text>
+            <Switch
+              testID="all-day-toggle"
+              value={allDay}
+              onValueChange={(v) => { setAllDay(v); triggerAutoSave(); }}
+              trackColor={{ false: C.borderSub, true: C.primary + '80' }}
+              thumbColor={allDay ? C.primary : '#f4f3f4'}
+            />
+          </View>
+
+          <Text style={s.label}>Start date</Text>
           {isWeb && <NativeDateInput testID="native-date-input" value={date} onChange={handleStartDateChange} />}
           {isIOS && DateTimePicker && (
             <>
@@ -1023,7 +1113,7 @@ export default function EventEditorScreen() {
                   <View style={s.pickerModalOverlay}>
                     <View style={s.pickerModalContent}>
                       <View style={s.pickerModalHeader}>
-                        <Text style={s.pickerModalTitle}>Select Start Date</Text>
+                        <Text style={s.pickerModalTitle}>Select start date</Text>
                         <TouchableOpacity onPress={() => setShowDatePicker(false)}>
                           <Text style={s.pickerModalDone}>Done</Text>
                         </TouchableOpacity>
@@ -1049,7 +1139,8 @@ export default function EventEditorScreen() {
           )}
 
           {/* End Date */}
-          <Text style={s.label}>End Date</Text>
+          {!allDay && (<>
+          <Text style={s.label}>End date</Text>
           {isWeb && (
             <NativeDateInput
               testID="native-end-date-input"
@@ -1069,7 +1160,7 @@ export default function EventEditorScreen() {
                   <View style={s.pickerModalOverlay}>
                     <View style={s.pickerModalContent}>
                       <View style={s.pickerModalHeader}>
-                        <Text style={s.pickerModalTitle}>Select End Date</Text>
+                        <Text style={s.pickerModalTitle}>Select end date</Text>
                         <TouchableOpacity onPress={() => setShowEndDatePicker(false)}>
                           <Text style={s.pickerModalDone}>Done</Text>
                         </TouchableOpacity>
@@ -1095,7 +1186,10 @@ export default function EventEditorScreen() {
           )}
 
           {/* Start Time */}
-          <Text style={s.label}>Start Time</Text>
+          </>)}
+
+          {!allDay && (<>
+          <Text style={s.label}>Start time</Text>
           {isWeb && <NativeTimeInput testID="native-start-time" value={startTime} onChange={(d) => { setStartTime(d); setEndTime(addOneHour(d)); }} />}
           {isIOS && DateTimePicker && (
             <>
@@ -1109,7 +1203,7 @@ export default function EventEditorScreen() {
                   <View style={s.pickerModalOverlay}>
                     <View style={s.pickerModalContent}>
                       <View style={s.pickerModalHeader}>
-                        <Text style={s.pickerModalTitle}>Select Start Time</Text>
+                        <Text style={s.pickerModalTitle}>Select start time</Text>
                         <TouchableOpacity onPress={() => setShowStartPicker(false)}>
                           <Text style={s.pickerModalDone}>Done</Text>
                         </TouchableOpacity>
@@ -1151,7 +1245,7 @@ export default function EventEditorScreen() {
           )}
 
           {/* End Time */}
-          <Text style={s.label}>End Time</Text>
+          <Text style={s.label}>End time</Text>
           {isWeb && <NativeTimeInput testID="native-end-time" value={endTime} onChange={setEndTime} />}
           {isIOS && DateTimePicker && (
             <>
@@ -1165,7 +1259,7 @@ export default function EventEditorScreen() {
                   <View style={s.pickerModalOverlay}>
                     <View style={s.pickerModalContent}>
                       <View style={s.pickerModalHeader}>
-                        <Text style={s.pickerModalTitle}>Select End Time</Text>
+                        <Text style={s.pickerModalTitle}>Select end time</Text>
                         <TouchableOpacity onPress={() => setShowEndPicker(false)}>
                           <Text style={s.pickerModalDone}>Done</Text>
                         </TouchableOpacity>
@@ -1190,12 +1284,16 @@ export default function EventEditorScreen() {
             </>
           )}
 
+          </>)}
+
           {/* Location */}
+          <View onLayout={captureSection('location')} />
           <Text style={s.label}>Location</Text>
           <View style={s.pickerBtn}>
             <MaterialIcons name="place" size={24} color={C.secondary} />
             <TextInput
               testID="event-location-input"
+              ref={locationInputRef}
               style={s.locationInput}
               placeholder="Add a location..."
               placeholderTextColor={C.borderSub}
@@ -1219,12 +1317,14 @@ export default function EventEditorScreen() {
           </View>
 
           {/* Description */}
+          <View onLayout={captureSection('description')} />
           <Text style={s.label}>Description</Text>
           <TextInput
             testID="event-desc-input"
             style={s.descInput}
             placeholder="Add a description..."
             placeholderTextColor={C.borderSub}
+            ref={descriptionInputRef}
             value={description}
             onChangeText={setDescription}
             multiline
@@ -1266,6 +1366,7 @@ export default function EventEditorScreen() {
           )}
 
           {/* Reminder */}
+          <View onLayout={captureSection('reminder')} />
           <Text style={s.label}>Reminder</Text>
           <TouchableOpacity testID="reminder-picker-btn" style={s.pickerBtn} onPress={() => setShowReminderPicker(true)}>
             <MaterialIcons name="notifications" size={24} color={C.secondary} />
@@ -1276,7 +1377,7 @@ export default function EventEditorScreen() {
           <Modal testID="reminder-modal" visible={showReminderPicker} transparent animationType="fade" onRequestClose={() => setShowReminderPicker(false)}>
             <TouchableOpacity style={s.modalOverlay} activeOpacity={1} onPress={() => setShowReminderPicker(false)}>
               <View style={s.reminderModal}>
-                <Text style={s.reminderModalTitle}>Set Reminder</Text>
+                <Text style={s.reminderModalTitle}>Set reminder</Text>
                 {REMINDER_OPTIONS.map((option) => (
                   <TouchableOpacity
                     key={option.label}
@@ -1293,6 +1394,7 @@ export default function EventEditorScreen() {
           </Modal>
 
           {/* Repeat */}
+          <View onLayout={captureSection('recurrence')} />
           <Text style={s.label}>Repeat</Text>
           <TouchableOpacity testID="recurrence-picker-btn" style={s.pickerBtn} onPress={() => setShowRecurrencePicker(true)}>
             <MaterialIcons name="event-repeat" size={24} color={C.secondary} />
@@ -1356,7 +1458,7 @@ export default function EventEditorScreen() {
                   <View style={s.pickerModalOverlay}>
                     <View style={s.pickerModalContent}>
                       <View style={s.pickerModalHeader}>
-                        <Text style={s.pickerModalTitle}>Select End Date</Text>
+                        <Text style={s.pickerModalTitle}>Select end date</Text>
                         <TouchableOpacity onPress={() => setShowRecurrenceUntilPicker(false)}>
                           <Text style={s.pickerModalDone}>Done</Text>
                         </TouchableOpacity>
@@ -1418,7 +1520,7 @@ export default function EventEditorScreen() {
           <Modal testID="calendar-modal" visible={showCalendarPicker} transparent animationType="fade" onRequestClose={() => setShowCalendarPicker(false)}>
             <TouchableOpacity style={s.modalOverlay} activeOpacity={1} onPress={() => setShowCalendarPicker(false)}>
               <View style={s.reminderModal}>
-                <Text style={s.reminderModalTitle}>Choose Calendar</Text>
+                <Text style={s.reminderModalTitle}>Choose calendar</Text>
                 <TouchableOpacity style={[s.reminderOption, !preferredCalendarId && s.reminderOptionSelected]} onPress={() => selectCalendar(null)}>
                   <MaterialIcons name="event" size={22} color={!preferredCalendarId ? C.primaryFg : C.textSec} />
                   <Text style={[s.reminderOptionText, !preferredCalendarId && s.reminderOptionTextSelected]}>Default calendar</Text>
@@ -1526,7 +1628,7 @@ export default function EventEditorScreen() {
         <View style={s.modalOverlay}>
           <View style={s.modalContent}>
             <MaterialIcons name="delete" size={48} color={C.error} style={{ marginBottom: 16 }} />
-            <Text style={s.modalTitle}>Delete Event?</Text>
+            <Text style={s.modalTitle}>Delete this event?</Text>
             <Text style={s.modalMessage}>Are you sure you want to delete "{title || 'this event'}"? This action cannot be undone.</Text>
             <View style={s.modalButtons}>
               <TouchableOpacity style={s.modalCancelBtn} onPress={() => setDeleteModalVisible(false)} activeOpacity={0.7}>
@@ -1545,7 +1647,7 @@ export default function EventEditorScreen() {
         <View style={s.successOverlay}>
           <View style={s.successContent}>
             <MaterialIcons name="check-circle" size={64} color="#4CAF50" />
-            <Text style={s.successText}>{isEditing ? 'Event Updated!' : 'Event Created!'}</Text>
+            <Text style={s.successText}>Saved.</Text>
           </View>
         </View>
       </Modal>
@@ -1564,6 +1666,11 @@ const s = StyleSheet.create({
   statusText: { fontSize: 14, marginLeft: 6 },
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 24, paddingTop: 24 },
+  allDayRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingVertical: 12, marginTop: 8,
+  },
+  allDayLabel: { flex: 1, fontSize: 17, color: C.text, fontWeight: '500' },
   label: { fontSize: 18, fontWeight: '600', color: C.textSec, marginBottom: 8, marginTop: 20 },
   input: { height: 56, borderWidth: 1, borderColor: C.border, borderRadius: 12, paddingHorizontal: 16, fontSize: 20, color: C.text, backgroundColor: C.surface },
   pickerContainer: { backgroundColor: C.surface, borderRadius: 12, borderWidth: 1, borderColor: C.border, overflow: 'hidden' },

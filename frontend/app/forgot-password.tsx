@@ -59,7 +59,7 @@ export default function ForgotPasswordScreen() {
           <View style={styles.successIcon}>
             <MaterialIcons name="email" size={64} color={C.success} />
           </View>
-          <Text style={styles.successTitle}>Check Your Email</Text>
+          <Text style={styles.successTitle}>Check your email</Text>
           <Text style={styles.successMessage}>
             If an account exists with {email}, you'll receive a password reset link shortly.
           </Text>
@@ -112,7 +112,7 @@ export default function ForgotPasswordScreen() {
           <View style={styles.form}>
             {/* Email Input */}
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Email Address</Text>
+              <Text style={styles.label}>Email</Text>
               <View style={[styles.inputContainer, error && styles.inputError]}>
                 <MaterialIcons name="email" size={24} color={C.borderSub} style={styles.inputIcon} />
                 <TextInput

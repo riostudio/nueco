@@ -112,7 +112,7 @@ export function UserAvatar({ size = 40 }: UserAvatarProps) {
 
             <TouchableOpacity style={styles.menuItem} onPress={handleCalendarSync}>
               <MaterialIcons name="sync" size={24} color={C.text} />
-              <Text style={styles.menuText}>Calendar Sync</Text>
+              <Text style={styles.menuText}>Calendar</Text>
             </TouchableOpacity>
 
             {dailyBrewEnabled && (
@@ -128,12 +128,12 @@ export function UserAvatar({ size = 40 }: UserAvatarProps) {
 
             <TouchableOpacity style={styles.menuItem} onPress={handleChangePassword}>
               <MaterialIcons name="lock" size={24} color={C.text} />
-              <Text style={styles.menuText}>Change Password</Text>
+              <Text style={styles.menuText}>Change password</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.menuItem} onPress={handleLogout}>
               <MaterialIcons name="logout" size={24} color={C.primary} />
-              <Text style={[styles.menuText, { color: C.primary }]}>Log Out</Text>
+              <Text style={[styles.menuText, { color: C.primary }]}>Log out</Text>
             </TouchableOpacity>
           </View>
         </Pressable>

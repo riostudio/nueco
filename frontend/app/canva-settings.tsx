@@ -57,11 +57,11 @@ export default function CanvaSettingsScreen() {
       // type is 'cancel'/'dismiss' (user backed out) or the callback reported an error either
       // way - no alert on a plain cancel, since that's just the user changing their mind.
       if (result.type === 'success') {
-        Alert.alert('Connection failed', 'Canva did not confirm the connection. Please try again.');
+        Alert.alert('Canva didn’t confirm the connection', 'Have another go whenever.');
       }
     } catch (e) {
       console.error('Canva connect failed:', e);
-      Alert.alert('Connection failed', 'Could not connect to Canva. Please try again.');
+      Alert.alert('Couldn’t connect to Canva', 'Have another go whenever.');
     } finally {
       setConnecting(false);
     }
@@ -80,7 +80,7 @@ export default function CanvaSettingsScreen() {
             setConnectedAt(null);
           } catch (e) {
             console.error('Canva disconnect failed:', e);
-            Alert.alert('Error', 'Could not disconnect. Please try again.');
+            Alert.alert('Couldn’t disconnect Canva', 'Still connected for now.');
           }
         },
       },

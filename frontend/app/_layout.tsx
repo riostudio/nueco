@@ -7,7 +7,7 @@ import '../src/crypto/kdf-native';
 // headless launch that never reaches the (tabs) layout.
 import '../src/calendarSyncTask';
 import React, { useEffect } from 'react';
-import { Stack, useRouter } from 'expo-router';
+import { Stack, useRouter, type Href } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
@@ -26,7 +26,7 @@ function AppWithAnalytics() {
   useEffect(() => {
     setupNotificationHandler();
     const unsubscribe = setupNotificationTapHandler((eventId) => {
-      router.push({ pathname: '/event-editor', params: { eventId } });
+      router.push(`/event?eventId=${eventId}` as Href);
     });
     return unsubscribe;
   }, [router]);
