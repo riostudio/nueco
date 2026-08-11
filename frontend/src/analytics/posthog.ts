@@ -128,7 +128,23 @@ interface NoteCreatedProperties {
   has_scheduled_event: boolean;
   has_image_attached: boolean;
   is_shared: boolean;
+  // How the note's content actually got there. Without this, note_created fires identically
+  // whether someone typed or dictated, so "did onboarding succeed in getting a first note
+  // captured BY VOICE" is unanswerable - which is the single thing the voice-first onboarding
+  // exists to move.
+  source?: 'voice' | 'typed';
 }
+
+/** Onboarding funnel steps, in order. Each fires once as the user reaches that screen. */
+export type OnboardingStep = 'started' | 'permission_granted' | 'permission_denied' | 'recorded' | 'note_saved' | 'skipped' | 'completed';
+
+export const trackOnboardingStep = (step: OnboardingStep) => {
+  if (!posthogInstance) return;
+  posthogInstance.capture('onboarding_step', {
+    step,
+    timestamp: new Date().toISOString(),
+  });
+};
 
 export const trackNoteCreated = (properties: NoteCreatedProperties) => {
   if (!posthogInstance) return;

@@ -1,0 +1,10 @@
+[
+  "accounts/service.py::push_receipts.delete_many",
+  "events/service.py::events.find",
+  "reminders/service.py::events.find_one_and_update",
+  "reminders/service.py::events.update_many",
+  "reminders/service.py::events.update_one",
+  "reminders/service.py::push_receipts.find",
+  "reminders/service.py::push_receipts.update_one",
+  "reminders/service.py::push_tokens.update_one"
+]

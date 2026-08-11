@@ -3,8 +3,12 @@ import { authStorage } from './auth/storage/authStorage';
 import { BACKEND_API_BASE_URL, BACKEND_BASE_URL } from './backendBaseUrl';
 import { decryptAccountFromServer } from './crypto/accountCrypto';
 import { decryptEventsFromServer } from './crypto/eventCrypto';
+import { loadDek } from './crypto/keystore';
+import { encryptFileToTemp } from './crypto/attachmentCrypto';
+import { encryptedSizeFor } from './crypto/attachmentCryptoCore';
 import type { CalendarEvent, VoiceIntentResult } from './types';
 import type { NewsItem } from './dailyBrew/dailyBrew';
+import { collectPages, type PagedPull } from './pagedPullCore';
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const accessToken = await authStorage.getAccessToken();
@@ -65,18 +69,36 @@ async function doRefreshAccessToken(): Promise<boolean> {
   }
 }
 
+// A hung fetch (e.g. a mobile connection whose TCP stream stalls while the OS still reports
+// "online") used to hang forever - no timeout anywhere in this file. That's not just a slow
+// request: offlineSync.ts's processSyncQueue() guards itself with a bare `_isSyncing` boolean
+// with no watchdog, so ONE stuck request here silently disabled every future sync (including
+// the exit-time push in editor.tsx's handleBack) for the rest of the app session, no error
+// surfaced anywhere - `_isSyncing` just never got reset. 30s is generous for a slow connection
+// pushing an image-heavy note; short enough that a genuinely stuck request eventually fails and
+// lets the sync queue retry normally instead of wedging indefinitely.
+const FETCH_TIMEOUT_MS = 30_000;
+
 async function fetchApi(path: string, options?: RequestInit, retryCount: number = 0) {
   const url = `${BACKEND_API_BASE_URL}${path}`;
   const authHeaders = await getAuthHeaders();
-  const res = await fetch(url, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...authHeaders,
-      ...(options?.headers || {}),
-    },
-  });
-  
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...authHeaders,
+        ...(options?.headers || {}),
+      },
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
   // Handle 401 Unauthorized - try to refresh token
   if (res.status === 401 && retryCount < 1) {
     console.log('Got 401, attempting token refresh...');
@@ -96,9 +118,28 @@ async function fetchApi(path: string, options?: RequestInit, retryCount: number 
   return res.json();
 }
 
+// ---- Paged collection pulls ----
+
+// One page per request stays exactly as large as the single response used to be - each endpoint's
+// page size here is its own server-side default. Only the number of requests changes, which
+// matters because a note's `images` are inline base64: a bigger page is a bigger peak payload.
+const NOTES_PAGE_SIZE = 50;
+const EVENTS_PAGE_SIZE = 100;
+const TRIPS_PAGE_SIZE = 200;
+
+function fetchAllPages<T>(path: string, pageSize: number): Promise<PagedPull<T>> {
+  const separator = path.includes('?') ? '&' : '?';
+  return collectPages<T>(
+    (page, size) => fetchApi(`${path}${separator}page=${page}&page_size=${size}`),
+    pageSize,
+  );
+}
+
 export const notesApi = {
-  // Search is client-side (notes are E2EE ciphertext server-side); always fetch all.
-  getAll: () => fetchApi('/notes'),
+  // Search is client-side (notes are E2EE ciphertext server-side), so the app genuinely needs
+  // every note rather than the first page - hence paging rather than a single request.
+  getAllPaged: (): Promise<PagedPull<any>> => fetchAllPages('/notes', NOTES_PAGE_SIZE),
+  getAll: async (): Promise<any[]> => (await notesApi.getAllPaged()).items,
   get: (id: string) => fetchApi(`/notes/${id}`),
   create: (data: any) =>
     fetchApi('/notes', { method: 'POST', body: JSON.stringify(data) }),
@@ -124,10 +165,13 @@ function monthEventsCacheKey(month: number, year: number): string {
 }
 
 export const eventsApi = {
-  getAll: (month?: number, year?: number) =>
-    fetchApi(
-      month && year ? `/events?month=${month}&year=${year}` : '/events'
+  getAllPaged: (month?: number, year?: number): Promise<PagedPull<any>> =>
+    fetchAllPages(
+      month && year ? `/events?month=${month}&year=${year}` : '/events',
+      EVENTS_PAGE_SIZE,
     ),
+  getAll: async (month?: number, year?: number): Promise<any[]> =>
+    (await eventsApi.getAllPaged(month, year)).items,
   // Decrypted + cached (see monthEventsCache above) - prefer this over getAll+decryptEventsFromServer
   // wherever "this month's events" is all that's needed.
   getAllCached: async (month: number, year: number): Promise<CalendarEvent[]> => {
@@ -162,7 +206,8 @@ export const eventsApi = {
 };
 
 export const tripsApi = {
-  getAll: () => fetchApi('/trips'),
+  getAllPaged: (): Promise<PagedPull<any>> => fetchAllPages('/trips', TRIPS_PAGE_SIZE),
+  getAll: async (): Promise<any[]> => (await tripsApi.getAllPaged()).items,
   get: (id: string) => fetchApi(`/trips/${id}`),
   create: (data: any) =>
     fetchApi('/trips', { method: 'POST', body: JSON.stringify(data) }),
@@ -237,43 +282,73 @@ export async function uploadAttachmentWithProgress(
   file: UploadFile,
   onProgress?: (fraction: number) => void,
 ): Promise<AttachmentMeta> {
-  const presign = await attachmentsApi.presign(file.name, file.mimeType, file.size);
+  // Encrypt the bytes before they leave the device, so the bucket holds ciphertext rather than
+  // the user's actual file. Streamed in chunks (see attachmentCrypto.ts) because attachments run
+  // to 100MB and reading one into memory whole would OOM the device.
+  //
+  // No `encrypted` flag is added to the metadata on purpose: the ciphertext carries its own magic
+  // header, so the download path can tell encrypted from legacy-plaintext by looking at the file
+  // itself. That keeps this backward-compatible with attachments already in the bucket AND avoids
+  // a backend schema change - the server stays entirely unaware, which is the point.
+  const dek = await loadDek();
+  let uploadUri = file.uri;
+  let uploadSize = file.size;
+  let encryptedTemp: { uri: string; delete: () => void } | null = null;
 
-  const form = new FormData();
-  // S3 presigned-POST fields must come before the file part.
-  Object.entries(presign.fields as Record<string, string>).forEach(([k, v]) => {
-    form.append(k, v);
-  });
-  // React Native file part shape.
-  form.append('file', { uri: file.uri, name: file.name, type: file.mimeType } as any);
+  if (dek) {
+    const enc = await encryptFileToTemp(file.uri, dek);
+    encryptedTemp = { uri: enc.uri, delete: () => { try { enc.delete(); } catch {} } };
+    uploadUri = enc.uri;
+    // The presigned POST policy pins a content-length-range, so this MUST be the ciphertext's
+    // size (header + per-chunk framing), not the plaintext's, or S3 rejects the upload.
+    uploadSize = enc.size ?? encryptedSizeFor(file.size);
+  }
 
-  await new Promise<void>((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', presign.upload_url);
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total);
+  try {
+    const presign = await attachmentsApi.presign(file.name, file.mimeType, uploadSize);
+
+    const form = new FormData();
+    // S3 presigned-POST fields must come before the file part.
+    Object.entries(presign.fields as Record<string, string>).forEach(([k, v]) => {
+      form.append(k, v);
+    });
+    // React Native file part shape.
+    form.append('file', { uri: uploadUri, name: file.name, type: file.mimeType } as any);
+
+    await new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', presign.upload_url);
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total);
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          onProgress?.(1);
+          resolve();
+        } else {
+          reject(new Error(`Upload failed: ${xhr.status} ${String(xhr.responseText).slice(0, 200)}`));
+        }
+      };
+      xhr.onerror = () => reject(new Error('Upload failed: network error'));
+      xhr.send(form);
+    });
+
+    return {
+      id: presign.id,
+      key: presign.key,
+      url: presign.file_url,
+      filename: file.name,
+      mime_type: file.mimeType,
+      // The PLAINTEXT size - this is what the UI shows the user and what they'd expect to see.
+      // The ciphertext's slightly larger size only ever mattered for the presign policy above.
+      size_bytes: file.size,
+      uploaded_at: new Date().toISOString(),
     };
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        onProgress?.(1);
-        resolve();
-      } else {
-        reject(new Error(`Upload failed: ${xhr.status} ${String(xhr.responseText).slice(0, 200)}`));
-      }
-    };
-    xhr.onerror = () => reject(new Error('Upload failed: network error'));
-    xhr.send(form);
-  });
-
-  return {
-    id: presign.id,
-    key: presign.key,
-    url: presign.file_url,
-    filename: file.name,
-    mime_type: file.mimeType,
-    size_bytes: file.size,
-    uploaded_at: new Date().toISOString(),
-  };
+  } finally {
+    // The encrypted copy exists only to be uploaded; drop it either way so a failed upload
+    // doesn't leave ciphertext accumulating in the cache directory.
+    encryptedTemp?.delete();
+  }
 }
 
 /** Upload without progress (back-compat wrapper). */
@@ -469,9 +544,9 @@ export const dailyBrewApi = {
   // being saved. Throws (via fetchApi) with the backend's validation message on a bad URL.
   addCustomFeed: (feedUrl: string): Promise<OutletInfo> =>
     fetchApi('/dailybrew/custom-feed', { method: 'POST', body: JSON.stringify({ feed_url: feedUrl }) }),
-  updateNewsPreferences: (country: string, outletIds: string[], showVerse: boolean) =>
+  updateNewsPreferences: (country: string, outletIds: string[], showVerse: boolean, showQuote = false) =>
     fetchApi('/auth/me/news-preferences', {
       method: 'PUT',
-      body: JSON.stringify({ country, outlet_ids: outletIds, show_verse: showVerse }),
+      body: JSON.stringify({ country, outlet_ids: outletIds, show_verse: showVerse, show_quote: showQuote }),
     }),
 };

@@ -43,6 +43,12 @@ class NoteCreate(BaseModel):
     # E2EE: when set, title/content/tags are client-side ciphertext (AES-256-GCM).
     # None/absent means legacy plaintext (pre-encryption notes, pending migration).
     enc_version: Optional[int] = None
+    # Client-authoritative timestamps for the offline-first "newer wins" conflict resolution
+    # (see NoteUpdate.updated_at's comment for why these must come from the client, not the
+    # server clock). Optional so older app builds that don't send them still work - the service
+    # falls back to server time in that case.
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 class NoteUpdate(BaseModel):
@@ -56,6 +62,15 @@ class NoteUpdate(BaseModel):
     attachments: Optional[List[Attachment]] = None
     objects: Optional[List[ImageObject]] = None
     enc_version: Optional[int] = None
+    # Client-authoritative timestamp for offline-first conflict resolution: the frontend's
+    # loadNote()/fullSync()/processSyncQueue() all compare a local note's updated_at against the
+    # server's to decide which copy is newer and should win. The server previously always
+    # stamped its OWN clock time on every write, discarding whatever the client sent - a fresh
+    # server-clock timestamp from an earlier, already-synced edit could end up later than a
+    # genuinely newer local edit's timestamp (pure luck of round-trip timing), causing that
+    # reconciliation to wrongly pick the stale server copy and silently drop the newer edit.
+    # Optional so older app builds that don't send it still work (falls back to server time).
+    updated_at: Optional[str] = None
 
 
 class NoteResponse(BaseModel):

@@ -2,10 +2,13 @@ import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from core.deps import get_current_user
+from motor.motor_asyncio import AsyncIOMotorDatabase
+
+from core.deps import get_current_user, get_db
 from . import service
 from .service import (
     AttachmentAccessDeniedError,
+    AttachmentQuotaExceededError,
     AttachmentStorageError,
     AttachmentStorageUnavailableError,
     AttachmentTooLargeError,
@@ -23,16 +26,29 @@ def _user_id(current_user: dict) -> str:
 
 
 @router.post("/attachments/presign")
-async def presign_attachment(req: PresignRequest, current_user: dict = Depends(get_current_user)):
+async def presign_attachment(
+    req: PresignRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncIOMotorDatabase = Depends(get_db),
+):
     # to_thread: service.* below call sync boto3, which would otherwise block the event loop -
     # these are the hottest attachment routes (every upload/delete/open), so it matters in
     # aggregate even where a single call is cheap.
+    user_id = _user_id(current_user)
+    # Usage is read here (async, has the db) and passed in, so presign_upload stays sync and
+    # database-free - the router owns the I/O, the service owns the rule.
+    used = await service.used_storage_bytes(db, user_id)
     try:
-        return await asyncio.to_thread(service.presign_upload, _user_id(current_user), req.filename, req.mime_type, req.size)
+        return await asyncio.to_thread(
+            service.presign_upload, user_id, req.filename, req.mime_type, req.size, used
+        )
     except AttachmentStorageUnavailableError:
         raise HTTPException(status_code=503, detail="File attachments are not enabled on this server")
     except AttachmentTooLargeError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except AttachmentQuotaExceededError as e:
+        # 507 rather than 400: the request is well-formed, the account simply has no room.
+        raise HTTPException(status_code=507, detail=str(e))
     except UnsupportedAttachmentTypeError:
         raise HTTPException(status_code=400, detail="File type not allowed")
     except AttachmentStorageError as e:

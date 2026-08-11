@@ -44,17 +44,47 @@ export function useOfflineNotes() {
   const [syncError, setSyncError] = useState<string | null>(null);
   const appState = useRef(AppState.currentState);
   const { isSyncReady } = useAuth();
+  // What the list currently shows, as two cheap fingerprints - see loadNotes below for why.
+  // `null` (not '') so the very first load always publishes, even when the store is empty.
+  const layoutSigRef = useRef<string | null>(null);
+  const dataSigRef = useRef<string | null>(null);
 
-  // Load notes from local storage
+  // Load notes from local storage.
+  //
+  // loadNotes runs far more often than the list actually changes: on focus, again after every
+  // fullSync, on the notes screen's 30s poll, and on app foreground. Two things used to happen
+  // unconditionally on each of those:
+  //
+  //  1. `LayoutAnimation.configureNext` arms the NEXT layout pass, whatever causes it - so
+  //     arming it on a load that changed nothing made unrelated layout passes animate, including
+  //     the screen transition back from the editor (i.e. exactly the moment a note was just
+  //     created). It's now armed only when the set/order/pinned-ness of the cards really changed,
+  //     which is the only case the animation was ever for.
+  //  2. `setNotes` with a freshly-built array re-rendered every card even when the data was
+  //     byte-for-byte what was already on screen - and each card re-render re-derives its preview
+  //     from the note's full HTML body (megabytes, for a note with inline base64 images).
   const loadNotes = useCallback(async () => {
     const local = await getLocalNotes();
-    console.log('loadNotes - local count:', local.length);
-    // Animate the list reflow (card sliding in/out, siblings easing into the vacated/new space)
-    // instead of an abrupt snap whenever a note is created/deleted - a no-op if this particular
-    // update doesn't actually change the list.
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    // Filter out pending deletes for display
-    setNotes(local.filter(n => !n._pendingDelete));
+    const visible = local.filter(n => !n._pendingDelete);
+    // Layout: which cards exist, in what order, and which are pinned (pinned ones render in a
+    // separate section, so flipping a pin genuinely reflows the list).
+    let layoutSig = '';
+    let dataSig = '';
+    for (const n of visible) {
+      layoutSig += `${n.id}:${n.is_pinned ? 1 : 0}|`;
+      // Data: everything above, plus what a card actually displays - content length stands in for
+      // the body (comparing the body itself would cost more than the re-render it saves).
+      dataSig += `${n.id}:${n.is_pinned ? 1 : 0}:${n.updated_at}:${(n.content || '').length}:${n.tags?.length ?? 0}:${n.linked_event_id || ''}|`;
+    }
+    if (dataSig === dataSigRef.current) return; // nothing on screen would change
+    if (layoutSig !== layoutSigRef.current) {
+      // Animate the list reflow (card sliding in/out, siblings easing into the vacated/new space)
+      // instead of an abrupt snap whenever a note is created/deleted/pinned.
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      layoutSigRef.current = layoutSig;
+    }
+    dataSigRef.current = dataSig;
+    setNotes(visible);
   }, []);
 
   // Sync and reload. Offline-first: show cached notes IMMEDIATELY, then sync in the background and

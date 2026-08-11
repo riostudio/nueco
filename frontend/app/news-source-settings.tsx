@@ -1,3 +1,19 @@
+/**
+ * Daily Brew setup — the single screen for everything the morning card can contain.
+ *
+ * This replaces the old pair of screens (daily-lift.tsx for onboarding, news-source-settings.tsx
+ * for settings), which covered overlapping ground and had already drifted: the daily quote could
+ * be switched ON during onboarding and then never switched off again, because the settings screen
+ * had no row for it. One screen, two modes (`?onboarding=1`), so a row added here can only ever
+ * exist in both places at once.
+ *
+ * Shape: three toggles, each of which reveals its own section when on and hides it when off.
+ * The country/source/topic pickers are meaningless to someone who doesn't want news, and showing
+ * them upfront turns a yes/no question into a configuration screen. There is deliberately no
+ * separate "your morning" composite preview - with today's verse under the verse toggle, today's
+ * quote under the quote toggle, and the followed sources under News, it would restate the same
+ * content a second time on the same screen.
+ */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, ActivityIndicator,
@@ -6,9 +22,12 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams, type Href } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { dailyBrewApi } from '../src/api';
 import { useAuth } from '../src/auth';
 import { getVerseForDate } from '../src/dailyBrew/verses';
+import { getQuoteForDate } from '../src/dailyBrew/quotes';
+import { trackOnboardingStep } from '../src/analytics';
 import { C, radius, TAG_COLORS } from '../src/theme';
 
 let ExpoLocation: typeof import('expo-location') | null = null;
@@ -17,6 +36,11 @@ if (Platform.OS !== 'web') {
 }
 
 type Outlet = { id: string; name: string; description?: string; topics?: string[] };
+
+// Read by the onboarding gate in app/(tabs)/_layout.tsx to decide whether this step still needs
+// showing. Written on the way out of onboarding (confirm OR skip) - skipping still counts as
+// answering the question, and not writing it would put the user straight back here next launch.
+const DAILY_LIFT_SEEN_PREFIX = 'daily_lift_onboarding_seen';
 
 // Curated country list for v1's "Change" picker. Mirrors backend/dailybrew/catalog.py's keys -
 // hardcoded here because that module hadn't landed yet when this screen was built. Reconcile
@@ -30,6 +54,10 @@ const CURATED_COUNTRIES = [
   { code: 'AU', name: 'Australia' },
   { code: 'ID', name: 'Indonesia' },
 ];
+
+// Where onboarding starts before the user picks. Onboarding never runs GPS detection (see the
+// detection effect), so it needs a country to show sources for straight away.
+const ONBOARDING_DEFAULT_COUNTRY = 'AU';
 
 type LocationState = 'loading' | 'granted' | 'denied' | 'error';
 
@@ -59,16 +87,30 @@ function extractErrorDetail(e: unknown, fallback: string): string {
 export default function NewsSourceSettingsScreen() {
   const router = useRouter();
   const { user, updateNewsPreferences } = useAuth();
-  const params = useLocalSearchParams<{ onboarding?: string }>();
+  const params = useLocalSearchParams<{ onboarding?: string; news?: string }>();
   const isOnboarding = params.onboarding === '1';
-  // Editing already-saved preferences (reached via the avatar menu, not onboarding) - drives
-  // whether we hydrate from `user` instead of GPS-detecting a country and defaulting picks.
+  // Set by entry points that exist specifically to configure news (DailyBrewCard's "Set up News
+  // from home" row) - they should never land on a screen with the News toggle off.
+  const forceNewsOn = params.news === '1';
+  // Editing already-saved preferences (reached via the avatar menu or the card's setup row, not
+  // onboarding) - drives whether we hydrate from `user` instead of GPS-detecting a country and
+  // defaulting picks.
   const hasExistingPrefs = Boolean(user?.news_outlet_ids?.length);
+  // "Has this account ever answered this screen?" - distinguishes a first run (where the toggles
+  // want inviting defaults) from someone who deliberately switched things OFF and saved. Without
+  // it, turning news off and coming back would default it on again and quietly re-enable it.
+  const hasAnySavedPref = hasExistingPrefs
+    || user?.daily_brew_show_verse === true
+    || user?.daily_brew_show_quote === true;
 
-  const [verseEnabled, setVerseEnabled] = useState(user?.daily_brew_show_verse === true);
+  const [verseEnabled, setVerseEnabled] = useState(user?.daily_brew_show_verse === true || !hasAnySavedPref);
+  const [quoteEnabled, setQuoteEnabled] = useState(user?.daily_brew_show_quote === true);
+  const [newsEnabled, setNewsEnabled] = useState(forceNewsOn || hasExistingPrefs || !hasAnySavedPref);
   const [locationState, setLocationState] = useState<LocationState>('loading');
   const [detectedPlace, setDetectedPlace] = useState<{ city?: string; country?: string } | null>(null);
-  const [countryCode, setCountryCode] = useState<string | null>(user?.news_country ?? null);
+  const [countryCode, setCountryCode] = useState<string | null>(
+    user?.news_country ?? (isOnboarding ? ONBOARDING_DEFAULT_COUNTRY : null),
+  );
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [selectedOutletIds, setSelectedOutletIds] = useState<string[]>(user?.news_outlet_ids ?? []);
   // Every outlet we've ever seen full details for this screen-visit (country list, search
@@ -87,6 +129,8 @@ export default function NewsSourceSettingsScreen() {
   const [customFeedError, setCustomFeedError] = useState('');
 
   const todayVerse = useMemo(() => getVerseForDate(new Date()), []);
+
+  const todayQuote = useMemo(() => getQuoteForDate(new Date()), []);
 
   const rememberOutlets = useCallback((list: Outlet[]) => {
     if (list.length === 0) return;
@@ -127,12 +171,19 @@ export default function NewsSourceSettingsScreen() {
     }
   }, []);
 
-  // Already have a saved country? Skip GPS detection entirely rather than let it race with
-  // (and potentially overwrite) the preference the user already chose.
   useEffect(() => {
+    // No news, no reason to ask where the user is.
+    if (!newsEnabled) return;
+    // Onboarding deliberately never prompts for location: this step follows the microphone
+    // permission prompt, and stacking a second system dialog into onboarding is a good way to
+    // have both denied. ONBOARDING_DEFAULT_COUNTRY is close enough for a default that "Change"
+    // (and this screen, reopened from settings later) can correct.
+    if (isOnboarding) return;
+    // Already have a saved country? Skip GPS detection entirely rather than let it race with
+    // (and potentially overwrite) the preference the user already chose.
     if (user?.news_country) { setLocationState('granted'); return; }
     detectLocation();
-  }, [detectLocation, user?.news_country]);
+  }, [newsEnabled, isOnboarding, detectLocation, user?.news_country]);
 
   // Hydrate full display details for any already-selected ids that aren't covered by the
   // country list or a search - otherwise "Following" would have ids with no name to show for
@@ -147,7 +198,7 @@ export default function NewsSourceSettingsScreen() {
   }, []);
 
   useEffect(() => {
-    if (!countryCode) return;
+    if (!countryCode || !newsEnabled) return;
     (async () => {
       setLoadingOutlets(true);
       try {
@@ -166,7 +217,7 @@ export default function NewsSourceSettingsScreen() {
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [countryCode]);
+  }, [countryCode, newsEnabled]);
 
   const toggleOutlet = useCallback((id: string) => {
     setSelectedOutletIds((prev) => {
@@ -236,7 +287,7 @@ export default function NewsSourceSettingsScreen() {
       }
     } catch (e) {
       console.error('Failed to add custom feed:', e);
-      setCustomFeedError(extractErrorDetail(e, 'Could not add that feed. Please try again.'));
+      setCustomFeedError(extractErrorDetail(e, 'Couldn’t add that feed. Check the address and have another go.'));
     } finally {
       setAddingCustomFeed(false);
     }
@@ -248,33 +299,88 @@ export default function NewsSourceSettingsScreen() {
     setCountryCode(code);
   }, []);
 
-  const canConfirm = selectedOutletIds.length > 0 || verseEnabled;
+  // Any one of the three is enough - a quote on its own is a perfectly good morning card, and
+  // news-on-with-nothing-picked-yet still saves a country the card can prompt from.
+
+  const markOnboardingSeen = useCallback(async () => {
+    if (!isOnboarding || !user) return;
+    await AsyncStorage.setItem(`${DAILY_LIFT_SEEN_PREFIX}:${user.id}`, '1').catch(() => {});
+  }, [isOnboarding, user]);
 
   const goToDestination = useCallback(() => {
-    if (isOnboarding) router.replace('/(tabs)');
+    if (isOnboarding) router.replace('/(tabs)' as Href);
     else router.back();
   }, [isOnboarding, router]);
 
-  const handleConfirm = useCallback(async () => {
-    if (!canConfirm || confirming) return;
+  /**
+   * Persists the current selection. Called by the autosave effect below, and once more on the way
+   * out of onboarding so a user who taps Continue immediately cannot outrun the debounce.
+   *
+   * Goes through AuthContext (not a bare dailyBrewApi call) so the in-memory user reflects what
+   * was just saved - otherwise returning here would read the pre-save snapshot and show the
+   * previous selection. News off means "no news at all", so the country goes with the outlets:
+   * leaving a country behind keeps DailyBrewCard's hasNewsPrefs true and hides its setup row.
+   */
+  const persistPrefs = useCallback(async () => {
+    try {
+      await updateNewsPreferences(
+        newsEnabled ? (countryCode || '') : '',
+        newsEnabled ? selectedOutletIds : [],
+        verseEnabled,
+        quoteEnabled,
+      );
+    } catch (e) {
+      // Silent by design. A toggle that flips back on a transient network error is more confusing
+      // than one that quietly retries on the next change, and nothing here is destructive.
+      console.error('Failed to save news preferences:', e);
+    }
+  }, [updateNewsPreferences, newsEnabled, countryCode, selectedOutletIds, verseEnabled, quoteEnabled]);
+
+  // Autosave. A toggle is its own confirmation - asking someone to flip a switch and THEN press a
+  // button is two actions for one decision, and it silently loses the change if they navigate
+  // away. Debounced so tapping through several toggles is one write, not four.
+  const didMountRef = useRef(false);
+  useEffect(() => {
+    // Skip the first run: mounting is not a change, and writing on mount would persist defaults
+    // for a user who only opened the screen to look.
+    if (!didMountRef.current) {
+      didMountRef.current = true;
+      return;
+    }
+    const t = setTimeout(() => { void persistPrefs(); }, 600);
+    return () => clearTimeout(t);
+  }, [persistPrefs]);
+
+  // Flush on the way out. In settings the only exit is the back arrow, which unmounts the screen
+  // and cancels the pending timer above - so a toggle flipped and immediately backed out of would
+  // silently not save, which is the exact failure autosave is supposed to remove. Holds the latest
+  // persist function in a ref so the unmount effect doesn't re-run on every change.
+  const persistRef = useRef(persistPrefs);
+  useEffect(() => { persistRef.current = persistPrefs; }, [persistPrefs]);
+  useEffect(() => () => {
+    if (didMountRef.current) void persistRef.current();
+  }, []);
+
+  const handleDone = useCallback(async () => {
+    if (confirming) return;
     setConfirming(true);
     try {
-      // Goes through AuthContext (not a bare dailyBrewApi call) so the in-memory user is
-      // updated with what was just saved - otherwise returning to this screen would keep
-      // reading the pre-save snapshot and show the previous selection.
-      await updateNewsPreferences(countryCode || '', selectedOutletIds, verseEnabled);
-      goToDestination();
-    } catch (e) {
-      console.error('Failed to save news preferences:', e);
-      Alert.alert('Daily Brew', 'Could not save your preferences. Please try again.');
+      await markOnboardingSeen();
+      // Flush ahead of the debounce - navigating away would otherwise cancel a pending write.
+      await persistPrefs();
+      if (isOnboarding) trackOnboardingStep('completed');
     } finally {
       setConfirming(false);
+      goToDestination();
     }
-  }, [canConfirm, confirming, countryCode, selectedOutletIds, verseEnabled, goToDestination, updateNewsPreferences]);
+  }, [confirming, markOnboardingSeen, persistPrefs, isOnboarding, goToDestination]);
 
-  const handleSkip = useCallback(() => {
-    router.replace('/(tabs)');
-  }, [router]);
+  const handleSkip = useCallback(async () => {
+    if (confirming) return;
+    await markOnboardingSeen();
+    trackOnboardingStep('skipped');
+    router.replace('/(tabs)' as Href);
+  }, [confirming, markOnboardingSeen, router]);
 
   return (
     <SafeAreaView style={s.container}>
@@ -289,16 +395,23 @@ export default function NewsSourceSettingsScreen() {
             <MaterialIcons name="arrow-back" size={28} color={C.textSec} />
           </TouchableOpacity>
         )}
-        <Text style={s.headerTitle}>News from home</Text>
+        <Text style={s.headerTitle}>Daily Brew</Text>
         <View style={{ width: 48 }} />
       </View>
 
       <ScrollView style={s.scroll} contentContainerStyle={s.scrollContent}>
+        {isOnboarding && (
+          <View style={s.intro}>
+            <Text style={s.introTitle}>Something to open to each morning?</Text>
+            <Text style={s.introSub}>Change it any time in settings.</Text>
+          </View>
+        )}
+
         <View style={[s.card, s.toggleCard]}>
           <View style={s.toggleRow}>
             <MaterialIcons name="menu-book" size={24} color={C.textSec} />
             <View style={{ flex: 1, marginLeft: 16 }}>
-              <Text style={s.rowLabelPlain}>Include Bible verse in your Daily Brew</Text>
+              <Text style={s.rowLabelPlain}>Verse of the day</Text>
               <Text style={s.rowSub}>A short verse each day, alongside your news.</Text>
             </View>
             <Switch
@@ -310,90 +423,180 @@ export default function NewsSourceSettingsScreen() {
             />
           </View>
           {verseEnabled && (
-            <View style={s.versePreview}>
-              <Text style={s.versePreviewText} numberOfLines={2}>&ldquo;{todayVerse.text}&rdquo;</Text>
-              <Text style={s.versePreviewRef}>{todayVerse.reference}</Text>
+            <View style={s.inlinePreview}>
+              <Text style={s.inlinePreviewText} numberOfLines={2}>&ldquo;{todayVerse.text}&rdquo;</Text>
+              <Text style={s.inlinePreviewAttr}>{todayVerse.reference}</Text>
             </View>
           )}
         </View>
 
-        {/* Always-visible summary of every current selection, regardless of country/search state -
-            a topic followed via search would otherwise disappear from view the moment the search
-            query changes, with no other way to see (or unfollow) it. */}
-        {selectedOutletIds.length > 0 && (
-          <View style={[s.card, { marginTop: 20 }]}>
-            <Text style={s.sectionLabel}>Following <Text style={s.sectionLabelHint}>(maximum {MAX_OUTLETS})</Text></Text>
-            {selectedOutletIds.map((id) => {
-              const outlet = outletDetails[id];
-              const avatarColor = TAG_COLORS[hashIndex(id) % TAG_COLORS.length].value;
-              return (
-                <View key={id} testID={`news-following-${id}`} style={s.row}>
-                  <View style={[s.outletAvatar, { backgroundColor: avatarColor }]}>
-                    <Text style={s.outletAvatarLetter}>{(outlet?.name ?? '?').charAt(0).toUpperCase()}</Text>
-                  </View>
-                  <View style={{ flex: 1, marginLeft: 12 }}>
-                    <Text style={s.rowLabelPlain}>{outlet?.name ?? id}</Text>
-                    {!!outlet?.description && (
-                      <Text style={s.rowSub} numberOfLines={1}>{outlet.description}</Text>
-                    )}
-                  </View>
-                  <TouchableOpacity
-                    testID={`news-unfollow-${id}`}
-                    onPress={() => toggleOutlet(id)}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  >
-                    <MaterialIcons name="close" size={22} color={C.borderSub} />
-                  </TouchableOpacity>
-                </View>
-              );
-            })}
-          </View>
-        )}
-
-        <View style={[s.card, { marginTop: 20 }]}>
-          <Text style={s.sectionLabel}>News sources</Text>
-
-          {countryCode ? (
-            <View style={s.banner}>
-              <MaterialIcons name="location-on" size={18} color={C.textSec} />
-              <Text style={s.bannerText} numberOfLines={1}>
-                {detectedPlace
-                  ? `Detected: ${[detectedPlace.city, detectedPlace.country].filter(Boolean).join(', ')}`
-                  : `Selected: ${CURATED_COUNTRIES.find((c) => c.code === countryCode)?.name ?? countryCode}`}
-              </Text>
-              <TouchableOpacity onPress={() => setShowCountryPicker(true)}>
-                <Text style={s.changeLink}>Change</Text>
-              </TouchableOpacity>
+        <View style={[s.card, s.toggleCard, { marginTop: 12 }]}>
+          <View style={s.toggleRow}>
+            <MaterialIcons name="format-quote" size={24} color={C.textSec} />
+            <View style={{ flex: 1, marginLeft: 16 }}>
+              <Text style={s.rowLabelPlain}>A daily quote</Text>
+              <Text style={s.rowSub}>A short quote each day, alongside your news.</Text>
             </View>
-          ) : locationState === 'loading' ? (
-            <View style={s.center}><ActivityIndicator size="small" color={C.primary} /></View>
-          ) : (
-            <View style={s.banner}>
-              <Text style={[s.bannerText, { flex: 1 }]}>
-                Couldn&apos;t detect your location — try &quot;Change&quot; below to pick manually.
-              </Text>
-              <TouchableOpacity onPress={() => setShowCountryPicker(true)}>
-                <Text style={s.changeLink}>Change</Text>
-              </TouchableOpacity>
+            <Switch
+              testID="quote-toggle"
+              value={quoteEnabled}
+              onValueChange={setQuoteEnabled}
+              trackColor={{ false: C.borderSub, true: C.primary + '80' }}
+              thumbColor={quoteEnabled ? C.primary : '#f4f3f4'}
+            />
+          </View>
+          {quoteEnabled && (
+            <View style={s.inlinePreview}>
+              <Text style={s.inlinePreviewText} numberOfLines={2}>&ldquo;{todayQuote.text}&rdquo;</Text>
+              <Text style={s.inlinePreviewAttr}>{todayQuote.author}</Text>
             </View>
           )}
+        </View>
 
-          {countryCode && (
-            loadingOutlets ? (
-              <View style={s.center}><ActivityIndicator size="small" color={C.primary} /></View>
-            ) : outlets.length === 0 ? (
-              <Text style={s.rowSub}>No outlets available for this country yet.</Text>
-            ) : (
-              outlets.map((outlet) => {
-                const selected = selectedOutletIds.includes(outlet.id);
+        <View style={[s.card, s.toggleCard, { marginTop: 12 }]}>
+          <View style={s.toggleRow}>
+            <MaterialIcons name="public" size={24} color={C.textSec} />
+            <View style={{ flex: 1, marginLeft: 16 }}>
+              <Text style={s.rowLabelPlain}>News from home</Text>
+              <Text style={s.rowSub}>Headlines from the sources you follow.</Text>
+            </View>
+            <Switch
+              testID="news-toggle"
+              value={newsEnabled}
+              onValueChange={setNewsEnabled}
+              trackColor={{ false: C.borderSub, true: C.primary + '80' }}
+              thumbColor={newsEnabled ? C.primary : '#f4f3f4'}
+            />
+          </View>
+        </View>
+
+        {/* Everything below belongs to the News toggle and is mounted only while it's on. The
+            selections themselves are kept in state either way, so flicking news off and back on
+            doesn't discard what was picked - only the confirm payload treats "off" as none. */}
+        {newsEnabled && (
+          <>
+            {/* Always-visible summary of every current selection, regardless of country/search state -
+                a topic followed via search would otherwise disappear from view the moment the search
+                query changes, with no other way to see (or unfollow) it. */}
+            {selectedOutletIds.length > 0 && (
+              <View style={[s.card, { marginTop: 12 }]}>
+                <Text style={s.sectionLabel}>Following <Text style={s.sectionLabelHint}>(maximum {MAX_OUTLETS})</Text></Text>
+                {selectedOutletIds.map((id) => {
+                  const outlet = outletDetails[id];
+                  const avatarColor = TAG_COLORS[hashIndex(id) % TAG_COLORS.length].value;
+                  return (
+                    <View key={id} testID={`news-following-${id}`} style={s.row}>
+                      <View style={[s.outletAvatar, { backgroundColor: avatarColor }]}>
+                        <Text style={s.outletAvatarLetter}>{(outlet?.name ?? '?').charAt(0).toUpperCase()}</Text>
+                      </View>
+                      <View style={{ flex: 1, marginLeft: 12 }}>
+                        <Text style={s.rowLabelPlain}>{outlet?.name ?? id}</Text>
+                        {!!outlet?.description && (
+                          <Text style={s.rowSub} numberOfLines={1}>{outlet.description}</Text>
+                        )}
+                      </View>
+                      <TouchableOpacity
+                        testID={`news-unfollow-${id}`}
+                        onPress={() => toggleOutlet(id)}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      >
+                        <MaterialIcons name="close" size={22} color={C.borderSub} />
+                      </TouchableOpacity>
+                    </View>
+                  );
+                })}
+              </View>
+            )}
+
+            <View style={[s.card, { marginTop: 12 }]}>
+              <Text style={s.sectionLabel}>News sources</Text>
+
+              {countryCode ? (
+                <View style={s.banner}>
+                  <MaterialIcons name="location-on" size={18} color={C.textSec} />
+                  <Text style={s.bannerText} numberOfLines={1}>
+                    {detectedPlace
+                      ? `Detected: ${[detectedPlace.city, detectedPlace.country].filter(Boolean).join(', ')}`
+                      : `Selected: ${CURATED_COUNTRIES.find((c) => c.code === countryCode)?.name ?? countryCode}`}
+                  </Text>
+                  <TouchableOpacity onPress={() => setShowCountryPicker(true)}>
+                    <Text style={s.changeLink}>Change</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : locationState === 'loading' ? (
+                <View style={s.center}><ActivityIndicator size="small" color={C.primary} /></View>
+              ) : (
+                <View style={s.banner}>
+                  <Text style={[s.bannerText, { flex: 1 }]}>
+                    Couldn&apos;t find your location. Tap Change to pick it yourself.
+                  </Text>
+                  <TouchableOpacity onPress={() => setShowCountryPicker(true)}>
+                    <Text style={s.changeLink}>Change</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              {countryCode && (
+                loadingOutlets ? (
+                  <View style={s.center}><ActivityIndicator size="small" color={C.primary} /></View>
+                ) : outlets.length === 0 ? (
+                  <Text style={s.rowSub}>No outlets available for this country yet.</Text>
+                ) : (
+                  outlets.map((outlet) => {
+                    const selected = selectedOutletIds.includes(outlet.id);
+                    const avatarColor = TAG_COLORS[hashIndex(outlet.id) % TAG_COLORS.length].value;
+                    return (
+                      <TouchableOpacity
+                        key={outlet.id}
+                        testID={`news-outlet-${outlet.id}`}
+                        style={s.row}
+                        onPress={() => toggleOutlet(outlet.id)}
+                      >
+                        <View style={[s.outletAvatar, { backgroundColor: avatarColor }]}>
+                          <Text style={s.outletAvatarLetter}>{outlet.name.charAt(0).toUpperCase()}</Text>
+                        </View>
+                        <View style={{ flex: 1, marginLeft: 12 }}>
+                          <Text style={s.rowLabelPlain}>{outlet.name}</Text>
+                          {!!outlet.description && (
+                            <Text style={s.rowSub} numberOfLines={1}>{outlet.description}</Text>
+                          )}
+                        </View>
+                        <MaterialIcons
+                          name={selected ? 'check-box' : 'check-box-outline-blank'}
+                          size={24}
+                          color={selected ? C.primary : C.borderSub}
+                        />
+                      </TouchableOpacity>
+                    );
+                  })
+                )
+              )}
+            </View>
+
+            <View style={[s.card, { marginTop: 12 }]}>
+              <Text style={s.sectionLabel}>Search by topic</Text>
+              <Text style={[s.rowSub, { marginBottom: 12 }]}>
+                Try &quot;AI news,&quot; &quot;food,&quot; or &quot;global news&quot; to find feeds to follow.
+              </Text>
+              <View style={s.searchBox}>
+                <MaterialIcons name="search" size={20} color={C.borderSub} />
+                <TextInput
+                  testID="news-topic-search-input"
+                  style={s.searchInput}
+                  placeholder="Search topics..."
+                  placeholderTextColor={C.borderSub}
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                  autoCapitalize="none"
+                />
+                {searching && <ActivityIndicator size="small" color={C.primary} />}
+              </View>
+
+              {searchResults.map((outlet) => {
+                const following = selectedOutletIds.includes(outlet.id);
                 const avatarColor = TAG_COLORS[hashIndex(outlet.id) % TAG_COLORS.length].value;
                 return (
-                  <TouchableOpacity
-                    key={outlet.id}
-                    testID={`news-outlet-${outlet.id}`}
-                    style={s.row}
-                    onPress={() => toggleOutlet(outlet.id)}
-                  >
+                  <View key={outlet.id} testID={`news-search-result-${outlet.id}`} style={s.row}>
                     <View style={[s.outletAvatar, { backgroundColor: avatarColor }]}>
                       <Text style={s.outletAvatarLetter}>{outlet.name.charAt(0).toUpperCase()}</Text>
                     </View>
@@ -403,113 +606,75 @@ export default function NewsSourceSettingsScreen() {
                         <Text style={s.rowSub} numberOfLines={1}>{outlet.description}</Text>
                       )}
                     </View>
-                    <MaterialIcons
-                      name={selected ? 'check-box' : 'check-box-outline-blank'}
-                      size={24}
-                      color={selected ? C.primary : C.borderSub}
-                    />
-                  </TouchableOpacity>
+                    <TouchableOpacity
+                      testID={`news-search-follow-${outlet.id}`}
+                      style={[s.followBtn, following && s.followBtnActive]}
+                      onPress={() => toggleOutlet(outlet.id)}
+                    >
+                      <Text style={[s.followBtnText, following && s.followBtnTextActive]}>
+                        {following ? 'Following' : 'Follow'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
                 );
-              })
-            )
-          )}
-        </View>
+              })}
 
-        <View style={[s.card, { marginTop: 20 }]}>
-          <Text style={s.sectionLabel}>Search by topic</Text>
-          <Text style={[s.rowSub, { marginBottom: 12 }]}>
-            Try &quot;AI news,&quot; &quot;food,&quot; or &quot;global news&quot; to find feeds to follow.
-          </Text>
-          <View style={s.searchBox}>
-            <MaterialIcons name="search" size={20} color={C.borderSub} />
-            <TextInput
-              testID="news-topic-search-input"
-              style={s.searchInput}
-              placeholder="Search topics..."
-              placeholderTextColor={C.borderSub}
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-              autoCapitalize="none"
-            />
-            {searching && <ActivityIndicator size="small" color={C.primary} />}
-          </View>
+              {searchQuery.trim().length >= 2 && !searching && searchResults.length === 0 && (
+                <Text style={s.rowSub}>No feeds found for &quot;{searchQuery.trim()}.&quot;</Text>
+              )}
+            </View>
 
-          {searchResults.map((outlet) => {
-            const following = selectedOutletIds.includes(outlet.id);
-            const avatarColor = TAG_COLORS[hashIndex(outlet.id) % TAG_COLORS.length].value;
-            return (
-              <View key={outlet.id} testID={`news-search-result-${outlet.id}`} style={s.row}>
-                <View style={[s.outletAvatar, { backgroundColor: avatarColor }]}>
-                  <Text style={s.outletAvatarLetter}>{outlet.name.charAt(0).toUpperCase()}</Text>
-                </View>
-                <View style={{ flex: 1, marginLeft: 12 }}>
-                  <Text style={s.rowLabelPlain}>{outlet.name}</Text>
-                  {!!outlet.description && (
-                    <Text style={s.rowSub} numberOfLines={1}>{outlet.description}</Text>
-                  )}
-                </View>
-                <TouchableOpacity
-                  testID={`news-search-follow-${outlet.id}`}
-                  style={[s.followBtn, following && s.followBtnActive]}
-                  onPress={() => toggleOutlet(outlet.id)}
-                >
-                  <Text style={[s.followBtnText, following && s.followBtnTextActive]}>
-                    {following ? 'Following' : 'Follow'}
-                  </Text>
-                </TouchableOpacity>
+            <View style={[s.card, { marginTop: 12 }]}>
+              <Text style={s.sectionLabel}>Add your own feed</Text>
+              <Text style={[s.rowSub, { marginBottom: 12 }]}>
+                Have a favorite site with an RSS or Atom feed? Paste its link here.
+              </Text>
+              <View style={s.searchBox}>
+                <MaterialIcons name="rss-feed" size={20} color={C.borderSub} />
+                <TextInput
+                  testID="news-custom-feed-input"
+                  style={s.searchInput}
+                  placeholder="https://example.com/feed"
+                  placeholderTextColor={C.borderSub}
+                  value={customFeedUrl}
+                  onChangeText={(t) => { setCustomFeedUrl(t); setCustomFeedError(''); }}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="url"
+                  onSubmitEditing={handleAddCustomFeed}
+                />
+                {addingCustomFeed && <ActivityIndicator size="small" color={C.primary} />}
               </View>
-            );
-          })}
+              <TouchableOpacity
+                testID="news-custom-feed-add-btn"
+                style={[s.confirmBtn, { marginTop: 4 }, (!customFeedUrl.trim() || addingCustomFeed) && s.confirmBtnDisabled]}
+                onPress={handleAddCustomFeed}
+                disabled={!customFeedUrl.trim() || addingCustomFeed}
+              >
+                <Text style={s.confirmBtnText}>Add feed</Text>
+              </TouchableOpacity>
+              {!!customFeedError && (
+                <Text style={[s.rowSub, { color: C.danger, marginTop: 8 }]}>{customFeedError}</Text>
+              )}
+            </View>
+          </>
+        )}
 
-          {searchQuery.trim().length >= 2 && !searching && searchResults.length === 0 && (
-            <Text style={s.rowSub}>No feeds found for &quot;{searchQuery.trim()}.&quot;</Text>
-          )}
-        </View>
-
-        <View style={[s.card, { marginTop: 20 }]}>
-          <Text style={s.sectionLabel}>Add your own feed</Text>
-          <Text style={[s.rowSub, { marginBottom: 12 }]}>
-            Have a favorite site with an RSS or Atom feed? Paste its link here.
-          </Text>
-          <View style={s.searchBox}>
-            <MaterialIcons name="rss-feed" size={20} color={C.borderSub} />
-            <TextInput
-              testID="news-custom-feed-input"
-              style={s.searchInput}
-              placeholder="https://example.com/feed"
-              placeholderTextColor={C.borderSub}
-              value={customFeedUrl}
-              onChangeText={(t) => { setCustomFeedUrl(t); setCustomFeedError(''); }}
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="url"
-              onSubmitEditing={handleAddCustomFeed}
-            />
-            {addingCustomFeed && <ActivityIndicator size="small" color={C.primary} />}
-          </View>
+        {/* Onboarding only. Settings has nothing to confirm - every change is already saved, so a
+            Confirm button there would imply changes were pending when they were not. Here it is
+            purely "I'm finished with this step", not "save my choices". */}
+        {isOnboarding && (
           <TouchableOpacity
-            testID="news-custom-feed-add-btn"
-            style={[s.confirmBtn, { marginTop: 4 }, (!customFeedUrl.trim() || addingCustomFeed) && s.confirmBtnDisabled]}
-            onPress={handleAddCustomFeed}
-            disabled={!customFeedUrl.trim() || addingCustomFeed}
+            testID="news-settings-confirm-btn"
+            style={[s.confirmBtn, confirming && s.confirmBtnDisabled]}
+            onPress={handleDone}
+            disabled={confirming}
           >
-            <Text style={s.confirmBtnText}>Add feed</Text>
+            {confirming
+              ? <ActivityIndicator size="small" color={C.primaryFg} />
+              : <Text style={s.confirmBtnText}>Continue</Text>}
           </TouchableOpacity>
-          {!!customFeedError && (
-            <Text style={[s.rowSub, { color: C.danger, marginTop: 8 }]}>{customFeedError}</Text>
-          )}
-        </View>
-
-        <TouchableOpacity
-          testID="news-settings-confirm-btn"
-          style={[s.confirmBtn, (!canConfirm || confirming) && s.confirmBtnDisabled]}
-          onPress={handleConfirm}
-          disabled={!canConfirm || confirming}
-        >
-          {confirming
-            ? <ActivityIndicator size="small" color={C.primaryFg} />
-            : <Text style={s.confirmBtnText}>Confirm</Text>}
-        </TouchableOpacity>
+        )}
 
         <View style={{ height: 40 }} />
       </ScrollView>
@@ -555,7 +720,17 @@ const s = StyleSheet.create({
   headerTitle: { fontSize: 22, fontWeight: '700', color: C.text },
   scroll: { flex: 1 },
   scrollContent: { paddingHorizontal: 24, paddingTop: 8 },
-  card: { backgroundColor: C.surface, padding: 20 },
+  intro: { marginBottom: 20 },
+  introTitle: { fontSize: 25, fontWeight: '700', color: C.text, lineHeight: 32 },
+  introSub: { fontSize: 14, color: C.textSec, marginTop: 8 },
+  card: {
+    backgroundColor: C.surface, padding: 20, borderRadius: radius.md,
+    // No border, matching the note/event/Daily Brew cards. Surface (#FFFFFF) and page (#FDFBF7)
+    // are close enough that a borderless card would nearly dissolve into the background, so a
+    // very soft green-tinted shadow keeps the edge readable without a visible grey line.
+    shadowColor: '#0A5443', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 },
+    elevation: 1,
+  },
   toggleCard: { paddingVertical: 24, paddingHorizontal: 24 },
   sectionLabel: { fontSize: 16, fontWeight: '600', color: C.textSec, marginBottom: 12 },
   sectionLabelHint: { fontSize: 13, fontWeight: '400', color: C.borderSub },
@@ -570,9 +745,11 @@ const s = StyleSheet.create({
   },
   bannerText: { fontSize: 14, color: C.textSec, flexShrink: 1 },
   changeLink: { fontSize: 14, fontWeight: '600', color: C.primary, marginLeft: 'auto' },
-  versePreview: { marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: C.borderSub + '30' },
-  versePreviewText: { fontSize: 15, color: C.text, fontStyle: 'italic', lineHeight: 22 },
-  versePreviewRef: { fontSize: 13, color: C.primary, marginTop: 6, fontWeight: '600' },
+  // Today's real content for whichever toggle it sits under - a divider inside the card, not a
+  // card of its own, so the preview reads as belonging to the row that revealed it.
+  inlinePreview: { marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: C.borderSub + '30' },
+  inlinePreviewText: { fontSize: 15, color: C.text, fontStyle: 'italic', lineHeight: 22 },
+  inlinePreviewAttr: { fontSize: 13, color: C.primary, marginTop: 6, fontWeight: '600' },
   outletAvatar: {
     width: 36, height: 36, borderRadius: 18, justifyContent: 'center', alignItems: 'center',
   },

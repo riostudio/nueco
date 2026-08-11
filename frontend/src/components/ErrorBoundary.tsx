@@ -58,12 +58,12 @@ export class ErrorBoundary extends Component<Props, State> {
             
             <Text style={styles.title}>Something went wrong</Text>
             <Text style={styles.message}>
-              We're sorry, but something unexpected happened. Please try again.
+              Something went wrong at our end. Your notes are safe on your phone.
             </Text>
 
             <TouchableOpacity style={styles.button} onPress={this.handleReset}>
               <MaterialIcons name="refresh" size={24} color={C.primaryFg} />
-              <Text style={styles.buttonText}>Try Again</Text>
+              <Text style={styles.buttonText}>Try again</Text>
             </TouchableOpacity>
 
             {__DEV__ && this.state.error && (

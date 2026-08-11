@@ -73,7 +73,7 @@ export default function ResetPasswordScreen() {
           <View style={styles.successIcon}>
             <MaterialIcons name="check-circle" size={80} color={C.success} />
           </View>
-          <Text style={styles.successTitle}>Password Reset!</Text>
+          <Text style={styles.successTitle}>Password reset</Text>
           <Text style={styles.successMessage}>
             Your password has been successfully changed. You can now log in with your new password.
           </Text>
@@ -91,7 +91,7 @@ export default function ResetPasswordScreen() {
           <View style={styles.errorIcon}>
             <MaterialIcons name="error" size={80} color={C.error} />
           </View>
-          <Text style={styles.errorTitle}>Invalid Link</Text>
+          <Text style={styles.errorTitle}>That link didn’t work</Text>
           <Text style={styles.errorMessage}>
             This password reset link is invalid or has expired. Please request a new one.
           </Text>
@@ -128,7 +128,7 @@ export default function ResetPasswordScreen() {
             <View style={styles.iconContainer}>
               <MaterialIcons name="lock-open" size={48} color={C.primary} />
             </View>
-            <Text style={styles.title}>Create New Password</Text>
+            <Text style={styles.title}>Create new password</Text>
             <Text style={styles.subtitle}>
               Enter your new password below. Make sure it's at least 8 characters long.
             </Text>
@@ -146,7 +146,7 @@ export default function ResetPasswordScreen() {
 
             {/* New Password Input */}
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>New Password</Text>
+              <Text style={styles.label}>New password</Text>
               <View style={[styles.inputContainer, errors.password && styles.inputError]}>
                 <MaterialIcons name="lock-outline" size={24} color={C.borderSub} style={styles.inputIcon} />
                 <TextInput
@@ -174,7 +174,7 @@ export default function ResetPasswordScreen() {
 
             {/* Confirm Password Input */}
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Confirm Password</Text>
+              <Text style={styles.label}>Confirm password</Text>
               <View style={[styles.inputContainer, errors.confirmPassword && styles.inputError]}>
                 <MaterialIcons name="lock-outline" size={24} color={C.borderSub} style={styles.inputIcon} />
                 <TextInput

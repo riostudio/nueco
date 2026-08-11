@@ -38,9 +38,10 @@ export default function OfflineBanner({ online, isSyncing, pendingCount }: Props
   }, [showSyncBanner, isSyncing]);
 
   const visible = showSyncBanner && online;
-  const message = isSyncing
-    ? `Syncing${pendingCount ? ` ${pendingCount} item${pendingCount > 1 ? 's' : ''}` : ''}...`
-    : '✓ Synced';
+  // No pending count: a running tally of outstanding work reads as a backlog, and the number
+  // isn't actionable. Plain words instead of "sync", which assumes the user thinks in systems.
+  void pendingCount;
+  const message = isSyncing ? 'Uploading your notes' : 'Up to date';
 
   useEffect(() => {
     Animated.spring(translateY, {

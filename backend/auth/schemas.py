@@ -45,6 +45,9 @@ class UpdateNewsPreferencesRequest(BaseModel):
     country: str
     outlet_ids: List[str] = []
     show_verse: bool = False
+    # Defaults False so an older app build that doesn't send this field doesn't silently
+    # switch quotes on for someone who never asked for them.
+    show_quote: bool = False
 
 # Response schemas
 class UserResponse(BaseModel):
@@ -57,6 +60,7 @@ class UserResponse(BaseModel):
     news_country: Optional[str] = None
     news_outlet_ids: List[str] = []
     daily_brew_show_verse: bool = False
+    daily_brew_show_quote: bool = False
     daily_brew_enabled: bool = False
 
 class AuthResponse(BaseModel):

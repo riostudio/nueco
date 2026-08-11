@@ -14,7 +14,7 @@ class AuthApiService {
         status: response.status,
         contentType: response.headers.get('content-type'),
       });
-      throw new Error('Server returned an empty response. Please try again.');
+      throw new Error('Couldn’t reach the server. Have another go in a moment.');
     }
 
     try {
@@ -26,7 +26,7 @@ class AuthApiService {
         bodyPreview: rawText.substring(0, 500),
         parseError,
       });
-      throw new Error('Server returned an invalid response. Please try again.');
+      throw new Error('Couldn’t reach the server. Have another go in a moment.');
     }
   }
 

@@ -20,6 +20,7 @@ reminders per note").
 """
 import asyncio
 import json
+import re
 import sys
 import types
 import uuid
@@ -43,6 +44,8 @@ import harness  # noqa: E402
 # over HTTP via api_client, not by calling these directly.
 from events.schemas import Recurrence  # noqa: E402
 from events.service import next_occurrence_on_or_after  # noqa: E402
+import accounts.service as accounts_service  # noqa: E402
+import feedback.service as feedback_service  # noqa: E402
 import textai.service as textai_service  # noqa: E402
 
 PASSWORD = "TestPass0rd!"
@@ -562,9 +565,22 @@ class TestNextOccurrenceOnOrAfter:
         assert result is not None
         assert result.isoformat() == "2026-01-01T09:00:00+00:00"
 
+    def test_monthly_recurs_on_the_same_day_of_month(self, server_module):
+        """Monthly/yearly were added to _RRULE_FREQ after this class was written; this asserted
+        that "monthly" was unsupported and returned None long after it stopped being true."""
+        recurrence = Recurrence(freq="monthly", byweekday=None, until=None)
+        result = next_occurrence_on_or_after(
+            "2026-01-31T09:00:00Z", recurrence, "UTC",
+            datetime(2026, 2, 1, 0, 0, 0, tzinfo=timezone.utc),
+        )
+        assert result is not None
+        assert result.isoformat() == "2026-03-31T09:00:00+00:00", (
+            "rrule skips months with no 31st rather than clamping to the 28th"
+        )
+
     def test_unknown_freq_returns_none(self, server_module):
         server = server_module
-        recurrence = Recurrence(freq="monthly", byweekday=None, until=None)
+        recurrence = Recurrence(freq="fortnightly", byweekday=None, until=None)
         result = next_occurrence_on_or_after(
             "2026-01-01T09:00:00Z", recurrence, "UTC",
             datetime(2026, 1, 1, 9, 0, 0, tzinfo=timezone.utc),
@@ -1167,3 +1183,537 @@ class TestTripsCRUD:
         got = await api_client.get(f"/api/events/{event_id}")
         assert got.status_code == 200, got.text
         assert got.json()["trip_id"] is None, "event must not be left pointing at a deleted trip"
+
+
+class TestEventUpdatedAt:
+    """`updated_at` on events: client-authoritative on write, backfilled on read.
+
+    Events had no per-write timestamp at all, so the client's offline merge had nothing to
+    compare and an already-synced event edited locally lost to the server's stale copy on the
+    next pull. These lock in the contract that merge now depends on.
+    """
+
+    async def test_create_returns_updated_at_defaulting_to_server_time(self, api_client):
+        created = await api_client.post("/api/events", json={
+            "title": "TEST_Stamped",
+            "start_time": "2026-10-01T09:00:00Z",
+            "end_time": "2026-10-01T10:00:00Z",
+            "linked_note_ids": [],
+        })
+        assert created.status_code == 200, created.text
+        body = created.json()
+        assert body["updated_at"], "every event response must carry updated_at"
+        assert body["updated_at"] == body["created_at"], (
+            "with no client timestamp sent, a brand-new event's updated_at is its created_at"
+        )
+
+    async def test_create_honors_client_supplied_updated_at(self, api_client):
+        client_ts = "2026-01-02T03:04:05.678000+00:00"
+        created = await api_client.post("/api/events", json={
+            "title": "TEST_Client Clock",
+            "start_time": "2026-10-02T09:00:00Z",
+            "end_time": "2026-10-02T10:00:00Z",
+            "linked_note_ids": [],
+            "updated_at": client_ts,
+        })
+        assert created.status_code == 200, created.text
+        assert created.json()["updated_at"] == client_ts, (
+            "the client's clock must win - the offline merge compares against it, so a "
+            "server-stamped time from an earlier round trip could outrank a newer local edit"
+        )
+
+    async def test_update_honors_client_supplied_updated_at(self, api_client):
+        created = await api_client.post("/api/events", json={
+            "title": "TEST_Before",
+            "start_time": "2026-10-03T09:00:00Z",
+            "end_time": "2026-10-03T10:00:00Z",
+            "linked_note_ids": [],
+        })
+        event_id = created.json()["id"]
+
+        client_ts = "2026-05-06T07:08:09.101112+00:00"
+        updated = await api_client.put(f"/api/events/{event_id}", json={
+            "title": "TEST_After",
+            "updated_at": client_ts,
+        })
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["title"] == "TEST_After"
+        assert updated.json()["updated_at"] == client_ts
+
+    async def test_update_without_client_timestamp_advances_updated_at(self, api_client):
+        created = await api_client.post("/api/events", json={
+            "title": "TEST_Fallback",
+            "start_time": "2026-10-04T09:00:00Z",
+            "end_time": "2026-10-04T10:00:00Z",
+            "linked_note_ids": [],
+        })
+        original = created.json()["updated_at"]
+
+        updated = await api_client.put(
+            f"/api/events/{created.json()['id']}", json={"title": "TEST_Fallback Edited"}
+        )
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["updated_at"] > original, (
+            "an older app build that sends no timestamp still needs the field to move forward"
+        )
+
+    async def test_legacy_event_without_updated_at_is_backfilled_from_created_at(
+        self, api_client, server_module,
+    ):
+        """Events written before the field existed must not come back without it - a client
+        merging them would have nothing to compare. Backfilled on read, no migration."""
+        user_id = await _get_user_id(api_client)
+        event_id = await _seed_event(
+            server_module, user_id,
+            start_time="2026-10-05T09:00:00+00:00",
+            reminder_minutes=None,
+            reminder_fire_at=None,
+            reminder_status="none",
+        )
+        raw = await server_module.db.events.find_one({"id": event_id})
+        assert "updated_at" not in raw, "fixture must reproduce a pre-updated_at document"
+
+        got = await api_client.get(f"/api/events/{event_id}")
+        assert got.status_code == 200, got.text
+        assert got.json()["updated_at"] == got.json()["created_at"]
+
+        listed = await api_client.get("/api/events")
+        assert listed.status_code == 200, listed.text
+        seeded = next(e for e in listed.json() if e["id"] == event_id)
+        assert seeded["updated_at"] == seeded["created_at"]
+
+        batched = await api_client.post("/api/events/batch", json={"event_ids": [event_id]})
+        assert batched.status_code == 200, batched.text
+        assert batched.json()[0]["updated_at"] == batched.json()[0]["created_at"]
+
+
+class TestCollectionPagination:
+    """Paging the list endpoints.
+
+    These endpoints were always paginated; the client just never paged, so it saw the first
+    page and treated it as the whole collection. Paging has to be exhaustive (every record
+    reachable) and disjoint (no record on two pages) for a client to rebuild its offline store
+    from it safely.
+    """
+
+    async def test_notes_paging_is_exhaustive_and_disjoint(self, api_client):
+        created_ids = []
+        for i in range(5):
+            response = await api_client.post("/api/notes", json={
+                "title": f"TEST_Paged {i}",
+                "content": "x",
+            })
+            assert response.status_code == 200, response.text
+            created_ids.append(response.json()["id"])
+
+        seen = []
+        for page in range(1, 4):
+            response = await api_client.get(f"/api/notes?page={page}&page_size=2")
+            assert response.status_code == 200, response.text
+            seen.extend(n["id"] for n in response.json())
+
+        assert len(seen) == len(set(seen)) == 5, f"expected 5 distinct notes across pages, got {seen}"
+        assert set(seen) == set(created_ids)
+
+    async def test_notes_short_page_marks_the_end_of_the_collection(self, api_client):
+        for i in range(3):
+            await api_client.post("/api/notes", json={"title": f"TEST_Short {i}", "content": "x"})
+
+        full = await api_client.get("/api/notes?page=1&page_size=2")
+        assert len(full.json()) == 2, "a full page means the client must ask for another"
+        short = await api_client.get("/api/notes?page=2&page_size=2")
+        assert len(short.json()) == 1, "a short page is how the client learns the pull is complete"
+        past_end = await api_client.get("/api/notes?page=3&page_size=2")
+        assert past_end.json() == [], "paging past the end is empty, not an error"
+
+    async def test_notes_page_size_is_capped(self, api_client):
+        response = await api_client.get("/api/notes?page_size=101")
+        assert response.status_code == 422, "page_size above the cap must be rejected, not clamped"
+
+    async def test_events_paging_is_exhaustive_and_disjoint(self, api_client):
+        created_ids = []
+        for day in range(1, 6):
+            response = await api_client.post("/api/events", json={
+                "title": f"TEST_Paged Event {day}",
+                "start_time": f"2026-11-0{day}T09:00:00Z",
+                "end_time": f"2026-11-0{day}T10:00:00Z",
+                "linked_note_ids": [],
+            })
+            assert response.status_code == 200, response.text
+            created_ids.append(response.json()["id"])
+
+        seen = []
+        for page in range(1, 4):
+            response = await api_client.get(f"/api/events?page={page}&page_size=2")
+            assert response.status_code == 200, response.text
+            seen.extend(e["id"] for e in response.json())
+
+        assert len(seen) == len(set(seen)) == 5, f"expected 5 distinct events across pages, got {seen}"
+        assert set(seen) == set(created_ids)
+
+    async def test_events_paging_is_disjoint_when_start_times_are_identical(self, api_client):
+        """start_time alone is not unique - all-day events on the same date tie exactly. Without
+        the `id` tiebreaker in the sort, skip/limit can hand back the same event twice and never
+        return another one at all."""
+        for _ in range(4):
+            response = await api_client.post("/api/events", json={
+                "title": "TEST_Same Instant",
+                "start_time": "2026-11-20T09:00:00Z",
+                "end_time": "2026-11-20T10:00:00Z",
+                "linked_note_ids": [],
+            })
+            assert response.status_code == 200, response.text
+
+        seen = []
+        for page in range(1, 3):
+            response = await api_client.get(f"/api/events?page={page}&page_size=2")
+            seen.extend(e["id"] for e in response.json())
+        assert len(seen) == len(set(seen)) == 4, f"tied start_times must still page cleanly: {seen}"
+
+    async def test_events_paging_respects_the_month_filter(self, api_client):
+        for month, day in (("11", "10"), ("11", "11"), ("12", "01")):
+            await api_client.post("/api/events", json={
+                "title": f"TEST_Filtered {month}-{day}",
+                "start_time": f"2026-{month}-{day}T09:00:00Z",
+                "end_time": f"2026-{month}-{day}T10:00:00Z",
+                "linked_note_ids": [],
+            })
+
+        page1 = await api_client.get("/api/events?month=11&year=2026&page=1&page_size=1")
+        page2 = await api_client.get("/api/events?month=11&year=2026&page=2&page_size=1")
+        page3 = await api_client.get("/api/events?month=11&year=2026&page=3&page_size=1")
+        assert len(page1.json()) == 1 and len(page2.json()) == 1
+        assert page3.json() == [], "the December event must not leak into a November pull"
+
+    async def test_trips_paging_is_exhaustive_and_disjoint(self, api_client):
+        created_ids = []
+        for i in range(3):
+            response = await api_client.post("/api/trips", json={"name": f"TEST_Paged Trip {i}"})
+            assert response.status_code == 200, response.text
+            created_ids.append(response.json()["id"])
+
+        seen = []
+        for page in range(1, 4):
+            response = await api_client.get(f"/api/trips?page={page}&page_size=1")
+            assert response.status_code == 200, response.text
+            seen.extend(t["id"] for t in response.json())
+
+        assert set(seen) == set(created_ids)
+        assert len(seen) == len(set(seen)) == 3
+
+    async def test_list_endpoints_still_return_bare_arrays(self, api_client):
+        """Released app builds parse these responses as lists. Pagination must not have turned
+        any of them into a paging envelope."""
+        await api_client.post("/api/notes", json={"title": "TEST_Shape", "content": "x"})
+        for path in ("/api/notes", "/api/events", "/api/trips"):
+            response = await api_client.get(path)
+            assert response.status_code == 200, response.text
+            assert isinstance(response.json(), list), f"{path} must stay a bare array"
+
+
+# ---------------------------------------------------------------------------
+# Account erasure (POST /api/account/delete) - GDPR Art. 17
+# ---------------------------------------------------------------------------
+
+# `self.db.notes`, `db.users`, ... - how every module reaches a collection.
+_COLLECTION_REFERENCE = re.compile(r"\bdb\.([a-z_][a-z0-9_]*)\b")
+
+# Attributes on the database handle itself, not collections. Only needed so the scan below reports
+# a genuinely unclassified collection rather than tripping over a driver call.
+_DB_HANDLE_ATTRS = {"client", "command", "list_collection_names", "name"}
+
+
+class TestErasureCoverage:
+    """Erasure has to reach every collection, and has to keep reaching them.
+
+    The list of collections to wipe was hand-maintained and had fallen behind the schema: `trips`,
+    `feedback` and `user_keys` were written by their modules and never added, so an itinerary, a
+    feedback comment and the E2EE key-escrow record each outlived the account that owned them.
+    `push_receipts` was worse than missing - it was listed, but its documents carry no `user_id`,
+    so the delete matched nothing and the collection looked covered while retaining a row naming
+    the user's device for every reminder they were ever sent.
+    """
+
+    def test_every_collection_the_backend_writes_is_classified(self):
+        """The drift guard. A new collection has to be classified one way or the other, so the
+        next module to add one can't quietly reintroduce the bug above."""
+        backend_dir = Path(__file__).resolve().parent.parent
+        referenced: set[str] = set()
+        for path in backend_dir.rglob("*.py"):
+            if "tests" in path.parts:
+                continue
+            referenced.update(
+                name for name in _COLLECTION_REFERENCE.findall(path.read_text())
+                if name not in _DB_HANDLE_ATTRS
+            )
+
+        assert referenced, "found no collection references at all - the scan pattern is broken"
+        declared = (
+            set(accounts_service.USER_ID_SCOPED_COLLECTIONS)
+            | accounts_service.NON_USER_SCOPED_COLLECTIONS
+        )
+        assert referenced <= declared, (
+            f"unclassified for erasure: {sorted(referenced - declared)}. Add each to "
+            "USER_ID_SCOPED_COLLECTIONS in accounts/service.py, or - if it holds no personal data "
+            "or is erased another way - to NON_USER_SCOPED_COLLECTIONS with the reason."
+        )
+
+    async def _seed_one_document_everywhere(self, api_client, server_module, user_id: str) -> str:
+        """Give the user a document in every user-scoped collection. Returns their push token."""
+        note = await api_client.post("/api/notes", json={"title": "TEST_Erase", "content": "x"})
+        assert note.status_code == 200, note.text
+        event = await api_client.post("/api/events", json={
+            "title": "TEST_Erase Event",
+            "start_time": "2026-11-01T09:00:00Z",
+            "end_time": "2026-11-01T10:00:00Z",
+            "linked_note_ids": [],
+        })
+        assert event.status_code == 200, event.text
+        trip = await api_client.post("/api/trips", json={"name": "TEST_Erase Trip"})
+        assert trip.status_code == 200, trip.text
+        # Empty text keeps the AI triage path (and its network call) out of this test.
+        given = await api_client.post("/api/feedback", json={"sentiment": "positive", "text": ""})
+        assert given.status_code == 200, given.text
+        keys = await api_client.put("/api/crypto/wrapped-key", json={
+            "wrapped_by_password": "opaque-a",
+            "wrapped_by_recovery": "opaque-b",
+            "kdf_salt": "salt-a",
+            "recovery_salt": "salt-b",
+        })
+        assert keys.status_code == 200, keys.text
+        used = await api_client.post("/api/events/feature", json={"event": "erasure_test"})
+        assert used.status_code == 200, used.text
+
+        token = "ExponentPushToken[erasure-test]"
+        registered = await api_client.post("/api/push/register", json={
+            "token": token, "platform": "ios",
+        })
+        assert registered.status_code == 200, registered.text
+        # As reminders/service.py records a sent push - note the absent user_id.
+        await server_module.db.push_receipts.insert_one({
+            "ticket_id": "ticket-erasure-test",
+            "event_id": event.json()["id"],
+            "token": token,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "checked": False,
+        })
+        return token
+
+    async def test_erasure_leaves_nothing_behind(self, api_client, server_module):
+        user_id = await _get_user_id(api_client)
+        token = await self._seed_one_document_everywhere(api_client, server_module, user_id)
+
+        # Assert the fixture worked before asserting it was cleared - otherwise a collection that
+        # nothing writes to would pass this test while proving nothing.
+        for collection in accounts_service.USER_ID_SCOPED_COLLECTIONS:
+            assert await server_module.db[collection].count_documents({"user_id": user_id}) > 0, (
+                f"fixture wrote nothing to {collection}, so erasing it proves nothing"
+            )
+        assert await server_module.db.push_receipts.count_documents({"token": token}) == 1
+
+        erased = await api_client.post("/api/account/delete", json={"password": PASSWORD})
+        assert erased.status_code == 200, erased.text
+
+        # Every collection in the database, not just the declared ones: iterating the declaration
+        # alone would only ever re-check what someone remembered to list, which is the failure this
+        # test exists for.
+        for collection in await server_module.db.list_collection_names():
+            assert await server_module.db[collection].count_documents({"user_id": user_id}) == 0, (
+                f"{collection} still holds data for an erased user"
+            )
+        assert await server_module.db.push_receipts.count_documents({"token": token}) == 0, (
+            "push receipts name the user's device and nothing else ever deletes them"
+        )
+        assert await server_module.db.users.count_documents({"id": user_id}) == 0
+
+    async def test_wrong_password_erases_nothing(self, api_client, server_module):
+        user_id = await _get_user_id(api_client)
+        await self._seed_one_document_everywhere(api_client, server_module, user_id)
+
+        refused = await api_client.post("/api/account/delete", json={"password": "not-the-password"})
+        assert refused.status_code == 401, refused.text
+
+        assert await server_module.db.users.count_documents({"id": user_id}) == 1
+        for collection in accounts_service.USER_ID_SCOPED_COLLECTIONS:
+            assert await server_module.db[collection].count_documents({"user_id": user_id}) > 0, (
+                f"{collection} was cleared despite the password being rejected"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Model replies as untrusted input: what the schemas reject, tolerate, and store.
+# ---------------------------------------------------------------------------
+
+class TestLLMOutputValidation:
+    """A model reply is request-shaped input from outside the trust boundary, and the feedback
+    triage reply is the one that gets written to the database. It used to be read off a bare
+    json.loads with .get(), so a reply that ignored the prompt - or was steered into ignoring it by
+    the user's own feedback text - could store arbitrary strings in the fields triage exists to
+    make sortable. The rules now live in the schemas; these cover what that changes.
+    """
+
+    TRIAGE_PATH = "/api/feedback"
+
+    async def _submit_with_triage_reply(self, api_client, monkeypatch, reply: str):
+        monkeypatch.setattr(
+            feedback_service, "get_openai_client", lambda: _fake_openai_client(reply),
+        )
+        return await api_client.post(self.TRIAGE_PATH, json={
+            "sentiment": "negative",
+            "text": "The editor lost my note when I hit back.",
+        })
+
+    async def _stored_feedback(self, server_module, user_id: str) -> dict:
+        doc = await server_module.db.feedback.find_one({"user_id": user_id})
+        assert doc is not None, "feedback must be stored whatever triage did"
+        return doc
+
+    async def test_valid_triage_is_stored(self, api_client, server_module, monkeypatch):
+        user_id = await _get_user_id(api_client)
+        reply = json.dumps({
+            "category": "bug", "priority": "urgent", "summary": "Note lost on back navigation.",
+        })
+        response = await self._submit_with_triage_reply(api_client, monkeypatch, reply)
+        assert response.status_code == 200, response.text
+
+        doc = await self._stored_feedback(server_module, user_id)
+        assert doc["aiCategory"] == "bug"
+        assert doc["aiPriority"] == "urgent"
+        assert doc["aiSummary"] == "Note lost on back navigation."
+
+    async def test_invented_category_is_not_stored(self, api_client, server_module, monkeypatch):
+        """A value outside the closed set is a malformed reply, not a new category - storing it
+        would put an unsortable value in the field triage exists to sort by."""
+        user_id = await _get_user_id(api_client)
+        reply = json.dumps({
+            "category": "escalate-to-the-ceo", "priority": "urgent", "summary": "Serious.",
+        })
+        response = await self._submit_with_triage_reply(api_client, monkeypatch, reply)
+        assert response.status_code == 200, f"triage failure must not fail the submission: {response.text}"
+
+        doc = await self._stored_feedback(server_module, user_id)
+        assert doc["aiCategory"] is None
+        assert doc["aiPriority"] is None, "the whole triage is rejected, not the bad field alone"
+        assert doc["aiSummary"] is None
+        assert doc["text"] == "The editor lost my note when I hit back.", "the feedback itself survives"
+
+    async def test_oversized_summary_is_not_stored(self, api_client, server_module, monkeypatch):
+        """The prompt asks for one short sentence. A reply this far off-script is not trustworthy,
+        and it is the path by which prompt-injected text would reach the database."""
+        user_id = await _get_user_id(api_client)
+        reply = json.dumps({
+            "category": "bug", "priority": "high", "summary": "x" * 5000,
+        })
+        response = await self._submit_with_triage_reply(api_client, monkeypatch, reply)
+        assert response.status_code == 200, response.text
+
+        doc = await self._stored_feedback(server_module, user_id)
+        assert doc["aiSummary"] is None
+
+    async def test_triage_reply_that_is_not_json_leaves_the_fields_null(
+        self, api_client, server_module, monkeypatch,
+    ):
+        user_id = await _get_user_id(api_client)
+        response = await self._submit_with_triage_reply(api_client, monkeypatch, "I'd say it's a bug!")
+        assert response.status_code == 200, response.text
+
+        doc = await self._stored_feedback(server_module, user_id)
+        assert (doc["aiCategory"], doc["aiPriority"], doc["aiSummary"]) == (None, None, None)
+
+    async def _classify(self, api_client, monkeypatch, payload: dict):
+        monkeypatch.setattr(
+            textai_service, "get_openai_client", lambda: _fake_openai_client(json.dumps(payload)),
+        )
+        return await api_client.post("/api/classify-voice-intent", json={
+            "transcript": "Dinner with Sam on Friday at 7",
+            "reference_date": "2026-07-28",
+            "timezone": "UTC",
+        })
+
+    async def test_unrecognized_confidence_degrades_to_low(self, api_client, monkeypatch):
+        """Confidence only decides whether the UI asks the user to confirm the time, so an
+        unreadable value must cost the confirmation prompt, not the event."""
+        response = await self._classify(api_client, monkeypatch, {
+            "intent": "single_event",
+            "events": [{
+                "title": "Dinner with Sam",
+                "start_time": "2026-07-31T19:00:00+00:00",
+                "confidence": "pretty sure",
+            }],
+        })
+        assert response.status_code == 200, response.text
+        assert response.json()["events"][0]["confidence"] == "low"
+
+    async def test_boolean_weekday_does_not_become_monday(self, api_client, monkeypatch):
+        """`true` is an int in Python, so an unchecked byweekday would read it as weekday 1 and
+        schedule a repeat the user never asked for. The rest of the recurrence is still usable."""
+        response = await self._classify(api_client, monkeypatch, {
+            "intent": "single_event",
+            "events": [{
+                "title": "Standup",
+                "start_time": "2026-07-31T09:00:00+00:00",
+                "recurrence": {"freq": "weekly", "byweekday": [True], "until": None},
+            }],
+        })
+        assert response.status_code == 200, response.text
+        recurrence = response.json()["events"][0]["recurrence"]
+        assert recurrence is not None, "a weekly rule stays weekly"
+        assert recurrence["byweekday"] is None, "an unusable weekday list is dropped, not coerced"
+
+    async def test_unusable_event_is_dropped_without_taking_its_siblings(
+        self, api_client, monkeypatch,
+    ):
+        response = await self._classify(api_client, monkeypatch, {
+            "intent": "itinerary",
+            "trip_name": "Tokyo",
+            "events": [
+                {"title": "   ", "start_time": "2026-07-31T09:00:00+00:00"},
+                {"title": "Flight", "start_time": "2026-07-31T11:00:00+00:00"},
+                {"title": "Hotel check-in", "start_time": ""},
+            ],
+        })
+        assert response.status_code == 200, response.text
+        titles = [e["title"] for e in response.json()["events"]]
+        assert titles == ["Flight"], "one unusable entry must not cost the whole itinerary"
+
+    async def test_events_that_are_not_a_list_are_treated_as_none_extracted(
+        self, api_client, monkeypatch,
+    ):
+        response = await self._classify(api_client, monkeypatch, {
+            "intent": "single_event",
+            "events": {"title": "Dinner", "start_time": "2026-07-31T19:00:00+00:00"},
+        })
+        assert response.status_code == 500, response.text
+
+    async def test_unrecognized_note_type_degrades_to_general(self, api_client, monkeypatch):
+        """smart_format's note_type only picks a formatting template, so an unknown one must not
+        cost the user the restructured text the model did produce."""
+        monkeypatch.setattr(textai_service, "get_openai_client", lambda: _fake_openai_client(
+            json.dumps({"note_type": "shopping_list", "html": "<ul><li>milk</li></ul>"}),
+        ))
+        response = await api_client.post("/api/process-text", json={
+            "text": "milk", "action": "smart_format",
+        })
+        assert response.status_code == 200, response.text
+        assert response.json()["note_type"] == "general"
+        assert response.json()["text"] == "<ul><li>milk</li></ul>"
+
+    async def test_non_classifying_actions_answer_with_text_alone(self, api_client, monkeypatch):
+        """organize/summarize don't classify, and released builds expect note_type to be absent
+        rather than null - see the response_model_exclude_none note on the route."""
+        monkeypatch.setattr(
+            textai_service, "get_openai_client", lambda: _fake_openai_client("Tidied up."),
+        )
+        response = await api_client.post("/api/process-text", json={
+            "text": "some rambling text", "action": "organize",
+        })
+        assert response.status_code == 200, response.text
+        assert response.json() == {"text": "Tidied up."}
+
+    async def test_unknown_action_is_still_a_400(self, api_client):
+        """The action check moved into the schema module's declared set; the client-facing
+        contract (400 with a message, not a 422) must not have moved with it."""
+        response = await api_client.post("/api/process-text", json={
+            "text": "x", "action": "translate",
+        })
+        assert response.status_code == 400, response.text

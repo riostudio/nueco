@@ -131,6 +131,14 @@ MAX_EVENT_DESCRIPTION_CHARS = 5_000 * _CIPHERTEXT_HEADROOM
 MAX_EVENT_LOCATION_CHARS = 300 * _CIPHERTEXT_HEADROOM
 
 
+# Pagination. 100 is deliberately the same number as the hard `.to_list(100)` cap this endpoint
+# carried before it was paginated, so an older app build that sends no page params gets exactly
+# the response it always got - while a newer client can page past it instead of silently seeing
+# only the first 100 events and treating that as "all of them".
+DEFAULT_EVENTS_PAGE_SIZE = 100
+MAX_EVENTS_PAGE_SIZE = 100
+
+
 def _validate_event_payload(title=None, description=None, location=None):
     """Reject oversized event fields. Only checks provided (non-None) fields."""
     if title is not None and len(title) > MAX_EVENT_TITLE_CHARS:
@@ -141,12 +149,24 @@ def _validate_event_payload(title=None, description=None, location=None):
         raise EventPayloadTooLargeError(f"Location too long (max {MAX_EVENT_LOCATION_CHARS} characters)")
 
 
+def _normalize_updated_at(doc: dict) -> dict:
+    """Read-side backfill: events created before `updated_at` existed only have `created_at`.
+    Presenting `updated_at` on every response (rather than leaving it absent for old rows) is
+    what lets the client's offline merge compare timestamps for ALL events instead of only new
+    ones - without it, a legacy event has nothing to arbitrate with and the merge has to guess.
+    Same no-migration-required approach as notes' _normalize_linked_event_ids."""
+    if not doc.get("updated_at"):
+        doc["updated_at"] = doc.get("created_at") or ""
+    return doc
+
+
 class EventsService:
     def __init__(self, db: AsyncIOMotorDatabase):
         self.db = db
 
     async def create(self, user_id: str, event: EventCreate) -> dict:
         _validate_event_payload(event.title, event.description, event.location)
+        now = datetime.now(timezone.utc).isoformat()
         doc = {
             "id": str(uuid.uuid4()),
             "title": event.title,
@@ -160,7 +180,11 @@ class EventsService:
             "device_calendar_event_id": event.device_calendar_event_id,
             "user_id": user_id,
             "enc_version": event.enc_version,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": now,
+            # Client's clock wins when it sends one, same as notes - the offline merge compares
+            # these two timestamps, so a server-stamped time from an earlier round trip could
+            # otherwise sort as "newer" than a genuinely later local edit.
+            "updated_at": event.updated_at or now,
             "recurrence": event.recurrence.model_dump() if event.recurrence else None,
             "timezone": event.timezone,
             "trip_id": event.trip_id,
@@ -170,7 +194,14 @@ class EventsService:
         doc.pop("_id", None)
         return doc
 
-    async def list(self, user_id: str, month: Optional[int], year: Optional[int]) -> List[dict]:
+    async def list(
+        self,
+        user_id: str,
+        month: Optional[int],
+        year: Optional[int],
+        page: int = 1,
+        page_size: int = DEFAULT_EVENTS_PAGE_SIZE,
+    ) -> List[dict]:
         query = {"user_id": user_id}
         if month is not None and year is not None:
             start = f"{year:04d}-{month:02d}-01"
@@ -179,7 +210,7 @@ class EventsService:
             else:
                 end = f"{year:04d}-{month + 1:02d}-01"
             query = {"user_id": user_id, "start_time": {"$gte": start, "$lt": end}}
-        return await self.db.events.find(query, {
+        events = await self.db.events.find(query, {
             "_id": 0,
             "id": 1,
             "title": 1,
@@ -194,16 +225,24 @@ class EventsService:
             "user_id": 1,
             "enc_version": 1,
             "created_at": 1,
+            "updated_at": 1,
             "recurrence": 1,
             "timezone": 1,
             "trip_id": 1,
-        }).sort("start_time", 1).to_list(100)  # Reduced limit
+        }).sort(
+            # `id` is the tiebreaker, not decoration: start_time alone is not unique (all-day
+            # events on the same date share it exactly), and skip/limit paging over a
+            # non-deterministic order can hand the same document to two pages while skipping
+            # another entirely. Covered by the (user_id, start_time, id) index.
+            [("start_time", 1), ("id", 1)]
+        ).skip((page - 1) * page_size).limit(page_size).to_list(page_size)
+        return [_normalize_updated_at(e) for e in events]
 
     async def get(self, user_id: str, event_id: str) -> dict:
         event = await self.db.events.find_one({"id": event_id, "user_id": user_id}, {"_id": 0})
         if not event:
             raise EventNotFoundError()
-        return event
+        return _normalize_updated_at(event)
 
     async def get_batch(self, user_id: str, event_ids: List[str]) -> List[dict]:
         """Fetch multiple events by IDs in a single request (fixes N+1 query)"""
@@ -211,10 +250,11 @@ class EventsService:
             return []
         # Limit batch size to prevent abuse
         event_ids = event_ids[:50]
-        return await self.db.events.find(
+        events = await self.db.events.find(
             {"id": {"$in": event_ids}, "user_id": user_id},
             {"_id": 0}
         ).to_list(50)
+        return [_normalize_updated_at(e) for e in events]
 
     async def update(self, user_id: str, event_id: str, update: EventUpdate) -> dict:
         _validate_event_payload(update.title, update.description, update.location)
@@ -244,8 +284,15 @@ class EventsService:
             fields = compute_reminder_fields(new_start, new_minutes)
             if fields["reminder_fire_at"] != existing.get("reminder_fire_at"):
                 updates.update(fields)
+        # The loop above already picked up the client's own updated_at when it sent one, which
+        # must win (see EventCreate.updated_at). Only stamp server time as the fallback for older
+        # app builds. Deliberately not applied to the reminder scheduler's own $set writes in
+        # reminders/service.py: those touch internal fields, not user-visible content, and
+        # bumping the timestamp there would make the server copy beat a real local edit.
+        updates.setdefault("updated_at", datetime.now(timezone.utc).isoformat())
         await self.db.events.update_one({"id": event_id, "user_id": user_id}, {"$set": updates})
-        return await self.db.events.find_one({"id": event_id, "user_id": user_id}, {"_id": 0})
+        event = await self.db.events.find_one({"id": event_id, "user_id": user_id}, {"_id": 0})
+        return _normalize_updated_at(event)
 
     async def delete(self, user_id: str, event_id: str) -> None:
         result = await self.db.events.delete_one({"id": event_id, "user_id": user_id})

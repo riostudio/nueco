@@ -4,7 +4,6 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  SafeAreaView,
   TextInput,
   KeyboardAvoidingView,
   Platform,
@@ -12,6 +11,9 @@ import {
   Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
+// react-native's own SafeAreaView is iOS-only - a no-op on Android, which is why the back
+// arrow sat under the status bar there. This one insets on both platforms.
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { authApi } from '../src/auth';
 import { C, radius, borderWidth } from '../src/theme';
@@ -74,7 +76,7 @@ export default function SignupScreen() {
       setIsSuccess(true);
     } catch (error: any) {
       // Show error inline instead of Alert
-      setErrors({ general: error.message || 'Something went wrong. Please try again.' });
+      setErrors({ general: error.message || 'Something went wrong at our end. Have another go.' });
     } finally {
       setIsLoading(false);
     }
@@ -83,12 +85,12 @@ export default function SignupScreen() {
   // Success screen after account creation
   if (isSuccess) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
         <View style={styles.successContainer}>
           <View style={styles.successIcon}>
             <MaterialIcons name="check-circle" size={80} color={C.success} />
           </View>
-          <Text style={styles.successTitle}>Account Created!</Text>
+          <Text style={styles.successTitle}>Account created</Text>
           <Text style={styles.successMessage}>
             We've sent a verification link to{'\n'}
             <Text style={styles.successEmail}>{email}</Text>
@@ -103,7 +105,7 @@ export default function SignupScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.keyboardView}
@@ -126,7 +128,7 @@ export default function SignupScreen() {
 
           {/* Title */}
           <View style={styles.titleSection}>
-            <Text style={styles.title}>Create Account</Text>
+            <Text style={styles.title}>Create account</Text>
             <Text style={styles.subtitle}>Sign up to sync your notes across devices</Text>
           </View>
 
@@ -142,7 +144,7 @@ export default function SignupScreen() {
 
             {/* Name Input */}
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Full Name</Text>
+              <Text style={styles.label}>Name</Text>
               <View style={[styles.inputContainer, errors.name && styles.inputError]}>
                 <MaterialIcons name="person-outline" size={24} color={C.borderSub} style={styles.inputIcon} />
                 <TextInput
@@ -163,7 +165,7 @@ export default function SignupScreen() {
 
             {/* Email Input */}
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Email Address</Text>
+              <Text style={styles.label}>Email</Text>
               <View style={[styles.inputContainer, errors.email && styles.inputError]}>
                 <MaterialIcons name="email" size={24} color={C.borderSub} style={styles.inputIcon} />
                 <TextInput
@@ -213,7 +215,7 @@ export default function SignupScreen() {
 
             {/* Confirm Password Input */}
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Confirm Password</Text>
+              <Text style={styles.label}>Confirm password</Text>
               <View style={[styles.inputContainer, errors.confirmPassword && styles.inputError]}>
                 <MaterialIcons name="lock-outline" size={24} color={C.borderSub} style={styles.inputIcon} />
                 <TextInput
@@ -245,7 +247,7 @@ export default function SignupScreen() {
             <View style={styles.loginLinkContainer}>
               <Text style={styles.loginText}>Already have an account? </Text>
               <TouchableOpacity onPress={() => router.replace('/login')}>
-                <Text style={styles.loginLink}>Log In</Text>
+                <Text style={styles.loginLink}>Log in</Text>
               </TouchableOpacity>
             </View>
           </View>

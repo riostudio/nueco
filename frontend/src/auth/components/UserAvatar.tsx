@@ -30,7 +30,7 @@ export function UserAvatar({ size = 40 }: UserAvatarProps) {
 
   if (!user) return null;
 
-  // Daily Brew's "News from home" entry only shows once the flag (resolved server-side, see
+  // The Daily Brew entry only shows once the flag (resolved server-side, see
   // backend/featureflags.py) comes back on - avoids a dead-end menu item pointing at a hidden feature.
   const dailyBrewEnabled = user.daily_brew_enabled === true;
 
@@ -53,7 +53,7 @@ export function UserAvatar({ size = 40 }: UserAvatarProps) {
     router.push('/calendar-sync-settings' as Href);
   };
 
-  const handleNewsFromHome = () => {
+  const handleDailyBrewSettings = () => {
     setMenuVisible(false);
     router.push('/news-source-settings' as Href);
   };
@@ -112,24 +112,28 @@ export function UserAvatar({ size = 40 }: UserAvatarProps) {
 
             <TouchableOpacity style={styles.menuItem} onPress={handleCalendarSync}>
               <MaterialIcons name="sync" size={24} color={C.text} />
-              <Text style={styles.menuText}>Calendar Sync</Text>
+              <Text style={styles.menuText}>Calendar</Text>
             </TouchableOpacity>
 
             {dailyBrewEnabled && (
-              <TouchableOpacity style={styles.menuItem} onPress={handleNewsFromHome}>
-                <MaterialIcons name="newspaper" size={24} color={C.text} />
-                <Text style={styles.menuText}>News from home</Text>
+              <TouchableOpacity style={styles.menuItem} onPress={handleDailyBrewSettings}>
+                <MaterialIcons name="wb-sunny" size={24} color={C.text} />
+                {/* Named for the feature, not just its news row: the destination screen now owns
+                    the verse and the daily quote as well, and a menu item promising only "News
+                    from home" is how the quote toggle went missing from settings in the first
+                    place. */}
+                <Text style={styles.menuText}>Daily Brew</Text>
               </TouchableOpacity>
             )}
 
             <TouchableOpacity style={styles.menuItem} onPress={handleChangePassword}>
               <MaterialIcons name="lock" size={24} color={C.text} />
-              <Text style={styles.menuText}>Change Password</Text>
+              <Text style={styles.menuText}>Change password</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.menuItem} onPress={handleLogout}>
               <MaterialIcons name="logout" size={24} color={C.primary} />
-              <Text style={[styles.menuText, { color: C.primary }]}>Log Out</Text>
+              <Text style={[styles.menuText, { color: C.primary }]}>Log out</Text>
             </TouchableOpacity>
           </View>
         </Pressable>

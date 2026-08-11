@@ -11,13 +11,24 @@ config.cacheStores = [
   new FileStore({ root: path.join(root, 'cache') }),
 ];
 
-
-// // Exclude unnecessary directories from file watching
-// config.watchFolders = [__dirname];
-// config.resolver.blacklistRE = /(.*)\/(__tests__|android|ios|build|dist|.git|node_modules\/.*\/android|node_modules\/.*\/ios|node_modules\/.*\/windows|node_modules\/.*\/macos)(\/.*)?$/;
-
-// // Alternative: use a more aggressive exclusion pattern
-// config.resolver.blacklistRE = /node_modules\/.*\/(android|ios|windows|macos|__tests__|\.git|.*\.android\.js|.*\.ios\.js)$/;
+// Native-only packages that call TurboModuleRegistry.getEnforcing at import time and
+// therefore crash the web bundle. Screenshot / local web runs stub them out.
+const WEB_NATIVE_STUBS = new Set([
+  'react-native-share',
+  'react-native-quick-crypto',
+  'react-native-quick-base64',
+]);
+const webStubPath = path.resolve(__dirname, 'src/webNativeStubs.js');
+const upstreamResolve = config.resolver.resolveRequest;
+config.resolver.resolveRequest = (context, moduleName, platform) => {
+  if (platform === 'web' && WEB_NATIVE_STUBS.has(moduleName)) {
+    return { type: 'sourceFile', filePath: webStubPath };
+  }
+  if (upstreamResolve) {
+    return upstreamResolve(context, moduleName, platform);
+  }
+  return context.resolveRequest(context, moduleName, platform);
+};
 
 // Reduce the number of workers to decrease resource usage
 config.maxWorkers = 2;

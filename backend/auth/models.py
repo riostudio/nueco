@@ -26,6 +26,7 @@ def create_user_doc(
         "news_outlet_ids": [],
         "custom_news_feeds": [],  # user-added [{id: "custom:<uuid>", name, feed_url}, ...]
         "daily_brew_show_verse": False,
+        "daily_brew_show_quote": False,
         "created_at": datetime.utcnow(),
         "updated_at": datetime.utcnow()
     }

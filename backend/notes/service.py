@@ -13,6 +13,7 @@ from typing import List, Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from attachments.service import delete_attachment
+from core.repository import scoped
 from .schemas import NoteCreate, NoteUpdate
 
 logger = logging.getLogger(__name__)
@@ -82,6 +83,8 @@ class NotesService:
     async def create(self, user_id: str, note: NoteCreate) -> dict:
         _validate_note_payload(note.title, note.content, note.images, note.objects)
         now = datetime.now(timezone.utc).isoformat()
+        created_at = note.created_at or now
+        updated_at = note.updated_at or now
         # linked_event_ids (new, plural) is authoritative when provided; dual-write
         # linked_event_id (deprecated, singular) so an old app build reading only the
         # legacy field still sees a link rather than it silently vanishing.
@@ -100,8 +103,8 @@ class NotesService:
             "has_attachments": len(note.attachments) > 0,
             "user_id": user_id,
             "enc_version": note.enc_version,
-            "created_at": now,
-            "updated_at": now,
+            "created_at": created_at,
+            "updated_at": updated_at,
         }
         await self.db.notes.insert_one(doc)
         doc.pop("_id", None)
@@ -110,9 +113,11 @@ class NotesService:
     async def list(self, user_id: str, page: int, page_size: int) -> List[dict]:
         # Note: search is client-side. Once note fields are E2EE ciphertext the server
         # cannot regex-match them, so filtering moved on-device (see index.tsx).
-        query = {"user_id": user_id}
         skip = (page - 1) * page_size
-        notes = await self.db.notes.find(query, {
+        # Through the seam: the tenant predicate is applied by construction rather than by
+        # remembering to build it into `query`, and it becomes statically verifiable by
+        # scripts/check_user_scoping.py instead of opaque behind a variable.
+        notes = await scoped(self.db.notes, user_id).find({}, {
             "_id": 0,
             "id": 1,
             "title": 1,
@@ -130,7 +135,15 @@ class NotesService:
             "created_at": 1,
             "updated_at": 1
         }).sort(
-            [("is_pinned", -1), ("updated_at", -1)]
+            # `id` breaks ties so paging is deterministic. (is_pinned, updated_at) is not unique -
+            # notes written in the same millisecond, or carrying timestamps copied from an import,
+            # tie exactly - and with skip/limit an unstable order can return one document on two
+            # pages while never returning another at all. A client paging to build its offline
+            # store would then treat the missing note as deleted. Kept index-covered by the
+            # (user_id, is_pinned, updated_at, id) index in server.py: an uncovered sort here is
+            # a blocking in-memory sort over notes that carry base64 images, which is exactly
+            # what the 32MB sort limit rejects.
+            [("is_pinned", -1), ("updated_at", -1), ("id", 1)]
         ).skip(skip).limit(page_size).to_list(page_size)
         return [_normalize_linked_event_ids(n) for n in notes]
 
@@ -164,7 +177,11 @@ class NotesService:
         # Keep the denormalized flag in sync whenever attachments are part of the update.
         if "attachments" in updates:
             updates["has_attachments"] = len(updates["attachments"]) > 0
-        updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+        # The loop above already set updates["updated_at"] from the client's payload when
+        # provided (see NoteUpdate.updated_at's comment for why that must win over server time -
+        # offline-first conflict resolution is client-timestamp-authoritative). Only stamp the
+        # server clock as a fallback for older app builds that don't send it.
+        updates.setdefault("updated_at", datetime.now(timezone.utc).isoformat())
         result = await self.db.notes.update_one({"id": note_id, "user_id": user_id}, {"$set": updates})
         if result.matched_count == 0:
             raise NoteNotFoundError()

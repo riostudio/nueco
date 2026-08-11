@@ -22,11 +22,14 @@ import {
   View, Text, Image, StyleSheet, TouchableOpacity, Animated, Linking, LayoutAnimation, Platform, UIManager,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { prefixEmoji } from '../events/eventEmoji';
+import { SkeletonBlock, BrewRowSkeleton } from './Skeleton';
 import { useRouter, useFocusEffect, type Href } from 'expo-router';
 import { C, radius, borderWidth } from '../theme';
 import { DAY_NAMES, MONTH_NAMES } from '../dateNames';
 import { useAuth } from '../auth';
 import { getVerseForDate } from '../dailyBrew/verses';
+import { getQuoteForDate } from '../dailyBrew/quotes';
 import {
   isDismissedToday, markDismissedToday, isPersistPinned, getCachedBrew, setCachedBrew, pruneOldKeys,
   fetchEventsToday, fetchWeather, fetchNewsHeadlines, BrewEvent, NewsItem, CachedBrew,
@@ -214,6 +217,8 @@ export default function DailyBrewCard({ preview = false }: Props) {
 
   const verse = useMemo(() => getVerseForDate(new Date()), []);
   const showVerse = user?.daily_brew_show_verse === true;
+  const quote = useMemo(() => getQuoteForDate(new Date()), []);
+  const showQuote = user?.daily_brew_show_quote === true;
   const hasNewsPrefs = Boolean(user?.news_country) || Boolean(user?.news_outlet_ids?.length);
 
   const handleDone = async () => {
@@ -264,67 +269,105 @@ export default function DailyBrewCard({ preview = false }: Props) {
             {weather.place ? `${weather.place} · ` : ''}{Math.round(weather.tempC)}° {weather.condition}
           </Text>
         </View>
-      ) : null}
+      ) : (
+        // Placeholder keeps the chip's line present, so the rows below don't jump down
+        // when the weather lands.
+        <View style={{ marginBottom: 8 }}><SkeletonBlock width={140} height={26} radius={999} /></View>
+      )}
 
-      {events !== 'loading' && (
+      {events !== 'loading' ? (
         eventsList.length > 0 ? (
           eventsList.map((e) => (
             <TouchableOpacity
               key={e.id}
               style={s.eventRow}
-              onPress={() => router.push({ pathname: '/event-editor', params: { eventId: e.id } })}
+              onPress={() => router.push(`/event?eventId=${e.id}` as Href)}
             >
-              <MaterialIcons name="event-note" size={17} color={C.secondary} />
+              <View style={s.slot}><MaterialIcons name="event-note" size={20} color={C.secondary} /></View>
               <Text style={s.eventRowText} numberOfLines={1}>
-                {e.title} · {formatEventTime(e.startTime)}
+                {prefixEmoji(e.title)} · {formatEventTime(e.startTime)}
               </Text>
             </TouchableOpacity>
           ))
         ) : (
           <View style={s.row}>
-            <MaterialIcons name="newspaper" size={17} color={C.textSec} />
+            <View style={s.slot}><MaterialIcons name="newspaper" size={20} color={C.textSec} /></View>
             <Text style={s.rowTextMuted}>No events today</Text>
           </View>
         )
+      ) : (
+        <BrewRowSkeleton />
       )}
 
       {showVerse && (
         <TouchableOpacity style={s.row} onPress={() => router.push('/daily-verse' as Href)}>
-          <MaterialIcons name="menu-book" size={17} color={C.textSec} />
+          <View style={s.slot}><MaterialIcons name="menu-book" size={20} color={C.textSec} /></View>
           <Text style={s.rowText} numberOfLines={2} ellipsizeMode="tail">
             {verse.text} — {verse.reference}
           </Text>
         </TouchableOpacity>
       )}
 
-      {news !== 'loading' && (
+      {showQuote && (
+        <View style={s.row}>
+          <View style={s.slot}><MaterialIcons name="format-quote" size={20} color={C.textSec} /></View>
+          <Text style={s.rowText} numberOfLines={2} ellipsizeMode="tail">
+            {quote.text} — {quote.author}
+          </Text>
+        </View>
+      )}
+
+      {news !== 'loading' ? (
         newsList.length > 0 ? (
           newsList.map((item, i) => (
-            <TouchableOpacity key={`${item.link}-${i}`} style={s.row} onPress={() => Linking.openURL(item.link)}>
+            <TouchableOpacity key={`${item.link}-${i}`} style={s.newsRow} onPress={() => Linking.openURL(item.link)}>
+              {/* Circular brand avatar, WhatsApp-Channels style. Logos were dropped earlier at
+                  17px, where outlet artwork was unreadable and every outlet's different
+                  proportions left the column ragged. At 44px circular they do the opposite: mastheads
+                  are recognisable at a glance and the circle crops every source to the same shape,
+                  so the left rail stays even no matter what artwork comes back from the feed. */}
               {item.logoUrl ? (
-                <Image source={{ uri: item.logoUrl }} style={s.newsLogo} />
+                <Image source={{ uri: item.logoUrl }} style={s.newsAvatar} />
               ) : (
-                <MaterialIcons name="newspaper" size={17} color={C.textSec} />
+                // Monogram fallback rather than a generic newspaper glyph: it keeps the rail
+                // aligned and still distinguishes one source from another.
+                <View style={[s.newsAvatar, s.newsAvatarFallback]}>
+                  <Text style={s.newsAvatarLetter}>
+                    {(item.sourceName || '?').trim().charAt(0).toUpperCase()}
+                  </Text>
+                </View>
               )}
-              <View style={s.rowTextCol}>
-                <Text style={s.rowMeta}>
-                  {item.sourceName}{formatRelativeTime(item.publishedAt) ? ` · ${formatRelativeTime(item.publishedAt)}` : ''}
-                </Text>
-                <Text style={s.rowText} numberOfLines={1}>{item.headline}</Text>
+              <View style={s.newsTextCol}>
+              {/* Headline first, at full weight. The source and time used to sit ABOVE it in grey,
+                  so the eye landed on "ABC News · 2h ago" before the thing worth reading. Two
+                  lines rather than one: a headline cut mid-sentence gives no basis for deciding
+                  whether to tap, which is the only decision this row exists to support. */}
+              <Text style={s.newsHeadline} numberOfLines={2}>{item.headline}</Text>
+              <Text style={s.newsMeta} numberOfLines={1}>
+                {item.sourceName}{formatRelativeTime(item.publishedAt) ? ` · ${formatRelativeTime(item.publishedAt)}` : ''}
+              </Text>
               </View>
             </TouchableOpacity>
           ))
         ) : hasNewsPrefs ? (
           <View style={s.row}>
-            <MaterialIcons name="newspaper" size={17} color={C.textSec} />
+            <View style={s.slot}><MaterialIcons name="newspaper" size={20} color={C.textSec} /></View>
             <Text style={s.rowTextMuted}>Headline unavailable right now</Text>
           </View>
         ) : (
-          <TouchableOpacity style={s.row} onPress={() => router.push('/news-source-settings' as Href)}>
-            <MaterialIcons name="newspaper" size={17} color={C.textSec} />
+          // `news=1` opens the setup screen with its News section already expanded. That screen
+          // otherwise defaults the toggle from what's saved, so someone with only the verse
+          // switched on would tap a row saying "set up news" and land on news switched off.
+          <TouchableOpacity style={s.row} onPress={() => router.push('/news-source-settings?news=1' as Href)}>
+            <View style={s.slot}><MaterialIcons name="newspaper" size={20} color={C.textSec} /></View>
             <Text style={s.rowText}>Set up News from home</Text>
           </TouchableOpacity>
         )
+      ) : (
+        <>
+          <BrewRowSkeleton lines={2} circle />
+          <BrewRowSkeleton lines={2} circle />
+        </>
       )}
 
       {!preview && !pinned && (
@@ -339,8 +382,12 @@ export default function DailyBrewCard({ preview = false }: Props) {
 
 const s = StyleSheet.create({
   card: {
-    backgroundColor: C.surface, borderRadius: radius.md, padding: 12,
-    borderWidth: borderWidth.regular, borderColor: C.border, marginBottom: 10,
+    backgroundColor: C.surface, borderRadius: radius.md, padding: 12, marginBottom: 10,
+    // Border removed by request. Surface (#FFFFFF) and page (#FDFBF7) are close enough that a
+    // borderless card would nearly dissolve into the background, so a very soft shadow keeps the
+    // edge readable without reintroducing a visible grey line.
+    shadowColor: '#0A5443', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 },
+    elevation: 1,
   },
   dateHeading: { fontSize: 18, fontWeight: '600', color: C.text, marginBottom: 8 },
   weatherChip: {
@@ -349,15 +396,28 @@ const s = StyleSheet.create({
     gap: 6, marginBottom: 8,
   },
   weatherText: { fontSize: 13, fontWeight: '500', color: C.text },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
+  // paddingHorizontal matches eventRow's padding: the event chip is a filled block, so its own
+  // 8px inset pushes its icon in by 8 while a plain row's icon starts at the card edge. Insetting
+  // every row by the same 8 is what puts all four text left-edges on one line.
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 6, paddingHorizontal: 8 },
   // Same light-blue treatment as a note's linked-event chip (see (tabs)/index.tsx's
   // eventInfo/eventInfoTitle) - same visual language for "this is a calendar event" everywhere.
   eventRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
+    flexDirection: 'row', alignItems: 'center', gap: 12,
     backgroundColor: C.secondaryTint, borderRadius: 8, padding: 8, marginBottom: 6,
   },
   eventRowText: { flex: 1, fontSize: 14, fontWeight: '600', color: C.secondary },
-  newsLogo: { width: 17, height: 17, borderRadius: 4 },
+  newsRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 8, paddingHorizontal: 8 },
+  newsTextCol: { flex: 1, gap: 3 },
+  // Fixed-width icon column. Every row's text starts at the same x because the slot is a constant
+  // 32 regardless of the glyph inside it - matching the news logos, which are content and earn
+  // that size. The glyphs are labels, so they sit smaller inside the same footprint.
+  slot: { width: 32, alignItems: 'center', justifyContent: 'center' },
+  newsAvatar: { width: 32, height: 32, borderRadius: 16 },
+  newsAvatarFallback: { backgroundColor: C.secondaryTint, alignItems: 'center', justifyContent: 'center' },
+  newsAvatarLetter: { fontSize: 18, fontWeight: '700', color: C.primary },
+  newsHeadline: { fontSize: 14, lineHeight: 19, color: C.text, fontWeight: '500' },
+  newsMeta: { fontSize: 12, color: C.textSec },
   rowText: { flex: 1, fontSize: 14, color: C.text },
   rowTextMuted: { flex: 1, fontSize: 14, color: C.textSec },
   rowTextCol: { flex: 1 },

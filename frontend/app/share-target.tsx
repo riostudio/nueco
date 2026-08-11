@@ -97,7 +97,7 @@ export default function ShareTargetScreen() {
         data={filtered}
         keyExtractor={(item) => item.id}
         keyboardShouldPersistTaps="handled"
-        ListEmptyComponent={<Text style={s.empty}>{search ? 'No notes found' : 'No notes yet'}</Text>}
+        ListEmptyComponent={<Text style={s.empty}>{search ? 'Nothing matched that' : 'Nothing here yet'}</Text>}
         renderItem={({ item }) => {
           const snippet = plainTextFromContent(item.content).trim();
           return (

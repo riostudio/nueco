@@ -69,7 +69,7 @@ interface AuthContextType {
   /** Save Daily Brew news-source preferences and sync the result back into the in-memory
    * user immediately - without this, news-source-settings.tsx would keep reading the
    * pre-save snapshot from context until the next full refreshAuth()/getMe(). */
-  updateNewsPreferences: (country: string, outletIds: string[], showVerse: boolean) => Promise<void>;
+  updateNewsPreferences: (country: string, outletIds: string[], showVerse: boolean, showQuote?: boolean) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -192,8 +192,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(updated);
   }, []);
 
-  const updateNewsPreferences = useCallback(async (country: string, outletIds: string[], showVerse: boolean) => {
-    const updated = await dailyBrewApi.updateNewsPreferences(country, outletIds, showVerse) as User;
+  const updateNewsPreferences = useCallback(async (country: string, outletIds: string[], showVerse: boolean, showQuote = false) => {
+    const updated = await dailyBrewApi.updateNewsPreferences(country, outletIds, showVerse, showQuote) as User;
     setUser(updated);
     await authStorage.setUser(updated);
     // Otherwise DailyBrewCard's freshness check keeps trusting the pre-change cache for up to

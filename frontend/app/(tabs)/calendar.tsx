@@ -1,14 +1,17 @@
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useRouter, useFocusEffect } from 'expo-router';
+import { useRouter, useFocusEffect, type Href } from 'expo-router';
 import { useIsFocused } from '@react-navigation/native';
 import { getLocalEvents, fullSync } from '../../src/offlineSync';
+import { eventsSignature, shouldFocusSync } from '../../src/events/eventsFeed';
 import { CalendarEvent } from '../../src/types';
 import { C, radius, borderWidth } from '../../src/theme';
+import { prefixEmoji } from '../../src/events/eventEmoji';
+import { EventCardSkeleton } from '../../src/components/Skeleton';
 import { MONTH_NAMES, DAY_NAMES } from '../../src/dateNames';
 import { UserAvatar } from '../../src/auth';
 import { eventOccursOnDay } from '../../src/recurrence';
@@ -61,19 +64,30 @@ export default function CalendarScreen() {
   // event could flash into view and then vanish again if its push hadn't landed yet. Routing
   // through fullSync + re-reading the local store (like events.tsx already does) means both tabs
   // now go through the exact same reconciliation path and can't disagree with each other.
+  // Signature-gated so an unchanged list doesn't re-render. getLocalEvents returns a fresh array
+  // every call, so setEvents always saw a new reference and rebuilt the whole grid on every focus.
+  const sigRef = useRef('');
+  const applyEvents = useCallback((list: Awaited<ReturnType<typeof getLocalEvents>>) => {
+    const next = list.filter(e => !e._pendingDelete) as CalendarEvent[];
+    const sig = eventsSignature(next);
+    if (sig === sigRef.current) return;
+    sigRef.current = sig;
+    setEvents(next);
+  }, []);
+
   const loadEvents = useCallback(async (force?: boolean) => {
     try {
-      const local = await getLocalEvents();
-      setEvents(local.filter(e => !e._pendingDelete) as CalendarEvent[]);
+      applyEvents(await getLocalEvents());
+      // Throttled across both event screens - see eventsFeed.ts. Pull-to-refresh passes force.
+      if (!shouldFocusSync(force)) return;
       await fullSync({ force });
-      const fresh = await getLocalEvents();
-      setEvents(fresh.filter(e => !e._pendingDelete) as CalendarEvent[]);
+      applyEvents(await getLocalEvents());
     } catch (e) {
       console.error('Failed to load events:', e);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [applyEvents]);
 
   useFocusEffect(useCallback(() => { loadEvents(); }, [loadEvents]));
 
@@ -213,7 +227,12 @@ export default function CalendarScreen() {
           </Text>
         </View>
 
-        {selectedDayEvents.length > 0 ? (
+        {loading && events.length === 0 ? (
+          // First load with nothing cached: hold the list's shape rather than flashing
+          // "No events on this day" and then replacing it a moment later, which reads as the
+          // app having got it wrong.
+          <><EventCardSkeleton /><EventCardSkeleton /></>
+        ) : selectedDayEvents.length > 0 ? (
           selectedDayEvents.map((event) => {
             const { primary, secondary } = formatEventTimeRange(event);
             return (
@@ -222,14 +241,14 @@ export default function CalendarScreen() {
               testID={`cal-selected-event-${event.id}`}
               style={s.eventCard}
               activeOpacity={0.7}
-              onPress={() => router.push({ pathname: '/event-editor', params: { eventId: event.id } })}
+              onPress={() => router.push(`/event?eventId=${event.id}` as Href)}
             >
               <View style={s.eventTimeCol}>
                 <Text style={s.timeStart}>{primary}</Text>
                 {secondary ? <Text style={s.timeEnd}>{secondary}</Text> : null}
               </View>
               <View style={s.eventBody}>
-                <Text style={s.eventTitle} numberOfLines={1}>{event.title}</Text>
+                <Text style={s.eventTitle} numberOfLines={1}>{prefixEmoji(event.title)}</Text>
                 {event.location ? (
                   <Text style={s.eventDesc} numberOfLines={1}>{event.location}</Text>
                 ) : null}
@@ -256,7 +275,7 @@ export default function CalendarScreen() {
         activeOpacity={0.8}
       >
         <MaterialIcons name="add" size={32} color={C.primaryFg} />
-        <Text style={s.fabText}>New Event</Text>
+        <Text style={s.fabText}>New event</Text>
       </TouchableOpacity>
     </SafeAreaView>
   );
@@ -307,8 +326,12 @@ const s = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: C.surface, borderRadius: radius.md,
     paddingVertical: 12, paddingHorizontal: 16,
-    borderWidth: borderWidth.regular, borderColor: C.border,
     marginHorizontal: 24, marginBottom: 10,
+    // Border removed by request. Surface (#FFFFFF) and page (#FDFBF7) are close enough that a
+    // borderless card would nearly dissolve into the background, so a very soft shadow keeps the
+    // edge readable without reintroducing a visible grey line.
+    shadowColor: '#0A5443', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 },
+    elevation: 1,
   },
   eventTimeCol: { marginRight: 14, alignItems: 'flex-start', minWidth: 64 },
   timeStart: { fontSize: 15, fontWeight: '700', color: C.secondary },

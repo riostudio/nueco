@@ -8,13 +8,19 @@ import os
 import tempfile
 from typing import Optional
 
+from pydantic import ValidationError
+
 from openai_client import get_openai_client
+from .schemas import (
+    VALID_NOTE_TYPES,
+    VALID_TEXT_ACTIONS,
+    VALID_VOICE_INTENTS,
+    TextProcessResponse,
+    VoiceEventOut,
+    VoiceIntentClassifyResponse,
+)
 
 logger = logging.getLogger(__name__)
-
-# Note types the smart-format classifier recognizes. "general" is the fallback for anything
-# that isn't clearly one of the others (or text too short/unclear to classify).
-NOTE_TYPES = {"recipe", "checklist", "meeting_notes", "general"}
 
 SMART_FORMAT_PROMPT_TEMPLATE = """Classify the following note text as exactly one of these types:
 - "recipe": a dish with ingredients and preparation steps
@@ -39,10 +45,6 @@ Here's the text:
 {text}
 
 Respond with ONLY a JSON object of the shape {{"note_type": "recipe|checklist|meeting_notes|general", "html": "<the restructured HTML>"}}. No other text, no markdown code fence."""
-
-# freq values recognized on the way back out - anything else is treated as malformed and the
-# whole recurrence is dropped (see _parse_recurrence) rather than failing the entire extraction.
-_VALID_RECURRENCE_FREQ = {"daily", "weekly", "monthly", "yearly"}
 
 VOICE_INTENT_PROMPT_TEMPLATE = """The user tapped the microphone button in a note-taking app and spoke the following. Decide what they meant to do:
 
@@ -117,18 +119,52 @@ async def transcribe_bytes(audio_bytes: bytes, file_extension: str, language: Op
 
     try:
         with open(tmp_path, "rb") as audio_file:
-            kwargs = {"model": "whisper-1", "file": audio_file}
+            kwargs = {
+                "model": "whisper-1",
+                "file": audio_file,
+                # verbose_json is the only response format exposing per-segment
+                # no_speech_prob/avg_logprob - needed by _drop_silent_hallucinations below.
+                # Whisper is well-documented to hallucinate plausible-looking text (often in a
+                # random detected language, since there's no real speech to anchor language
+                # detection) instead of an empty string when fed silence/near-silent audio - a
+                # tap on the mic with nothing said would otherwise insert fabricated text.
+                "response_format": "verbose_json",
+            }
             # Only pass language when we actually have a hint - an empty/unrecognized value
             # would force Whisper into that language instead of just falling back to auto-detect.
             if language:
                 kwargs["language"] = language
             response = await client.audio.transcriptions.create(**kwargs)
-        return response.text or ""
+        return _drop_silent_hallucinations(response)
     finally:
         os.unlink(tmp_path)
 
 
-async def process_text(text: str, action: str) -> dict:
+# Thresholds per TranscriptionSegment's own field docs (avg_logprob "lower than -1, consider
+# the logprobs failed") plus the commonly-used no_speech_prob cutoff for this exact failure
+# mode. Requiring BOTH conditions (not just one) avoids discarding real quiet/mumbled speech
+# that only trips one of the two.
+_NO_SPEECH_PROB_THRESHOLD = 0.6
+_AVG_LOGPROB_THRESHOLD = -1.0
+
+
+def _drop_silent_hallucinations(response) -> str:
+    segments = response.segments
+    if not segments:
+        # No segment data to filter on (shouldn't happen with verbose_json) - trust the plain
+        # transcript rather than silently dropping real speech.
+        return response.text or ""
+    kept = [
+        seg.text for seg in segments
+        if not (seg.no_speech_prob > _NO_SPEECH_PROB_THRESHOLD and seg.avg_logprob < _AVG_LOGPROB_THRESHOLD)
+    ]
+    return "".join(kept).strip()
+
+
+async def process_text(text: str, action: str) -> TextProcessResponse:
+    if action not in VALID_TEXT_ACTIONS:
+        raise InvalidTextActionError("Invalid action. Use 'organize', 'summarize', or 'smart_format'")
+
     client = get_openai_client()
 
     if action == "organize":
@@ -159,7 +195,7 @@ Return only the organized text, no explanations."""
         if not processed_text:
             raise AIEmptyResponseError("AI service returned an empty response")
         logger.info(f"Text processing successful, result length: {len(processed_text)}")
-        return {"text": processed_text}
+        return TextProcessResponse(text=processed_text)
 
     elif action == "summarize":
         system_message = "You are a helpful assistant that summarizes text concisely while keeping key points."
@@ -185,7 +221,7 @@ Return only the summary, no explanations."""
         if not processed_text:
             raise AIEmptyResponseError("AI service returned an empty response")
         logger.info(f"Text processing successful, result length: {len(processed_text)}")
-        return {"text": processed_text}
+        return TextProcessResponse(text=processed_text)
 
     elif action == "smart_format":
         system_message = (
@@ -209,60 +245,51 @@ Return only the summary, no explanations."""
             parsed = json.loads(raw)
         except json.JSONDecodeError:
             raise AIResponseParseError("AI service returned an unexpected response")
-        note_type = parsed.get("note_type") if isinstance(parsed, dict) else None
-        html = (parsed.get("html") or "").strip() if isinstance(parsed, dict) else ""
-        if note_type not in NOTE_TYPES:
+        if not isinstance(parsed, dict):
+            raise AIResponseParseError("AI service returned an unexpected response")
+        # An unrecognised note_type only picks the formatting template, so it degrades to "general"
+        # rather than costing the user the restructured text the model did produce.
+        note_type = parsed.get("note_type")
+        if note_type not in VALID_NOTE_TYPES:
             note_type = "general"
+        html = parsed.get("html")
+        html = html.strip() if isinstance(html, str) else ""
         if not html:
             raise AIEmptyResponseError("AI service returned an empty response")
         logger.info(f"Smart format successful, detected type: {note_type}, result length: {len(html)}")
-        return {"text": html, "note_type": note_type}
+        return TextProcessResponse(text=html, note_type=note_type)
 
-    else:
-        raise InvalidTextActionError("Invalid action. Use 'organize', 'summarize', or 'smart_format'")
-
-
-_VALID_INTENTS = {"note", "single_event", "multiple_events", "itinerary"}
+    # Unreachable: the action was checked against VALID_TEXT_ACTIONS on the way in.
+    raise InvalidTextActionError("Invalid action. Use 'organize', 'summarize', or 'smart_format'")
 
 
-def _parse_recurrence(raw_recurrence) -> Optional[dict]:
-    """Defensive extraction, same style as smart_format's note_type handling: a malformed
-    recurrence shape is dropped (event still gets created as a one-off) rather than failing
-    the whole extraction over one bad sub-field."""
-    if not (isinstance(raw_recurrence, dict) and raw_recurrence.get("freq") in _VALID_RECURRENCE_FREQ):
-        return None
-    byweekday = raw_recurrence.get("byweekday")
-    if not (isinstance(byweekday, list) and all(isinstance(d, int) and 0 <= d <= 6 for d in byweekday)):
-        byweekday = None
-    until = raw_recurrence.get("until")
-    return {
-        "freq": raw_recurrence["freq"],
-        "byweekday": byweekday,
-        "until": until if isinstance(until, str) else None,
-    }
+def _parse_events(raw_events) -> list[VoiceEventOut]:
+    """The LLM's "events" array -> validated events, dropping any entry the schema rejects.
+
+    Every rule about what an event may contain lives in VoiceEventOut (see textai/schemas.py);
+    this only decides what happens to an entry that breaks one. Per-entry validation rather than
+    validating the list in one go is deliberate: a single unusable entry in a five-event itinerary
+    should cost that entry, not the other four.
+    """
+    if not isinstance(raw_events, list):
+        return []
+    events: list[VoiceEventOut] = []
+    for raw_event in raw_events:
+        try:
+            events.append(VoiceEventOut.model_validate(raw_event))
+        except ValidationError as e:
+            # Field names only, never the values: the fields carry what the user just dictated, and
+            # note content is E2EE precisely so it never lands in the server's logs (same reason
+            # textai/router.py logs transcript lengths instead of transcripts). Pydantic's own
+            # message embeds the rejected input, so it must not be logged as-is.
+            bad_fields = sorted({str(loc) for err in e.errors() for loc in err["loc"]})
+            logger.info(f"Voice intent: dropped an unusable event (fields: {', '.join(bad_fields)})")
+    return events
 
 
-def _parse_event(raw_event: dict) -> Optional[dict]:
-    """One entry from the LLM's "events" array -> our event shape, or None if the entry is too
-    malformed to use (missing title/start_time) - skipped rather than failing the whole batch."""
-    if not isinstance(raw_event, dict):
-        return None
-    title = (raw_event.get("title") or "").strip()
-    start_time = (raw_event.get("start_time") or "").strip()
-    if not title or not start_time:
-        return None
-    confidence = raw_event.get("confidence") if raw_event.get("confidence") in ("high", "low") else "low"
-    return {
-        "title": title,
-        "start_time": start_time,
-        "end_time": raw_event.get("end_time") or None,
-        "location": raw_event.get("location") or "",
-        "recurrence": _parse_recurrence(raw_event.get("recurrence")),
-        "confidence": confidence,
-    }
-
-
-async def classify_voice_intent(transcript: str, reference_date: str, timezone_name: str) -> dict:
+async def classify_voice_intent(
+    transcript: str, reference_date: str, timezone_name: str,
+) -> VoiceIntentClassifyResponse:
     """Classifies a note-editor voice-memo transcript as plain dictation vs. one or more calendar
     events vs. an itinerary (a trip of several events), and - for the non-"note" intents -
     extracts structured events via the same JSON-mode LLM pattern process_text's smart_format
@@ -298,21 +325,21 @@ async def classify_voice_intent(transcript: str, reference_date: str, timezone_n
     if not isinstance(parsed, dict):
         raise AIResponseParseError("AI service returned an unexpected response")
 
-    intent = parsed.get("intent") if parsed.get("intent") in _VALID_INTENTS else "note"
+    # An unrecognised intent falls back to plain dictation - the pre-feature behaviour, and the one
+    # outcome that can't lose what the user said.
+    intent = parsed.get("intent") if parsed.get("intent") in VALID_VOICE_INTENTS else "note"
 
     if intent == "note":
-        return {"intent": "note", "trip_name": None, "events": []}
+        return VoiceIntentClassifyResponse(intent="note", trip_name=None, events=[])
 
-    raw_events = parsed.get("events")
-    events = [_parse_event(e) for e in raw_events] if isinstance(raw_events, list) else []
-    events = [e for e in events if e is not None]
-
+    events = _parse_events(parsed.get("events"))
     if not events:
         raise AIEmptyResponseError("Could not extract an event from that recording")
 
-    trip_name = (parsed.get("trip_name") or "").strip() if intent == "itinerary" else None
+    trip_name = parsed.get("trip_name") if intent == "itinerary" else None
+    trip_name = trip_name.strip() if isinstance(trip_name, str) else None
     if intent == "itinerary" and not trip_name:
         trip_name = "New Trip"
 
     logger.info(f"Voice intent classification successful: intent={intent}, event_count={len(events)}")
-    return {"intent": intent, "trip_name": trip_name, "events": events}
+    return VoiceIntentClassifyResponse(intent=intent, trip_name=trip_name, events=events)
