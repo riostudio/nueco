@@ -285,3 +285,7 @@ frontend/build-1786017190878.apk
 frontend/build-1785972476564.aab
 frontend/build-1785981529910.apk
 frontend/build-1785886146654.aab
+
+.qoder/settings.local.json
+.DS_Store
+frontend/build-1786018743422.aab
