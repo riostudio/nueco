@@ -53,6 +53,25 @@ def _enforce_ai_quota(current_user: dict, endpoint: str, quota) -> None:
 router = APIRouter(tags=["textai"])
 
 
+def _transcript_response(transcript) -> dict:
+    """Shape a service Transcript into the client response. Word timestamps are included only
+    when the provider supplied them (Speechmatics); OpenAI returns text-only, so `words` is
+    omitted and the client degrades its tap-to-seek player gracefully."""
+    body = {"text": transcript.text}
+    if transcript.words:
+        body["words"] = [
+            {
+                "word": w.word,
+                "start": w.start,
+                "end": w.end,
+                **({"speaker": w.speaker} if w.speaker else {}),
+                **({"confidence": w.confidence} if w.confidence is not None else {}),
+            }
+            for w in transcript.words
+        ]
+    return body
+
+
 @router.post("/transcribe-base64")
 async def transcribe_audio_base64(request: TranscribeBase64Request, current_user: dict = Depends(get_current_user)):
     """Transcribe audio from base64 encoded data (requires authentication)"""
@@ -69,14 +88,14 @@ async def transcribe_audio_base64(request: TranscribeBase64Request, current_user
             logger.error(f"Failed to decode base64: {e}")
             raise HTTPException(status_code=400, detail="Invalid base64 audio data")
 
-        text = await service.transcribe_bytes(audio_bytes, request.file_extension, request.language)
+        transcript = await service.transcribe_bytes(audio_bytes, request.file_extension, request.language, request.diarization)
         # Deliberately does NOT log the transcript (not even a prefix). Note bodies are E2EE -
         # the server can't read them - so logging what the user just dictated would put that same
         # content back in plaintext in the server logs, where it's retained and readable by the
         # operator. That would break the app's "not even we can read your notes" guarantee at the
         # one point in the pipeline where the content is briefly visible. Log shape/timing only.
-        logger.info(f"Transcription successful: {len(text)} chars")
-        return {"text": text}
+        logger.info(f"Transcription successful: {len(transcript.text)} chars")
+        return _transcript_response(transcript)
     except HTTPException:
         raise
     except Exception as e:
@@ -100,10 +119,10 @@ async def transcribe_audio(
         suffix = os.path.splitext(original_filename)[1] or ".m4a"
         content = await file.read()
         logger.info(f"Read {len(content)} bytes from uploaded file")
-        text = await service.transcribe_bytes(content, suffix, language)
+        transcript = await service.transcribe_bytes(content, suffix, language)
         # No transcript content in logs - see the identical note on the base64 endpoint above.
-        logger.info(f"Transcription successful: {len(text)} chars")
-        return {"text": text}
+        logger.info(f"Transcription successful: {len(transcript.text)} chars")
+        return _transcript_response(transcript)
     except HTTPException:
         raise
     except Exception as e:

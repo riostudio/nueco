@@ -4,13 +4,13 @@ callers (backend/textai/router.py) unwrap the framework upload type into bytes/f
 """
 import json
 import logging
-import os
-import tempfile
+import time
 from typing import Optional
 
 from pydantic import ValidationError
 
 from openai_client import get_openai_client
+from .transcription import Transcript, resolve_transcription_provider, launch_shadow_transcription
 from .schemas import (
     VALID_NOTE_TYPES,
     VALID_TEXT_ACTIONS,
@@ -109,56 +109,25 @@ def _normalize_extension(extension: str) -> str:
     return extension
 
 
-async def transcribe_bytes(audio_bytes: bytes, file_extension: str, language: Optional[str] = None) -> str:
-    extension = _normalize_extension(file_extension)
-    client = get_openai_client()
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix=extension) as tmp:
-        tmp.write(audio_bytes)
-        tmp_path = tmp.name
-
-    try:
-        with open(tmp_path, "rb") as audio_file:
-            kwargs = {
-                "model": "whisper-1",
-                "file": audio_file,
-                # verbose_json is the only response format exposing per-segment
-                # no_speech_prob/avg_logprob - needed by _drop_silent_hallucinations below.
-                # Whisper is well-documented to hallucinate plausible-looking text (often in a
-                # random detected language, since there's no real speech to anchor language
-                # detection) instead of an empty string when fed silence/near-silent audio - a
-                # tap on the mic with nothing said would otherwise insert fabricated text.
-                "response_format": "verbose_json",
-            }
-            # Only pass language when we actually have a hint - an empty/unrecognized value
-            # would force Whisper into that language instead of just falling back to auto-detect.
-            if language:
-                kwargs["language"] = language
-            response = await client.audio.transcriptions.create(**kwargs)
-        return _drop_silent_hallucinations(response)
-    finally:
-        os.unlink(tmp_path)
-
-
-# Thresholds per TranscriptionSegment's own field docs (avg_logprob "lower than -1, consider
-# the logprobs failed") plus the commonly-used no_speech_prob cutoff for this exact failure
-# mode. Requiring BOTH conditions (not just one) avoids discarding real quiet/mumbled speech
-# that only trips one of the two.
-_NO_SPEECH_PROB_THRESHOLD = 0.6
-_AVG_LOGPROB_THRESHOLD = -1.0
-
-
-def _drop_silent_hallucinations(response) -> str:
-    segments = response.segments
-    if not segments:
-        # No segment data to filter on (shouldn't happen with verbose_json) - trust the plain
-        # transcript rather than silently dropping real speech.
-        return response.text or ""
-    kept = [
-        seg.text for seg in segments
-        if not (seg.no_speech_prob > _NO_SPEECH_PROB_THRESHOLD and seg.avg_logprob < _AVG_LOGPROB_THRESHOLD)
-    ]
-    return "".join(kept).strip()
+async def transcribe_bytes(
+    audio_bytes: bytes,
+    file_extension: str,
+    language: Optional[str] = None,
+    diarization: Optional[str] = None,
+) -> Transcript:
+    provider = resolve_transcription_provider(diarization)
+    started = time.monotonic()
+    transcript = await provider.transcribe(audio_bytes, _normalize_extension(file_extension), language, diarization)
+    latency_ms = (time.monotonic() - started) * 1000
+    logger.info(f"Transcription via {provider.name} finished in {latency_ms:.0f}ms")
+    # Fire-and-forget when TRANSCRIPTION_SHADOW is set; never blocks or fails this request.
+    launch_shadow_transcription(
+        audio_bytes, _normalize_extension(file_extension), language, diarization,
+        provider.name, transcript.text, latency_ms,
+    )
+    # Return the whole transcript, not just .text: word-level timestamps (present when the
+    # provider supplies them, e.g. Speechmatics) power the note editor's tap-to-seek player.
+    return transcript
 
 
 async def process_text(text: str, action: str) -> TextProcessResponse:

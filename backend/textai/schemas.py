@@ -12,6 +12,9 @@ class TranscribeBase64Request(BaseModel):
     # user speaks), and forcing Whisper toward the wrong locale mistranslated/garbled the
     # result. Left optional here in case a future UI adds an explicit spoken-language picker.
     language: Optional[str] = None
+    # Conversation mode (plan.md M8) sends "speaker" to get per-word speaker labels from
+    # providers that diarize (Speechmatics); text-only providers ignore it.
+    diarization: Optional[str] = None
 
 
 # The three text actions, and the note types the smart-format classifier may return. Declared as

@@ -410,6 +410,11 @@ async def create_indexes():
         await db.feature_events.create_index([("event", 1), ("ts", -1)])
         await db.feature_events.create_index([("user_id", 1), ("ts", -1)])
 
+        # Shadow-mode transcription comparison records auto-expire after 7 days
+        await db.transcription_shadow.create_index(
+            "created_at", expireAfterSeconds=7 * 24 * 3600
+        )
+
         logger.info("Database indexes created successfully")
     except Exception as e:
         logger.warning(f"Could not create indexes (may already exist): {e}")
@@ -431,6 +436,15 @@ async def start_feature_flag_refresher():
     except Exception as e:
         logger.warning(f"Initial feature flag fetch failed, will retry in background: {e}")
     asyncio.create_task(run_flag_refresher())
+
+
+@app.on_event("startup")
+async def start_speechmatics_job_sweeper():
+    # Reconciliation for the rare case where the inline job delete after transcription failed:
+    # any Speechmatics job older than a few minutes is deleted, keeping provider-side audio
+    # retention at minutes instead of the 7-day default. No-op unless Speechmatics is configured.
+    from textai.transcription import run_speechmatics_sweeper
+    asyncio.create_task(run_speechmatics_sweeper())
 
 
 @app.on_event("shutdown")
