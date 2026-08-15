@@ -30,6 +30,9 @@ next-env.d.ts
 dist/
 dist
 
+# Rebrand archive: local record only, never committed
+archive/
+
 # Environment files (comprehensive coverage)
 
 *token.json*
