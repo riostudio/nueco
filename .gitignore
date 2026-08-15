@@ -30,8 +30,8 @@ next-env.d.ts
 dist/
 dist
 
-# Rebrand archive: local record only, never committed
-archive/
+# Rebrand archive: the private rebrand record stays local-only; archive/rebrand-legacy/ is tracked
+archive/rebrand-memopad/
 
 # Environment files (comprehensive coverage)
 
