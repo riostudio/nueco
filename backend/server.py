@@ -301,7 +301,7 @@ async def robots_txt():
 ASSETLINKS_PATH = str(ROOT_DIR / "static" / "assetlinks.json")
 
 
-@app.get("/.well-known/assetlinks.json", response_class=JSONResponse)
+@app.api_route("/.well-known/assetlinks.json", methods=["GET", "HEAD"], response_class=JSONResponse)
 async def assetlinks():
     if not os.path.isfile(ASSETLINKS_PATH):
         raise HTTPException(status_code=404, detail="assetlinks.json not available")
