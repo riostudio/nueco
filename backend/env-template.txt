@@ -54,21 +54,22 @@ WEBHOOK_SECRET=
 APK_DOWNLOAD_PATH=
 
 # ---- Phase 3 data-residency gate (backend/core/regions.py) ----
-# Becomes required when the region enforcement refactor ships: the server will
-# refuse to boot unless every endpoint + region is declared and Australian.
-# OPENAI_BASE_URL=https://api.openai.com/v1
-# OPENAI_REGION=au
-# SPEECHMATICS_BASE_URL=https://api.speechmatics.com/v2
-# SPEECHMATICS_REGION=au
-# EXPO_PUSH_SEND_URL=https://exp.host/--/api/v2/push/send
-# EXPO_PUSH_RECEIPTS_URL=https://exp.host/--/api/v2/push/getReceipts
-# EXPO_PUSH_REGION=au
-# RESEND_BASE_URL=https://api.resend.com
-# RESEND_REGION=au
-# POSTHOG_HOST=https://us.i.posthog.com
-# POSTHOG_REGION=au
-# CANVA_AUTHORIZE_URL=https://www.canva.com/api/oauth/authorize
-# CANVA_TOKEN_URL=https://api.canva.com/rest/v1/oauth/token
-# CANVA_API_BASE_URL=https://api.canva.com/rest/v1
-# CANVA_REGION=au
-# MONGODB_REGION=au
+# REQUIRED: the server refuses to boot unless every endpoint + region is declared
+# and the region is on the Australian allowlist. Replace the placeholder hosts with
+# the real vendor endpoints you use.
+OPENAI_BASE_URL=https://openai.example.invalid/v1
+OPENAI_REGION=ap-southeast-2
+SPEECHMATICS_BASE_URL=https://speechmatics.example.invalid/v2
+SPEECHMATICS_REGION=ap-southeast-2
+EXPO_PUSH_SEND_URL=https://push.example.invalid/api/v2/push/send
+EXPO_PUSH_RECEIPTS_URL=https://push.example.invalid/api/v2/push/getReceipts
+EXPO_PUSH_REGION=ap-southeast-2
+RESEND_BASE_URL=https://resend.example.invalid
+RESEND_REGION=ap-southeast-2
+POSTHOG_HOST=https://posthog.example.invalid
+POSTHOG_REGION=ap-southeast-2
+CANVA_AUTHORIZE_URL=https://canva.example.invalid/api/oauth/authorize
+CANVA_TOKEN_URL=https://canva.example.invalid/api/oauth/token
+CANVA_API_BASE_URL=https://canva.example.invalid/rest/v1
+CANVA_REGION=ap-southeast-2
+MONGODB_REGION=ap-southeast-2

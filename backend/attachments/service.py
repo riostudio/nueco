@@ -9,10 +9,13 @@ import uuid
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
+from core import regions
+
 logger = logging.getLogger(__name__)
 
 S3_BUCKET = os.getenv("S3_BUCKET")
-AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+# No module-level AWS_REGION: the region is the residency-checked declaration in
+# core.regions (no silent default - an undeclared region must fail, not drift).
 ATTACHMENT_PREFIX = "note-attachments"
 MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024  # 100 MB (videos are large)
 # Total across ALL of an account's attachments. Without this, per-file size was the only limit
@@ -73,10 +76,11 @@ class AttachmentStorageError(Exception):
 
 def get_s3_client():
     """Return a boto3 S3 client, or None if attachment storage isn't configured.
-    Credentials come from the standard AWS env vars / IAM role."""
+    Credentials come from the standard AWS env vars / IAM role; the region is the
+    residency-checked declaration from core.regions."""
     if not S3_BUCKET:
         return None
-    return boto3.client("s3", region_name=AWS_REGION)
+    return boto3.client("s3", region_name=regions.aws_region())
 
 
 def presign_upload(user_id: str, filename: str, mime_type: str, size: int, used_bytes: int = 0) -> dict:
@@ -122,7 +126,7 @@ def presign_upload(user_id: str, filename: str, mime_type: str, size: int, used_
         logger.error(f"Failed to presign attachment: {e}")
         raise AttachmentStorageError("Could not prepare upload")
 
-    file_url = f"https://{S3_BUCKET}.s3.{AWS_REGION}.amazonaws.com/{key}"
+    file_url = f"https://{S3_BUCKET}.s3.{regions.aws_region()}.amazonaws.com/{key}"
     return {
         "id": attachment_id,
         "key": key,

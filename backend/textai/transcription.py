@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Protocol
 
 import openai_client
+from core import regions
 
 logger = logging.getLogger(__name__)
 
@@ -191,9 +192,21 @@ class SpeechmaticsTranscriptionProvider:
         # dictation, and detection adds latency plus a failure mode on short clips.
         # Diarization stays off for ordinary capture - it's enabled per-call for
         # conversation mode only.
-        config = TranscriptionConfig(language=language or "en", diarization=diarization)
+        # Conversation capture is two people (plan/10); telling Speechmatics the speaker
+        # ceiling measurably improves turn attribution vs. leaving it unbounded.
+        speaker_diarization_config = {"max_speakers": 2} if diarization else None
+        config = TranscriptionConfig(
+            language=language or "en",
+            diarization=diarization,
+            speaker_diarization_config=speaker_diarization_config,
+        )
 
-        async with AsyncClient(api_key=_get_speechmatics_api_key()) as client:
+        # The endpoint is pinned explicitly from the residency-checked declaration -
+        # left to itself the SDK uses its compiled-in default URL (or an ambient env
+        # read), bypassing the Australian-region gate.
+        async with AsyncClient(
+            api_key=_get_speechmatics_api_key(), url=regions.speechmatics_base_url()
+        ) as client:
             job_id = None
             try:
                 audio_file = _NamedBytesIO(audio_bytes)
@@ -322,7 +335,7 @@ async def sweep_stale_speechmatics_jobs(max_age_minutes: int = _SM_STALE_JOB_MIN
         AsyncClient, _, _ = _import_speechmatics()
         cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max_age_minutes)).isoformat()
         deleted = 0
-        async with AsyncClient(api_key=api_key) as client:
+        async with AsyncClient(api_key=api_key, url=regions.speechmatics_base_url()) as client:
             jobs = await client.list_jobs(created_before=cutoff)
             for job in jobs:
                 try:

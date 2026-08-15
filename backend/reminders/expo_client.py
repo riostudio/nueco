@@ -1,16 +1,18 @@
 """Thin adapter over Expo's two push-notification HTTP endpoints. The only place network/httpx
 concerns touch the reminder pipeline in reminders/service.py - swap this for a fake in tests to
 exercise the pipeline's business logic without a network call.
+
+Both endpoint URLs come from core.regions (env-declared, AU-region-checked at startup) -
+nothing about where push traffic goes is hardcoded here.
 """
 import logging
 import os
 
 import httpx
 
-logger = logging.getLogger(__name__)
+from core import regions
 
-SEND_URL = "https://exp.host/--/api/v2/push/send"
-RECEIPTS_URL = "https://exp.host/--/api/v2/push/getReceipts"
+logger = logging.getLogger(__name__)
 
 
 class ExpoClient:
@@ -25,9 +27,10 @@ class ExpoClient:
         """POST up to 100 push messages. Returns Expo's per-item result list, or None if the
         whole call failed (rate limit / 5xx) - the caller leaves those events 'claimed' for the
         next tick to retry rather than treating a transport failure as per-item failures."""
+        send_url = regions.expo_push_send_url()
         try:
             async with httpx.AsyncClient(timeout=30) as http:
-                resp = await http.post(SEND_URL, headers=self._headers(), json=messages)
+                resp = await http.post(send_url, headers=self._headers(), json=messages)
                 return resp.json().get("data", [])
         except Exception as e:
             logger.error(f"Expo push send failed (batch left claimed): {e}")
@@ -36,9 +39,10 @@ class ExpoClient:
     async def get_receipts(self, ticket_ids: list[str]) -> dict | None:
         """POST up to 300 ticket ids. Returns Expo's {ticket_id: receipt} map, or None if the
         whole call failed - the caller leaves those receipts unchecked for the next run."""
+        receipts_url = regions.expo_push_receipts_url()
         try:
             async with httpx.AsyncClient(timeout=30) as http:
-                resp = await http.post(RECEIPTS_URL, headers=self._headers(), json={"ids": ticket_ids})
+                resp = await http.post(receipts_url, headers=self._headers(), json={"ids": ticket_ids})
                 return resp.json().get("data", {})
         except Exception as e:
             logger.error(f"Expo getReceipts failed: {e}")

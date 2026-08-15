@@ -12,15 +12,16 @@ import httpx
 from cryptography.fernet import Fernet
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from core import regions
+
 logger = logging.getLogger(__name__)
 
 CANVA_CLIENT_ID = os.getenv("CANVA_CLIENT_ID")
 CANVA_CLIENT_SECRET = os.getenv("CANVA_CLIENT_SECRET")
 CANVA_TOKEN_ENCRYPTION_KEY = os.getenv("CANVA_TOKEN_ENCRYPTION_KEY")
 
-AUTHORIZE_URL = "https://www.canva.com/api/oauth/authorize"
-TOKEN_URL = "https://www.canva.com/api/oauth/token"
-API_BASE = "https://api.canva.com/rest/v1"
+# No hardcoded Canva endpoints: authorize/token/API base URLs are the residency-checked
+# declarations in core.regions, validated against the AU allowlist at startup.
 SCOPES = "design:meta:read design:content:read"
 
 # In-memory PKCE state store: state token -> (code_verifier, user_id, expires_at epoch seconds).
@@ -91,7 +92,7 @@ class CanvaService:
             "state": state,
             "redirect_uri": redirect_uri,
         }
-        return f"{AUTHORIZE_URL}?{urlencode(params)}"
+        return f"{regions.canva_authorize_url()}?{urlencode(params)}"
 
     async def exchange_code(self, code: str, state: str, redirect_uri: str) -> Tuple[bool, str]:
         """Handles the OAuth redirect: validates the state token, exchanges the code for
@@ -108,7 +109,7 @@ class CanvaService:
 
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                TOKEN_URL,
+                regions.canva_token_url(),
                 headers={
                     "Authorization": _basic_auth_header(),
                     "Content-Type": "application/x-www-form-urlencoded",
@@ -175,7 +176,7 @@ class CanvaService:
         refresh_token = _decrypt(user["canva_refresh_token"])
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                TOKEN_URL,
+                regions.canva_token_url(),
                 headers={
                     "Authorization": _basic_auth_header(),
                     "Content-Type": "application/x-www-form-urlencoded",
@@ -206,7 +207,7 @@ class CanvaService:
 
         async with httpx.AsyncClient() as client:
             resp = await client.get(
-                f"{API_BASE}/designs",
+                f"{regions.canva_api_base_url()}/designs",
                 headers={"Authorization": f"Bearer {token}"},
                 params=params,
             )
@@ -233,7 +234,7 @@ class CanvaService:
 
         async with httpx.AsyncClient() as client:
             resp = await client.post(
-                f"{API_BASE}/exports",
+                f"{regions.canva_api_base_url()}/exports",
                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
                 json={"design_id": design_id, "format": {"type": "png"}},
             )
@@ -251,7 +252,7 @@ class CanvaService:
 
         async with httpx.AsyncClient() as client:
             resp = await client.get(
-                f"{API_BASE}/exports/{job_id}",
+                f"{regions.canva_api_base_url()}/exports/{job_id}",
                 headers={"Authorization": f"Bearer {token}"},
             )
         if resp.status_code != 200:

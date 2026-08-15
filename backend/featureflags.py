@@ -4,9 +4,12 @@ import os
 
 import httpx
 
+from core import regions
+
 logger = logging.getLogger(__name__)
 
-POSTHOG_HOST = os.getenv("POSTHOG_HOST", "https://us.i.posthog.com")
+# No module-level POSTHOG_HOST: the analytics host is the residency-checked declaration
+# in core.regions (no silent default - an undeclared host must fail, not drift).
 POSTHOG_PROJECT_API_KEY = os.getenv("POSTHOG_PROJECT_API_KEY")
 
 REFRESH_INTERVAL_SECONDS = 60
@@ -24,7 +27,7 @@ async def _refresh_flags() -> None:
         return
     async with httpx.AsyncClient(timeout=10.0) as client:
         resp = await client.post(
-            f"{POSTHOG_HOST}/decide/?v=3",
+            f"{regions.posthog_host()}/decide/?v=3",
             json={"api_key": POSTHOG_PROJECT_API_KEY, "distinct_id": "nueco-backend"},
         )
         resp.raise_for_status()

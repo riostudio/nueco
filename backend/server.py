@@ -36,6 +36,7 @@ def get_client_ip(request: Request) -> str:
 
 # Import get_current_user for authentication
 from core.deps import get_current_user
+from core import regions
 
 # Notes, events, reminders, accounts, and feedback (the core domain + its heavier workflows)
 # live in their own modules - see backend/notes/, backend/events/, backend/reminders/,
@@ -347,6 +348,17 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
 )
+
+
+# ---- Data residency gate ----
+# Registered FIRST among startup handlers so it runs before index creation, cache
+# prewarmers, and sweepers. Every external-service endpoint and region declaration
+# must be present and Australian before a single request is served (Privacy Act 1988
+# / APP 11); validate_all() raises and aborts the boot otherwise.
+@app.on_event("startup")
+async def enforce_data_residency():
+    regions.validate_all()
+    logger.info("[region-check] all external-service endpoints and region declarations validated against the AU allowlist")
 
 
 # ---- Database Indexes ----

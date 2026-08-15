@@ -29,3 +29,17 @@ jobs:
       - name: Syntax check
         working-directory: backend
         run: python3 -m compileall -q .
+
+      # Data residency (Privacy Act 1988 / APP 11): every external-service endpoint
+      # and region declaration must be env-driven and pass the AU allowlist, and no
+      # hardcoded vendor endpoint may live outside core/regions.py. The tests are
+      # self-contained (monkeypatched env, stdlib-only imports), so pytest is the
+      # only install needed. Run the file explicitly - repo-root pytest.ini scopes
+      # bare `pytest` to the eval suite, and backend/tests/ also holds legacy
+      # live-API scripts that must never run in CI.
+      - name: Install pytest
+        run: python3 -m pip install --quiet pytest
+
+      - name: Region residency checks
+        working-directory: backend
+        run: python3 -m pytest tests/test_regions.py

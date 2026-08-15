@@ -3,6 +3,8 @@ import logging
 import httpx
 from dotenv import load_dotenv
 
+from core import regions
+
 load_dotenv()
 
 logger = logging.getLogger(__name__)
@@ -31,10 +33,13 @@ async def send_email(to_email: str, subject: str, html_content: str) -> bool:
         logger.warning(f"Resend not configured. Would send email to {to_email}: {subject}")
         return True  # Return true in dev mode
 
+    # Endpoint from the residency-checked declaration; resolved before the try so a
+    # missing/misconfigured declaration fails loudly rather than reading as a send error.
+    send_url = f"{regions.resend_base_url()}/emails"
     try:
         async with httpx.AsyncClient(timeout=_SEND_TIMEOUT_SECONDS) as client:
             response = await client.post(
-                "https://api.resend.com/emails",
+                send_url,
                 headers={
                     "Authorization": f"Bearer {config['api_key']}",
                     "Content-Type": "application/json"
@@ -89,7 +94,9 @@ async def send_verification_email(email: str, name: str, token: str) -> bool:
 async def send_password_reset_email(email: str, name: str, token: str) -> bool:
     """Send password reset link"""
     base_url = get_base_url()
-    reset_url = f"https://web-production-a3258.up.railway.app/reset-password?token={token}"
+    # Same APP_BASE_URL the verification email uses; the reset page is served by this
+    # backend at /reset-password (see auth/reset_password_page.py).
+    reset_url = f"{base_url}/reset-password?token={token}"
     
     html = f"""
     <!DOCTYPE html>
