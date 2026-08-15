@@ -152,8 +152,7 @@ npm run test:share
 npm run test:sync
 ```
 
-> **Note:** Legacy `*_test.py` scripts at the repo root are stale and hit live infrastructure —
-> do not run them. Frontend test scripts use a custom Node resolver; do not run them with Jest
+> **Note:** Frontend test scripts use a custom Node resolver; do not run them with Jest
 > or `tsx`.
 
 ## Project Layout
