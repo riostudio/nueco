@@ -323,6 +323,10 @@ AI_CRAWLER_USER_AGENTS = [
 
 @app.middleware("http")
 async def block_ai_crawlers_and_tag_responses(request: Request, call_next):
+    # /.well-known/ must stay machine-readable: Android App Links verification and the
+    # Play Console checker fetch assetlinks.json here and reject noindex'd or blocked responses.
+    if request.url.path.startswith("/.well-known/"):
+        return await call_next(request)
     ua = request.headers.get("user-agent", "").lower()
     if any(bot in ua for bot in AI_CRAWLER_USER_AGENTS):
         return PlainTextResponse("Not available to automated crawlers.", status_code=403)

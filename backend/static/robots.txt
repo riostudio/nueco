@@ -44,4 +44,5 @@ User-agent: YouBot
 Disallow: /
 
 User-agent: *
+Allow: /.well-known/
 Disallow: /
