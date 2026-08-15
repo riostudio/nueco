@@ -1,0 +1,74 @@
+# Nueco backend environment template
+# Copy to .env and fill in: cp .env.example .env
+# .env is git-ignored; never commit real values.
+
+# ---- Required: database ----
+MONGO_URL=mongodb+srv://<user>:<password>@cluster0.xxxxx.mongodb.net/
+DB_NAME=nueco
+
+# ---- Required: auth ----
+# Long random string used to sign JWTs, e.g. `openssl rand -hex 32`
+JWT_SECRET=change-me
+# Public origin used in verification/reset emails (this API's own host)
+APP_BASE_URL=https://web-production-a3258.up.railway.app
+
+# ---- Email (Resend) ----
+# SMTP_PASS holds the Resend API key (historical name); leave empty to log emails instead of sending
+SMTP_PASS=
+SMTP_FROM=noreply@nueco.app
+
+# ---- AI / transcription ----
+# One of OPENAI_API_KEY or EMERGENT_LLM_KEY must be set for AI features
+OPENAI_API_KEY=
+EMERGENT_LLM_KEY=
+# openai | speechmatics ; TRANSCRIPTION_SHADOW mirrors traffic to the alternate provider
+TRANSCRIPTION_PROVIDER=openai
+TRANSCRIPTION_SHADOW=
+SPEECHMATICS_API_KEY=
+
+# ---- Attachments (AWS S3) ----
+S3_BUCKET=
+AWS_REGION=ap-southeast-2
+AWS_ACCESS_KEY_ID=
+AWS_SECRET_ACCESS_KEY=
+# Optional per-user attachment cap in bytes
+MAX_TOTAL_ATTACHMENT_BYTES=
+
+# ---- Push notifications (Expo) ----
+EXPO_ACCESS_TOKEN=
+PUSH_TICK_SECRET=
+
+# ---- Feature flags / analytics (PostHog, server side) ----
+POSTHOG_PROJECT_API_KEY=
+
+# ---- Canva integration ----
+CANVA_CLIENT_ID=
+CANVA_CLIENT_SECRET=
+CANVA_TOKEN_ENCRYPTION_KEY=
+
+# ---- Optional ----
+# Comma-separated CORS origins; empty = allow all (dev only)
+ALLOWED_ORIGINS=
+WEBHOOK_SECRET=
+# Local staging APK download route
+APK_DOWNLOAD_PATH=
+
+# ---- Phase 3 data-residency gate (backend/core/regions.py) ----
+# Becomes required when the region enforcement refactor ships: the server will
+# refuse to boot unless every endpoint + region is declared and Australian.
+# OPENAI_BASE_URL=https://api.openai.com/v1
+# OPENAI_REGION=au
+# SPEECHMATICS_BASE_URL=https://api.speechmatics.com/v2
+# SPEECHMATICS_REGION=au
+# EXPO_PUSH_SEND_URL=https://exp.host/--/api/v2/push/send
+# EXPO_PUSH_RECEIPTS_URL=https://exp.host/--/api/v2/push/getReceipts
+# EXPO_PUSH_REGION=au
+# RESEND_BASE_URL=https://api.resend.com
+# RESEND_REGION=au
+# POSTHOG_HOST=https://us.i.posthog.com
+# POSTHOG_REGION=au
+# CANVA_AUTHORIZE_URL=https://www.canva.com/api/oauth/authorize
+# CANVA_TOKEN_URL=https://api.canva.com/rest/v1/oauth/token
+# CANVA_API_BASE_URL=https://api.canva.com/rest/v1
+# CANVA_REGION=au
+# MONGODB_REGION=au

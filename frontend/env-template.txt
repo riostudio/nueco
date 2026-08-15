@@ -1,0 +1,13 @@
+# Nueco frontend (Expo) environment template
+# Copy to .env and fill in: cp .env.example .env
+# Values prefixed EXPO_PUBLIC_ are inlined into the app bundle at build time.
+
+# Backend API origin (falls back to the hardcoded Railway URL in src/backendBaseUrl.ts)
+EXPO_PUBLIC_BACKEND_URL=https://web-production-a3258.up.railway.app
+
+# PostHog analytics (opt-in on device; same values live in eas.json build profiles)
+EXPO_PUBLIC_POSTHOG_KEY=
+EXPO_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com
+
+# Google OAuth Android client ID for Calendar sync (also set per-profile in eas.json)
+GOOGLE_ANDROID_CLIENT_ID=
