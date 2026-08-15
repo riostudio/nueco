@@ -1,15 +1,16 @@
 name: Backend checks
 
+# No paths filter: this job is a REQUIRED status check, and a required check that
+# never runs (e.g. frontend-only PRs) blocks the PR forever. The checks are cheap
+# and backend-only in content, so run them on everything.
 on:
   pull_request:
-    paths: ['backend/**']
   push:
     branches: [main]
-    paths: ['backend/**']
 
 jobs:
   user-scoping:
-    name: User-scoping ratchet
+    name: Backend checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
