@@ -72,7 +72,7 @@ A --> N["External Services<br/>OpenAI, Resend, PostHog, etc."]
 - Database indexing: On startup, the app creates or updates indexes across collections to optimize queries and enforce TTLs where applicable.
 - Region enforcement: At startup, all external service endpoints and regions are validated against an Australian allowlist; boot fails if any declaration is missing or non-compliant.
 - Background tasks: Daily brew cache prewarmer, feature flag refresher, and speechmatics job sweeper are started as background tasks on startup.
-- Static assets: Serves privacy policy, terms, robots.txt, and optional staging APK download.
+- Static assets: Serves privacy policy, terms, robots.txt, optional staging APK download, and `/.well-known/assetlinks.json` for Android App Links verification (Digital Asset Links statements for `com.riostudio.memopad`; cert fingerprints must be colon-separated uppercase hex SHA-256 — Google's parser rejects base64).
 
 Key environment variables used at runtime:
 - MONGO_URL, DB_NAME: MongoDB connection and database name

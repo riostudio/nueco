@@ -157,10 +157,11 @@ Router-->>Client : JSON Response
   - Security (authentication, authorization, payload size limits).
   - Test coverage (unit/integration where applicable).
   - Performance (index usage, sorting, pagination).
-- Merge requirements:
-  - At least one approving review.
-  - All checks passing (linting, type checks, tests).
-  - No conflicts or resolved conflicts with approvals.
+- Merge requirements (enforced by the `protect-main` repository ruleset, active, no bypass by default):
+  - Changes must go through a pull request — direct pushes and force-pushes to main are rejected.
+  - At least one approving review; stale reviews are dismissed on new pushes.
+  - Required status check **Backend checks** (`.github/workflows/backend-checks.yml`) must pass.
+  - Deletion of main is blocked.
 
 ### Testing Workflows
 - Unit and integration tests:

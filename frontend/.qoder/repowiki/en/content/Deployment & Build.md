@@ -213,19 +213,17 @@ Suggested CI steps:
 - [package.json:1-125](file://package.json#L1-L125)
 
 ### CI/CD Pipeline Setup
-While no CI/CD file is present in the repository, you can integrate with GitHub Actions or similar by:
-- Installing dependencies
-- Running tests and lint
-- Building web assets (editor and PDF extractor)
-- Triggering EAS builds with appropriate profiles
-- Uploading artifacts or submitting to stores using EAS CLI
+The repository ships a GitHub Actions workflow at `.github/workflows/backend-checks.yml`. Its job, reported as **Backend checks**, runs the backend user-scoping ratchet, `compileall`, and the AU data-residency region tests. This check is required on pull requests by the `protect-main` repository ruleset (1 approval, no direct pushes or force-pushes to main, no bypass except explicitly listed actors).
 
-Example workflow outline:
-- On push to main: trigger production build and submit
-- On PR: trigger preview builds and run tests
+Frontend guidance when extending CI:
+- Install dependencies
+- Run linting and the Node-based crypto/share/sync test suites
+- Build web assets (editor and PDF extractor)
+- Trigger EAS builds with appropriate profiles
 - Cache node_modules and EAS credentials securely
 
-[No sources needed since this section provides general guidance]
+**Section sources**
+- [.github/workflows/backend-checks.yml](file://../.github/workflows/backend-checks.yml)
 
 ### Deployment Automation and OTA Updates
 - EAS Update supports over-the-air updates for JavaScript changes without rebuilding native binaries.
@@ -239,13 +237,24 @@ Example workflow outline:
 - Use eas submit --platform android|ios --profile production to upload artifacts.
 - Ensure signing keys and provisioning profiles are configured in EAS.
 
+Current release flow (Android):
+- Production AABs (profile `production`, version auto-incremented in eas.json) are uploaded to the Google Play Console **closed testing** track.
+- Preview APK/AAB artifacts are also self-hosted for direct install.
+- App Links (deep linking): the backend serves `/.well-known/assetlinks.json` with `delegate_permission/common.handle_all_urls` for `com.riostudio.memopad`. Cert fingerprints MUST be colon-separated uppercase hex SHA-256 strings — Google's statement parser rejects base64. The app side declares the handled host via the Android intent filter configured in `app.json`/`app.config.js`. After changing assetlinks.json, re-run the App Links check in Play Console (Testing → App links).
+
+Release notes:
+- Release notes entered per release appear under "What's new" on the Play Store listing for users on that track.
+- Google Play does NOT send notifications or emails to closed testers on new releases; updates arrive via normal Play Store auto-update. Communicate releases to testers out-of-band (e.g., shared channel with the opt-in link and notes).
+
 **Section sources**
 - [eas.json:1-67](file://eas.json#L1-L67)
+- [../backend/static/assetlinks.json](file://../backend/static/assetlinks.json)
 
 ### Beta Distribution
 - Preview and development profiles distribute internally via EAS.
 - Use eas build --profile preview or development to generate installable artifacts.
 - Share links with testers or integrate with internal distribution tools.
+- Closed-testing testers join once via the opt-in link; subsequent releases require no action from them.
 
 **Section sources**
 - [eas.json:1-67](file://eas.json#L1-L67)
