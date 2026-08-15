@@ -239,23 +239,30 @@ Rollback:
 - [Procfile:1-2](file://Procfile#L1-L2)
 
 ### Railway Deployment
+The production backend runs on Railway (project `diligent-happiness`, environment `production`). Deployments use **CLI snapshot uploads, not a connected GitHub source**.
+
 Prerequisites:
-- Railway account and CLI configured
+- Railway account and CLI configured (`railway login`, service linked)
 - MongoDB service provisioned (or external MongoDB Atlas)
+- All 18 AU data-residency env vars set — the server refuses to boot without them (`core/regions.py` validates at startup)
 
 Steps:
-1. Create a new project and add a MongoDB service
-2. Configure environment variables in Railway dashboard
-3. Connect repository and deploy
-4. Monitor build logs and runtime logs
-5. Verify health endpoint
+1. Configure environment variables in Railway (dashboard or `railway variables`)
+2. From `backend/`, run `railway up --detach` to upload and deploy the current tree
+3. Poll `railway deployment list` until the deployment reaches SUCCESS
+4. Verify `GET /api/health` and `GET /.well-known/assetlinks.json` on the public domain
+
+Build configuration:
+- Builder is **DOCKERFILE** using `backend/Dockerfile` (python:3.12-slim, pip install, uvicorn). The service root directory is empty because `railway up` uploads the backend contents at the snapshot root.
+- `backend/.railignore` excludes `.env`, `.env.example`, `.railway/`, and config-pull temp dirs from upload snapshots.
+- The railpack builder is avoided: a mise download regression caused persistent prepare failures regardless of code content.
 
 Scaling:
 - Increase instance size or add replicas through Railway UI
 - Use environment variables to configure concurrency and workers
 
 Rollback:
-- Revert to previous commit and redeploy
+- Redeploy a known-good snapshot (`railway up` from the desired tree)
 - Use Railway’s deployment history to roll back
 
 **Section sources**

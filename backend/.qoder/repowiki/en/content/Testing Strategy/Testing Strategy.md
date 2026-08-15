@@ -354,16 +354,14 @@ Actions:
 - [tests/test_regions.py:180-201](file://tests/test_regions.py#L180-L201)
 
 ### Continuous Integration Setup
-- Test runner: pytest collects tests and executes them in a clean environment.
-- Environment: Set required env vars (MONGO_URL, JWT_SECRET, etc.) and region variables pointing to example.invalid hosts.
-- Linting/formatting: flake8/black/isort configured via requirements; include pre-commit hooks for consistency.
-- Reporting: Use pytest’s built-in XML reporter or integrate with CI artifacts for results.
+CI lives at `.github/workflows/backend-checks.yml` and reports a single job named **Backend checks**. It runs on every pull request and push to main with no paths filter — as a required status check it must always report a result, otherwise non-matching PRs would block forever.
 
-Pipeline steps:
-- Install dependencies
-- Run unit tests (region checks, pure functions)
-- Run integration/E2E tests (in-process app)
-- Upload reports and artifacts
+Steps run in the job (Python 3.12):
+- No new unscoped queries: `python3 scripts/check_user_scoping.py` — AST ratchet that fails when a new query against user-owned data lacks a tenant scope (stdlib only).
+- Syntax check: `python3 -m compileall -q .` — every module must parse.
+- Region residency checks: `python3 -m pytest tests/test_regions.py` — AU data-residency allowlist tests (env monkeypatched, `.invalid` placeholder hosts). The file is run explicitly because the repo-root pytest.ini scopes bare `pytest` to the eval suite, and `backend/tests/` also holds legacy live-API scripts that must never run in CI.
+
+The job is a **required status check** under the `protect-main` repository ruleset: pull requests to main cannot merge until it passes.
 
 **Section sources**
 - [requirements.txt:85-85](file://requirements.txt#L85-L85)
