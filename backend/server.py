@@ -218,7 +218,7 @@ app.include_router(api_router)
 # talks to share one origin/port (e.g. http://192.168.20.32:8765). The path is
 # configurable via APK_DOWNLOAD_PATH; if the file is absent (e.g. on Railway) the
 # routes 404, so this is harmless in deployments that don't ship the APK.
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 
 APK_DOWNLOAD_PATH = os.getenv(
     "APK_DOWNLOAD_PATH", str(ROOT_DIR.parent / "frontend" / "nueco-staging.apk")
@@ -301,12 +301,12 @@ async def robots_txt():
 ASSETLINKS_PATH = str(ROOT_DIR / "static" / "assetlinks.json")
 
 
-@app.get("/.well-known/assetlinks.json", response_class=PlainTextResponse)
+@app.get("/.well-known/assetlinks.json", response_class=JSONResponse)
 async def assetlinks():
     if not os.path.isfile(ASSETLINKS_PATH):
         raise HTTPException(status_code=404, detail="assetlinks.json not available")
     with open(ASSETLINKS_PATH, "r", encoding="utf-8") as f:
-        return f.read()
+        return _json.load(f)
 
 
 # ---- Anti-AI-training / anti-scraping posture ----
