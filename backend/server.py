@@ -294,6 +294,21 @@ async def robots_txt():
         return f.read()
 
 
+# ---- Android App Links verification ----
+# Required by Android's autoVerify (intentFilter in app.json). Without this file
+# at exactly this path the OS marks the domain as unverified and deep links show
+# a disambiguation dialog instead of opening the app directly.
+ASSETLINKS_PATH = str(ROOT_DIR / "static" / "assetlinks.json")
+
+
+@app.get("/.well-known/assetlinks.json", response_class=PlainTextResponse)
+async def assetlinks():
+    if not os.path.isfile(ASSETLINKS_PATH):
+        raise HTTPException(status_code=404, detail="assetlinks.json not available")
+    with open(ASSETLINKS_PATH, "r", encoding="utf-8") as f:
+        return f.read()
+
+
 # ---- Anti-AI-training / anti-scraping posture ----
 # Best-effort signals only - a non-compliant crawler can ignore robots.txt and spoof its
 # User-Agent, so this deters well-behaved bots (which currently includes GPTBot, Google-Extended,

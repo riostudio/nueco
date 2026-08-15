@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.riostudio.memopad",
+      "sha256_cert_fingerprints": [
+        "lYrH0Z+V+R2hz152rNmKIPOUhhJrWNolU+MecPlt57E="
+      ]
+    }
+  }
+]
