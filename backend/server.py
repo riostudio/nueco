@@ -306,7 +306,8 @@ async def assetlinks():
     if not os.path.isfile(ASSETLINKS_PATH):
         raise HTTPException(status_code=404, detail="assetlinks.json not available")
     with open(ASSETLINKS_PATH, "r", encoding="utf-8") as f:
-        return _json.load(f)
+        # no-store so intermediary caches (incl. Google's fetch edge) never serve a stale copy
+        return JSONResponse(content=_json.load(f), headers={"Cache-Control": "no-store"})
 
 
 # ---- Anti-AI-training / anti-scraping posture ----
