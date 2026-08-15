@@ -10,7 +10,7 @@ DB_NAME=nueco
 # Long random string used to sign JWTs, e.g. `openssl rand -hex 32`
 JWT_SECRET=change-me
 # Public origin used in verification/reset emails (this API's own host)
-APP_BASE_URL=https://web-production-a3258.up.railway.app
+APP_BASE_URL=https://your-backend.example.com
 
 # ---- Email (Resend) ----
 # SMTP_PASS holds the Resend API key (historical name); leave empty to log emails instead of sending

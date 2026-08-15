@@ -2,8 +2,8 @@
 # Copy to .env and fill in: cp .env.example .env
 # Values prefixed EXPO_PUBLIC_ are inlined into the app bundle at build time.
 
-# Backend API origin (falls back to the hardcoded Railway URL in src/backendBaseUrl.ts)
-EXPO_PUBLIC_BACKEND_URL=https://web-production-a3258.up.railway.app
+# Backend API origin
+EXPO_PUBLIC_BACKEND_URL=https://your-backend.example.com
 
 # PostHog analytics (opt-in on device; same values live in eas.json build profiles)
 EXPO_PUBLIC_POSTHOG_KEY=
