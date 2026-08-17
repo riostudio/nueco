@@ -17,7 +17,7 @@
     "build:web-editor": "vite build --config webEditor/vite.config.ts && node scripts/buildWebEditorHtml.js",
     "build:pdf-extractor": "vite build --config pdfExtractor/vite.config.ts && node scripts/buildPdfExtractorHtml.js",
     "test:google": "node --import ./src/crypto/_ts-resolver.mjs src/google/eventMapper.test.ts",
-    "test:voice": "node --import ./src/crypto/_ts-resolver.mjs src/voice/localIntentClassifier.test.ts && node --import ./src/crypto/_ts-resolver.mjs src/voice/schedulingHints.test.ts && node --import ./src/crypto/_ts-resolver.mjs src/checklistFromSpeech.test.ts && node --import ./src/crypto/_ts-resolver.mjs src/structuredHtmlPreview.test.ts"
+    "test:voice": "node --import ./src/crypto/_ts-resolver.mjs src/voice/localIntentClassifier.test.ts && node --import ./src/crypto/_ts-resolver.mjs src/voice/schedulingHints.test.ts && node --import ./src/crypto/_ts-resolver.mjs src/checklistFromSpeech.test.ts && node --import ./src/crypto/_ts-resolver.mjs src/structuredHtmlPreview.test.ts && node --import ./src/crypto/_ts-resolver.mjs src/text/localSmartFormat.test.ts"
   },
   "dependencies": {
     "@10play/tentap-editor": "^1.0.1",

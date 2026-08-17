@@ -23,7 +23,7 @@ import RNShare from 'react-native-share';
 import * as WebBrowser from 'expo-web-browser';
 import * as Print from 'expo-print';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { notesApi, eventsApi, textProcessApi, voiceIntentApi, attachmentsApi, uploadAttachmentWithProgress, type UploadFile } from '../src/api';
+import { notesApi, eventsApi, textProcessApi, voiceIntentApi, artifactExtractionApi, attachmentsApi, uploadAttachmentWithProgress, type UploadFile } from '../src/api';
 import { PdfExtractorWebView, type PdfExtractorApi } from '../src/pdf/PdfExtractorWebView';
 import { RecordingWaveform } from '../src/components/RecordingWaveform';
 import { createSilencePauseVad, DEFAULT_SILENCE_PAUSE_CONFIG } from '../src/audio/vad';
@@ -36,6 +36,7 @@ import { loadDek } from '../src/crypto/keystore';
 import { decryptFileToTemp } from '../src/crypto/attachmentCrypto';
 import { setPendingVoiceExtraction } from '../src/pendingVoiceEvents';
 import { parseChecklistFromSpeech, buildChecklistHtml, isShoppingListRequest } from '../src/checklistFromSpeech';
+import { formatTextLocally } from '../src/text/localSmartFormat';
 import { looksLikeScheduling } from '../src/voice/schedulingHints';
 import { classifyLocally } from '../src/voice/localIntentClassifier';
 import { transcribeAudio, ModelNotReadyError } from '../src/audio/transcriptionRouter';
@@ -46,7 +47,7 @@ import { RadialProgress, SharedPostCard, Button } from '../src/components';
 import NoteImageCanvas from '../src/components/NoteImageCanvas';
 import { useNoteObjects } from '../src/useNoteObjects';
 import { decryptNoteFromServer } from '../src/crypto/noteCrypto';
-import { createNoteOffline, updateNoteOffline, deleteNoteOffline, getLocalNotes, processSyncQueue, isNewer, resolveNoteId, isNetworkAvailable, enqueueOfflineClassify, createArtifactRecords, getArtifactsForNote, removeArtifactRecordsByRef, enqueueOfflineStructure, applyStructuredContent, setStructureCompleteListener, type OfflineStructureItem } from '../src/offlineSync';
+import { createNoteOffline, updateNoteOffline, deleteNoteOffline, getLocalNotes, processSyncQueue, isNewer, resolveNoteId, isNetworkAvailable, enqueueOfflineClassify, createArtifactRecords, removeArtifactRecordByIds, getArtifactsForNote, removeArtifactRecordsByRef, enqueueOfflineStructure, applyStructuredContent, setStructureCompleteListener, isOnline, type OfflineStructureItem, type ArtifactType } from '../src/offlineSync';
 import { takePendingShareDraft, peekPendingShareDraft } from '../src/share/pendingShareDraft';
 import { parseSourcePost, serializeSourcePost, type SourcePost } from '../src/share/socialSource';
 import { unfurl, needsUnfurl } from '../src/share/unfurl';
@@ -83,6 +84,7 @@ import {
   trackRevealFired,
   trackSaveOutcome,
   trackExtractionResult,
+  trackArtifactDismissed,
   markSegmentEnd,
   trackSegmentLatency,
 } from '../src/analytics';
@@ -243,6 +245,22 @@ type EditorUiState = {
   isTaskListActive: boolean; isTableActive: boolean;
   isReady: boolean; canUndo: boolean; canRedo: boolean;
 };
+
+// A5: additive suggestions from A4 extraction (/api/extract-artifacts). High confidence =
+// auto-populated as an artifact and dismissible; low confidence = one-tap "add this?" question.
+// Never silent auto-add at low confidence.
+interface ArtifactSuggestion {
+  key: string;
+  type: ArtifactType;
+  label: string;
+  detail?: string;
+  confidence: 'high' | 'low';
+  source_span: string;
+  captureId: string;
+  /** Ids of the artifact records already persisted for this suggestion (high-confidence items
+   * immediately, low-confidence on confirm). Empty until then; dismissal deletes exactly these. */
+  recordIds: string[];
+}
 
 // The TenTap rich-text body, isolated so the bridge is created with the note's content as
 // `initialContent`. That's the reliable way to load existing content: `setContent` after mount
@@ -626,6 +644,8 @@ export default function EditorScreen() {
   const [lastDictation, setLastDictation] = useState<string | null>(null);
   const [preTidyContent, setPreTidyContent] = useState<string | null>(null);
   const [transcribedText, setTranscribedText] = useState('');
+  // A5: A4 extraction suggestions for the latest capture(s) in this note, newest batch appended.
+  const [artifactSuggestions, setArtifactSuggestions] = useState<ArtifactSuggestion[]>([]);
   const [images, setImages] = useState<string[]>([]);
   // A social post shared into the app (Instagram/Facebook/…) rendered as a card above the body.
   const [sourcePost, setSourcePost] = useState<SourcePost | null>(null);
@@ -1195,7 +1215,7 @@ export default function EditorScreen() {
           .then(arts => {
             if (!active) return;
             setTripCards(
-              arts.filter(a => a.type === 'trip').map(a => ({ id: a.ref_id, label: a.label })),
+              arts.filter(a => a.type === 'trip' && !!a.ref_id).map(a => ({ id: a.ref_id, label: a.label })),
             );
           })
           .catch(() => {});
@@ -1635,6 +1655,10 @@ export default function EditorScreen() {
     trackSaveOutcome({ capture_id: item.id, raw_save: 'ok', structuring: 'ok', offline_queued: viaQueue });
   }, [saveImmediately]);
 
+  // True when a process-text call failed because the backend's AI quota is exhausted (HTTP 429,
+  // e.g. OpenAI credits at zero) - the one failure the on-device formatter can stand in for.
+  const isQuotaError = (e: unknown) => e instanceof Error && /failed: 429/.test(e.message);
+
   const structureCapture = async (rawText: string) => {
     const captureId = captureIdRef.current;
     const noteId = resolveNoteId(noteIdRef.current);
@@ -1665,6 +1689,19 @@ export default function EditorScreen() {
       if (applied) applyStructureToView(item, html, false, startedAt);
       else trackSaveOutcome({ capture_id: captureId, raw_save: 'ok', structuring: 'skipped', offline_queued: false });
     } catch (e) {
+      // Cloud structuring died while online - typically the shared OpenAI quota hitting zero
+      // (HTTP 429). A checklist-shaped capture can still be structured on-device; anything else
+      // keeps its raw words, same as a structuring skip.
+      if (isQuotaError(e) && (await isOnline())) {
+        const localHtml = formatTextLocally(rawText);
+        if (localHtml) {
+          await enqueuePersist({ push: false }).catch(() => {});
+          const applied = await applyStructuredContent(item, localHtml);
+          if (applied) applyStructureToView(item, localHtml, false, startedAt);
+          else trackSaveOutcome({ capture_id: captureId, raw_save: 'ok', structuring: 'skipped', offline_queued: false });
+          return;
+        }
+      }
       console.error('Auto-structuring failed:', e);
       trackSaveOutcome({
         capture_id: captureId,
@@ -1674,6 +1711,96 @@ export default function EditorScreen() {
         offline_queued: false,
       });
     }
+  };
+
+  // ---- A5: artifact suggestions (A4 extraction) -----------------------------
+  // Runs per capture, fully non-blocking: the note already holds the raw words and structuring
+  // has its own path. Extraction failure/timeout just means no suggestions. High-confidence
+  // items are auto-populated as artifact records (dismissible); low-confidence items ask a
+  // one-tap question and are NEVER persisted without that tap.
+
+  const confidenceNumber = (c: 'high' | 'low') => (c === 'high' ? 1 : 0.5);
+
+  const fetchArtifactSuggestions = async (rawText: string) => {
+    const captureId = captureIdRef.current;
+    const noteId = resolveNoteId(noteIdRef.current);
+    if (!noteId || noteId === 'new') return;
+    if (!(await isNetworkAvailable())) return; // server-side feature; offline captures keep the note only
+    try {
+      const referenceDate = new Date().toISOString().slice(0, 10);
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const res = await artifactExtractionApi.extract(rawText, referenceDate, timezone);
+
+      const batch: ArtifactSuggestion[] = [];
+      res.events.forEach((ev, i) => batch.push({
+        key: `${captureId}-ev-${i}`, type: 'event', label: ev.title,
+        detail: formatEventDateTime(ev.start_time),
+        confidence: ev.confidence, source_span: ev.source_span, captureId, recordIds: [],
+      }));
+      res.shopping_items.forEach((it, i) => batch.push({
+        key: `${captureId}-sh-${i}`, type: 'shopping_item', label: it.text,
+        confidence: it.confidence, source_span: it.source_span, captureId, recordIds: [],
+      }));
+      res.checklist_items.forEach((it, i) => batch.push({
+        key: `${captureId}-ck-${i}`, type: 'checklist_item', label: it.text,
+        confidence: it.confidence, source_span: it.source_span, captureId, recordIds: [],
+      }));
+      if (res.trip) batch.push({
+        key: `${captureId}-trip`, type: 'trip', label: res.trip.name,
+        detail: res.trip.events.length ? `${res.trip.events.length} events` : undefined,
+        confidence: 'high', source_span: res.trip.source_span, captureId, recordIds: [],
+      });
+
+      // A0 instrumentation: what extraction produced for this capture - metadata only.
+      trackExtractionResult({
+        capture_id: captureId,
+        artifact_types: batch.map(s => s.type),
+        item_count: batch.length,
+        confidences: batch.map(s => confidenceNumber(s.confidence)),
+        source_span_present_count: batch.filter(s => !!s.source_span).length,
+        source_span_missing_count: batch.filter(s => !s.source_span).length,
+      });
+
+      if (batch.length === 0) return;
+
+      // High confidence: auto-populate as artifact records now; the bar shows them dismissible.
+      const auto = batch.filter(s => s.confidence === 'high');
+      if (auto.length > 0) {
+        const created = await createArtifactRecords(auto.map(s => ({
+          note_id: noteId, type: s.type, ref_id: '', label: s.label, source_span: s.source_span,
+        })));
+        auto.forEach((s, i) => { s.recordIds = created[i] ? [created[i].id] : []; });
+      }
+      setArtifactSuggestions(prev => [...prev, ...batch]);
+    } catch (e) {
+      console.error('Artifact extraction failed:', e);
+    }
+  };
+
+  const acceptArtifactSuggestion = async (key: string) => {
+    const suggestion = artifactSuggestions.find(s => s.key === key);
+    if (!suggestion) return;
+    const noteId = resolveNoteId(noteIdRef.current);
+    if (!noteId || noteId === 'new') return;
+    await createArtifactRecords([{
+      note_id: noteId, type: suggestion.type, ref_id: '', label: suggestion.label,
+      source_span: suggestion.source_span,
+    }]).catch(() => {});
+    setArtifactSuggestions(prev => prev.filter(s => s.key !== key));
+  };
+
+  const dismissArtifactSuggestion = async (key: string) => {
+    const suggestion = artifactSuggestions.find(s => s.key === key);
+    if (!suggestion) return;
+    if (suggestion.recordIds.length > 0) {
+      await removeArtifactRecordByIds(suggestion.recordIds).catch(() => {});
+    }
+    trackArtifactDismissed({
+      capture_id: suggestion.captureId,
+      artifact_type: suggestion.type,
+      confidence: confidenceNumber(suggestion.confidence),
+    });
+    setArtifactSuggestions(prev => prev.filter(s => s.key !== key));
   };
 
   useEffect(() => {
@@ -2293,6 +2420,9 @@ export default function EditorScreen() {
       // Non-blocking: runs after the raw words are safe. Offline it queues; online it swaps the
       // raw block in place when the structured version arrives.
       structureCapture(result.text).catch(e => console.error('structureCapture failed:', e));
+      // Also non-blocking: additive artifact suggestions from A4 extraction. Failures are silent -
+      // the note already has the words.
+      fetchArtifactSuggestions(result.text).catch(e => console.error('Artifact suggestions failed:', e));
     } catch (e) {
       console.error('Transcription failed:', e);
       if (e instanceof ModelNotReadyError) {
@@ -2373,6 +2503,21 @@ export default function EditorScreen() {
       setLastDictation(null);
       setPreTidyContent(null);
     } catch (e) {
+      // Quota-exhausted cloud (HTTP 429) while online: a checklist-shaped dictation can still be
+      // tidied on-device. lastDictation stays set so a retry works once credits return.
+      if (isQuotaError(e) && (await isOnline())) {
+        const localHtml = formatTextLocally(lastDictation);
+        if (localHtml) {
+          const rawBlock = buildRawBlockHtml(lastDictation);
+          if (contentRef.current.includes(rawBlock)) {
+            const nextContent = contentRef.current.replace(rawBlock, localHtml);
+            contentRef.current = nextContent;
+            editorApiRef.current?.setContent(nextContent);
+            saveImmediately();
+            return;
+          }
+        }
+      }
       console.error('Tidy failed:', e);
       Alert.alert('Couldn’t tidy that one', 'Your note is exactly as you left it.');
       trackSaveOutcome({
@@ -2405,10 +2550,13 @@ export default function EditorScreen() {
       await appendToEditorStreamed(result.text);
     } catch (e) {
       console.error('Text processing failed:', e);
-      Alert.alert('Couldn’t tidy that one', 'Your words went in as you said them.');
-      // Fallback to original text
-      insertTranscription(transcribedText);
-      await appendToEditorStreamed(transcribedText);
+      // Quota-exhausted cloud while online: fall back to the on-device formatter when it can
+      // stand in; otherwise the words go in exactly as said.
+      const localHtml = isQuotaError(e) && (await isOnline()) ? formatTextLocally(transcribedText) : null;
+      const textToInsert = localHtml ?? transcribedText;
+      if (!localHtml) Alert.alert('Couldn’t tidy that one', 'Your words went in as you said them.');
+      insertTranscription(textToInsert);
+      await appendToEditorStreamed(textToInsert);
     } finally {
       setIsProcessingText(false);
       setTranscribedText('');
@@ -3656,6 +3804,42 @@ export default function EditorScreen() {
         </View>
       )}
 
+      {/* A5: A4 extraction suggestions. High confidence = already added, dismissible. Low
+          confidence = one-tap question - never persisted without that tap. */}
+      {artifactSuggestions.length > 0 && (
+        <View style={s.artifactBar}>
+          <View style={{ flex: 1, gap: 8 }}>
+            {artifactSuggestions.map(suggestion => {
+              const icon = suggestion.type === 'event' ? 'event'
+                : suggestion.type === 'shopping_item' ? 'shopping-cart'
+                : suggestion.type === 'checklist_item' ? 'check-box'
+                : 'flight';
+              return (
+                <View key={suggestion.key} style={s.artifactRow}>
+                  <MaterialIcons name={icon as any} size={16} color={C.textSec} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.tidyBarText} numberOfLines={1}>
+                      {suggestion.confidence === 'high' ? `Added: ${suggestion.label}` : `Add "${suggestion.label}"?`}
+                    </Text>
+                    {suggestion.detail ? (
+                      <Text style={s.artifactDetail} numberOfLines={1}>{suggestion.detail}</Text>
+                    ) : null}
+                  </View>
+                  {suggestion.confidence === 'low' && (
+                    <TouchableOpacity onPress={() => acceptArtifactSuggestion(suggestion.key)} style={s.tidyBarAction} hitSlop={10} testID={`artifact-accept-${suggestion.key}`}>
+                      <MaterialIcons name="add" size={18} color={C.primary} />
+                    </TouchableOpacity>
+                  )}
+                  <TouchableOpacity onPress={() => dismissArtifactSuggestion(suggestion.key)} hitSlop={10} testID={`artifact-dismiss-${suggestion.key}`}>
+                    <MaterialIcons name="close" size={18} color={C.borderSub} />
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
+          </View>
+        </View>
+      )}
+
       {isProcessingText && (
         <View style={s.processingOverlay}>
           <View style={s.processingCard}>
@@ -4267,6 +4451,15 @@ const s = StyleSheet.create({
   tidyBarText: { flex: 1, fontSize: 13, color: C.textSec },
   tidyBarAction: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   tidyBarActionText: { fontSize: 14, fontWeight: '600', color: C.primary },
+  // A5 artifact-suggestion bar: same card look as tidyBar, stacked above it so both can show.
+  artifactBar: {
+    position: 'absolute', left: 16, right: 16, bottom: 150,
+    backgroundColor: C.surfaceHi, borderRadius: 12, paddingVertical: 10, paddingHorizontal: 14,
+    shadowColor: '#0A5443', shadowOpacity: 0.12, shadowRadius: 10, shadowOffset: { width: 0, height: 3 },
+    elevation: 3,
+  },
+  artifactRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  artifactDetail: { fontSize: 11, color: C.textSec, opacity: 0.8 },
   processingOverlay: {
     position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
     backgroundColor: 'rgba(0,0,0,0.5)',

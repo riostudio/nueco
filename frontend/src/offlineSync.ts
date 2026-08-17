@@ -402,15 +402,33 @@ async function writeArtifacts(artifacts: ArtifactRecord[]): Promise<void> {
 }
 
 export async function createArtifactRecords(
-  items: Pick<ArtifactRecord, 'note_id' | 'type' | 'ref_id' | 'label'>[],
-): Promise<void> {
-  if (items.length === 0) return;
+  items: (Pick<ArtifactRecord, 'note_id' | 'type' | 'ref_id' | 'label'> & { source_span?: string | null })[],
+): Promise<ArtifactRecord[]> {
+  if (items.length === 0) return [];
   const now = new Date().toISOString();
   const artifacts = await readArtifacts();
+  const created: ArtifactRecord[] = [];
   for (const item of items) {
-    artifacts.push({ ...item, id: `artifact_${uuid.v4()}`, source_span: null, created_at: now });
+    const record: ArtifactRecord = {
+      ...item,
+      source_span: item.source_span ?? null,
+      id: `artifact_${uuid.v4()}`,
+      created_at: now,
+    };
+    artifacts.push(record);
+    created.push(record);
   }
   await writeArtifacts(artifacts);
+  return created;
+}
+
+/** Undo specific artifact records (e.g. a dismissed high-confidence suggestion). */
+export async function removeArtifactRecordByIds(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const drop = new Set(ids);
+  const artifacts = await readArtifacts();
+  const kept = artifacts.filter(a => !drop.has(a.id));
+  if (kept.length !== artifacts.length) await writeArtifacts(kept);
 }
 
 export async function getArtifactsForNote(noteId: string): Promise<ArtifactRecord[]> {

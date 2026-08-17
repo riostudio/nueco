@@ -499,6 +499,79 @@ export const voiceIntentApi = {
   },
 };
 
+// A4 artifact extraction (backend /api/extract-artifacts). The full transcript stays the note;
+// these are additive suggestions. Every item arrives with a server-verified source_span - any
+// item the model fabricated was already dropped server-side, so the client only renders.
+export type ExtractionConfidence = 'high' | 'low';
+
+export interface ExtractedItem {
+  text: string;
+  source_span: string;
+  confidence: ExtractionConfidence;
+}
+
+export interface ExtractedEventSuggestion {
+  title: string;
+  start_time: string;
+  end_time?: string | null;
+  location?: string;
+  confidence: ExtractionConfidence;
+  source_span: string;
+}
+
+export interface ExtractedTripSuggestion {
+  name: string;
+  source_span: string;
+  events: ExtractedEventSuggestion[];
+}
+
+export interface ExtractArtifactsResult {
+  note_content: string;
+  events: ExtractedEventSuggestion[];
+  shopping_items: ExtractedItem[];
+  checklist_items: ExtractedItem[];
+  trip: ExtractedTripSuggestion | null;
+}
+
+export const artifactExtractionApi = {
+  extract: async (
+    transcript: string,
+    referenceDate: string,
+    timezone: string,
+    timeoutMs = 20000,
+  ): Promise<ExtractArtifactsResult> => {
+    const authHeaders = await getAuthHeaders();
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let response: Response;
+    try {
+      response = await fetch(`${BACKEND_API_BASE_URL}/extract-artifacts`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeaders,
+        },
+        body: JSON.stringify({ transcript, reference_date: referenceDate, timezone }),
+        signal: controller.signal,
+      });
+    } catch (e) {
+      if (controller.signal.aborted) throw new Error('Artifact extraction timeout');
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Artifact extraction error:', errorText);
+      throw new Error(`Artifact extraction failed: ${response.status}`);
+    }
+
+    return response.json();
+  },
+};
+
 export interface CanvaStatus {
   connected: boolean;
   connected_at?: string | null;
