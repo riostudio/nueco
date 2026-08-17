@@ -10,16 +10,23 @@ Client-side throttling cannot cover this: a modified or simply buggy build ignor
 Framework-agnostic on purpose (no fastapi import) so it obeys the same layering rule as the
 service modules - routers translate a RateLimited result into an HTTP 429.
 
-KNOWN LIMITATION: state is in-process. It resets on deploy and is not shared across instances, so
-with N replicas the effective limit is N x the configured value. That is acceptable for a
-single-instance deployment and is the same tradeoff auth/router.py's existing limiter already
-makes; moving to Redis is the fix if this ever scales horizontally.
+SHARED STATE
+When REDIS_URL is set, quota state lives in Redis (sorted-set sliding windows), so every instance
+counts against the same window and a load balancer cannot multiply the effective limit. When it
+is unset or unreachable, the limiter falls back to in-process state: correct for a single
+instance, and with N replicas the effective limit is N x the configured value - degraded
+protection rather than no protection.
 """
+import logging
+import os
 import threading
 import time
+import uuid
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Deque, Dict, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -95,6 +102,93 @@ class SlidingWindowLimiter:
 
 ai_limiter = SlidingWindowLimiter()
 
+# ---- Shared (cross-instance) state via Redis --------------------------------
+# Sorted-set sliding window per key: members are timestamps, expired entries are pruned on every
+# check. REDIS_URL unset (today's single-instance deployment) -> None -> in-process fallback.
+
+_redis_client = None
+_redis_init_lock = threading.Lock()
+_REDIS_KEY_PREFIX = "nueco:rl:"
+
+
+def _get_redis_client():
+    """Lazily-created shared Redis client, or None when REDIS_URL is unset/unreachable."""
+    global _redis_client
+    if _redis_client is not None:
+        return _redis_client
+    url = os.environ.get("REDIS_URL", "").strip()
+    if not url:
+        return None
+    with _redis_init_lock:
+        if _redis_client is None:
+            try:
+                import redis  # imported lazily so the in-process path never needs the dependency
+                client = redis.Redis.from_url(url, socket_connect_timeout=1, socket_timeout=1)
+                client.ping()
+                _redis_client = client
+            except Exception as e:
+                logger.warning(
+                    "Redis rate-limit backend unavailable, using in-process limits: %s", type(e).__name__
+                )
+    return _redis_client
+
+
+def _retry_after_from(oldest_ms: Optional[float], quota: Quota, now_ms: int) -> int:
+    if oldest_ms is None:
+        return 1
+    # Retry when the OLDEST call in the window ages out - the earliest moment a slot frees.
+    return max(1, int((oldest_ms + quota.window_seconds * 1000 - now_ms) / 1000) + 1)
+
+
+def _redis_window_count(client, key: str, quota: Quota, now_ms: int) -> Tuple[int, Optional[float]]:
+    window_start = now_ms - quota.window_seconds * 1000
+    pipe = client.pipeline()
+    pipe.zremrangebyscore(key, 0, window_start)
+    pipe.zcard(key)
+    _, count = pipe.execute()
+    oldest = None
+    if count >= quota.limit:
+        oldest_entries = client.zrange(key, 0, 0, withscores=True)
+        if oldest_entries:
+            oldest = oldest_entries[0][1]
+    return count, oldest
+
+
+def _check_shared(
+    key: str,
+    quota: Quota,
+    global_key: Optional[str],
+    global_quota: Optional[Quota],
+) -> Optional[RateLimitDecision]:
+    """Shared-window check. Returns None when Redis is unavailable, meaning the caller must fall
+    back to the in-process limiter. Same consume-on-allow / consume-nothing-on-deny semantics as
+    SlidingWindowLimiter.check."""
+    client = _get_redis_client()
+    if client is None:
+        return None
+    try:
+        now_ms = int(time.time() * 1000)
+        count, oldest = _redis_window_count(client, key, quota, now_ms)
+        if count >= quota.limit:
+            return RateLimitDecision(False, _retry_after_from(oldest, quota, now_ms), "user")
+        if global_key and global_quota:
+            g_count, g_oldest = _redis_window_count(client, global_key, global_quota, now_ms)
+            if g_count >= global_quota.limit:
+                return RateLimitDecision(False, _retry_after_from(g_oldest, global_quota, now_ms), "global")
+        member = f"{now_ms}:{uuid.uuid4().hex[:8]}"
+        pipe = client.pipeline()
+        pipe.zadd(key, {member: now_ms})
+        pipe.pexpire(key, quota.window_seconds * 1000)
+        if global_key and global_quota:
+            pipe.zadd(global_key, {member: now_ms})
+            pipe.pexpire(global_key, global_quota.window_seconds * 1000)
+        pipe.execute()
+        return RateLimitDecision(True)
+    except Exception as e:
+        logger.warning("Redis rate-limit check failed, falling back to in-process: %s", type(e).__name__)
+        return None
+
+
 # Per-user quotas. Sized to be invisible to real use and obvious to a runaway loop.
 #
 # TRANSCRIPTION is the most expensive call and is bounded by human speech - recording, stopping and
@@ -117,9 +211,17 @@ GLOBAL_AI_KEY = "global:ai"
 
 def check_ai_quota(user_id: str, endpoint: str, quota: Quota) -> RateLimitDecision:
     """Per-user AND global check for one AI endpoint. Keyed per endpoint so a user hitting their
-    transcription ceiling can still, say, organise text they already have."""
+    transcription ceiling can still, say, organise text they already have. Prefers the shared
+    Redis windows (correct across instances); falls back to in-process state when Redis is
+    absent, which degrades but never removes the protection."""
+    key = f"{endpoint}:{user_id}"
+    shared = _check_shared(
+        _REDIS_KEY_PREFIX + key, quota, _REDIS_KEY_PREFIX + GLOBAL_AI_KEY, GLOBAL_AI_QUOTA
+    )
+    if shared is not None:
+        return shared
     return ai_limiter.check(
-        key=f"{endpoint}:{user_id}",
+        key=key,
         quota=quota,
         global_key=GLOBAL_AI_KEY,
         global_quota=GLOBAL_AI_QUOTA,
