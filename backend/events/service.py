@@ -188,6 +188,10 @@ class EventsService:
             "recurrence": event.recurrence.model_dump() if event.recurrence else None,
             "timezone": event.timezone,
             "trip_id": event.trip_id,
+            "google_event_id": event.google_event_id,
+            "google_calendar_id": event.google_calendar_id,
+            "google_event_updated": event.google_event_updated,
+            "attendees": event.attendees,
             **compute_reminder_fields(event.start_time, event.reminder_minutes),
         }
         await self.db.events.insert_one(doc)
@@ -229,6 +233,10 @@ class EventsService:
             "recurrence": 1,
             "timezone": 1,
             "trip_id": 1,
+            "google_event_id": 1,
+            "google_calendar_id": 1,
+            "google_event_updated": 1,
+            "attendees": 1,
         }).sort(
             # `id` is the tiebreaker, not decoration: start_time alone is not unique (all-day
             # events on the same date share it exactly), and skip/limit paging over a
@@ -270,7 +278,10 @@ class EventsService:
                 # see the bug this fixes: turning off an existing event's reminder/recurrence
                 # via edit was previously a no-op. trip_id follows the same rule so
                 # PUT /events/{id} {"trip_id": null} actually removes it from its trip.
-                if k in ("reminder_minutes", "recurrence", "trip_id"):
+                # The Google bridge fields follow the same rule so a Google disconnect can
+                # clear the sync identity with an explicit null.
+                if k in ("reminder_minutes", "recurrence", "trip_id", "google_event_id",
+                         "google_calendar_id", "google_event_updated", "attendees"):
                     updates[k] = None
                 continue
             updates[k] = v

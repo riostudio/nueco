@@ -15,6 +15,37 @@ import { clearLocalData } from '../src/offlineSync';
 import { exportMyData } from '../src/dataExport';
 import { BACKEND_BASE_URL } from '../src/backendBaseUrl';
 import { ReminderVoicePicker } from '../src/components/ReminderVoicePicker';
+import {
+  DEFAULT_RETENTION,
+  RETENTION_OPTIONS,
+  formatBytes,
+  type RetentionPref,
+} from '../src/audio/retention';
+import {
+  getRetentionPref,
+  setRetentionPref,
+  listRecordings,
+  totalRecordingBytes,
+  sweepExpiredRecordings,
+  removeAllRecordings,
+  getSpokenLanguagePref,
+  setSpokenLanguagePref,
+  SPOKEN_LANGUAGE_OPTIONS,
+  getAnnouncementPref,
+  setAnnouncementPref,
+  type SpokenLanguagePref,
+} from '../src/audio/recordingStore';
+import { CONVERSATION_MODE_ENABLED } from '../src/audio/conversation';
+import {
+  getModelState,
+  subscribeModelState,
+  isOfflineTranscriptionEnabled,
+  OFFLINE_TRANSCRIPTION_ENABLED_KEY,
+  startModelDownload,
+  pauseModelDownload,
+  deleteModel,
+  refreshModelState,
+} from '../src/audio/offlineTranscription';
 import { C, radius, borderWidth } from '../src/theme';
 
 // Served from the backend itself (same origin as the API) - see backend/server.py's
@@ -93,6 +124,107 @@ export default function PrivacyDataScreen() {
     setAnalyticsOn(value);
     await setAnalyticsEnabled(value);
   }, []);
+
+  // ---- Voice recording retention (plan.md M5) ----
+  const [retentionPref, setRetentionPrefState] = useState<RetentionPref>(DEFAULT_RETENTION);
+  const [recordingStats, setRecordingStats] = useState<{ count: number; bytes: number }>({ count: 0, bytes: 0 });
+
+  const refreshRecordingStats = useCallback(async () => {
+    const [records, bytes] = await Promise.all([listRecordings(), totalRecordingBytes()]);
+    setRecordingStats({ count: records.length, bytes });
+  }, []);
+
+  useFocusEffect(useCallback(() => {
+    getRetentionPref().then(setRetentionPrefState);
+    refreshRecordingStats();
+  }, [refreshRecordingStats]));
+
+  const chooseRetention = useCallback(async (pref: RetentionPref) => {
+    setRetentionPrefState(pref);
+    await setRetentionPref(pref);
+    // A tightened preference applies right away rather than waiting for the next app start.
+    await sweepExpiredRecordings();
+    await refreshRecordingStats();
+  }, [refreshRecordingStats]);
+
+  const [spokenLang, setSpokenLangState] = useState<SpokenLanguagePref>('auto');
+  useFocusEffect(useCallback(() => {
+    getSpokenLanguagePref().then(setSpokenLangState);
+  }, []));
+  const chooseSpokenLang = useCallback(async (pref: SpokenLanguagePref) => {
+    setSpokenLangState(pref);
+    await setSpokenLanguagePref(pref);
+  }, []);
+
+  // Offline (on-device) transcription: whisper.cpp model lives in app storage; the toggle
+  // starts/pauses the one-time download, and the rows below mirror the download state machine.
+  const [offlineOn, setOfflineOn] = useState(false);
+  const [modelState, setModelStateState] = useState(getModelState());
+  useEffect(() => {
+    isOfflineTranscriptionEnabled().then(setOfflineOn);
+    refreshModelState();
+    return subscribeModelState(setModelStateState);
+  }, []);
+  const toggleOffline = useCallback(async (value: boolean) => {
+    setOfflineOn(value);
+    await AsyncStorage.setItem(OFFLINE_TRANSCRIPTION_ENABLED_KEY, value ? '1' : '0');
+    if (value) {
+      if (modelState.state !== 'ready') {
+        startModelDownload().catch(() => {}); // state machine surfaces the error row
+      }
+    } else if (modelState.state === 'downloading') {
+      await pauseModelDownload();
+    }
+  }, [modelState.state]);
+  const retryModelDownload = useCallback(() => {
+    startModelDownload().catch(() => {});
+  }, []);
+  const confirmDeleteModel = useCallback(() => {
+    Alert.alert(
+      'Delete the offline model?',
+      'Voice capture will need a connection again until you re-download it (~181 MB).',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete', style: 'destructive',
+          onPress: async () => {
+            await deleteModel();
+            setOfflineOn(false);
+            await AsyncStorage.setItem(OFFLINE_TRANSCRIPTION_ENABLED_KEY, '0');
+          },
+        },
+      ],
+    );
+  }, []);
+
+  // Conversation-mode audible announcement (plan/11). Default off; only surfaced once the
+  // feature gate flips so Settings never advertises a mode users can't reach.
+  const [announceOn, setAnnounceOn] = useState(false);
+  useFocusEffect(useCallback(() => {
+    getAnnouncementPref().then(setAnnounceOn);
+  }, []));
+  const toggleAnnounce = useCallback(async (value: boolean) => {
+    setAnnounceOn(value);
+    await setAnnouncementPref(value);
+  }, []);
+
+  const confirmDeleteAllRecordings = useCallback(() => {
+    Alert.alert(
+      'Delete all recordings?',
+      'This removes every voice recording stored on this device. The words in your notes are not affected.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            await removeAllRecordings();
+            await refreshRecordingStats();
+          },
+        },
+      ],
+    );
+  }, [refreshRecordingStats]);
 
   const toggleDailyBrewPinned = useCallback(async (value: boolean) => {
     if (!user) return;
@@ -193,6 +325,145 @@ export default function PrivacyDataScreen() {
               thumbColor={analyticsOn ? C.primary : '#f4f3f4'}
             />
           </View>
+
+          <View style={s.divider} />
+
+          {/* Voice recording retention (plan.md M5): the rolling window for recordings kept
+              on this device, live storage usage, and a way out (delete all). */}
+          <View style={s.row}>
+            <MaterialIcons name="graphic-eq" size={24} color={C.textSec} />
+            <View style={{ flex: 1, marginLeft: 16 }}>
+              <Text style={s.rowLabelPlain}>Voice recordings</Text>
+              <Text style={s.rowSub}>
+                {recordingStats.count === 0
+                  ? 'No recordings kept on this device.'
+                  : `${recordingStats.count} recording${recordingStats.count === 1 ? '' : 's'} using ${formatBytes(recordingStats.bytes)}.`}
+              </Text>
+            </View>
+          </View>
+
+          <View style={s.inlinePicker}>
+            {RETENTION_OPTIONS.map(opt => (
+              <TouchableOpacity
+                key={opt.value}
+                style={s.retentionOption}
+                onPress={() => chooseRetention(opt.value)}
+              >
+                <MaterialIcons
+                  name={retentionPref === opt.value ? 'radio-button-checked' : 'radio-button-unchecked'}
+                  size={20}
+                  color={retentionPref === opt.value ? C.primary : C.textSec}
+                />
+                <View style={{ flex: 1, marginLeft: 10 }}>
+                  <Text style={s.retentionOptionLabel}>{opt.label}</Text>
+                  <Text style={s.rowSub}>{opt.detail}</Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+            {recordingStats.count > 0 && (
+              <TouchableOpacity onPress={confirmDeleteAllRecordings} style={{ marginTop: 10 }}>
+                <Text style={{ color: C.danger, fontSize: 15, fontWeight: '500' }}>Delete all recordings</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {/* Spoken language: Whisper's per-clip auto-detection can flip to the wrong language
+              on short/quiet recordings; pinning the language overrides it deterministically. */}
+          <View style={s.row}>
+            <MaterialIcons name="translate" size={24} color={C.textSec} />
+            <View style={{ flex: 1, marginLeft: 16 }}>
+              <Text style={s.rowLabelPlain}>Spoken language</Text>
+              <Text style={s.rowSub}>The language you speak into voice notes.</Text>
+            </View>
+          </View>
+
+          <View style={s.inlinePicker}>
+            {SPOKEN_LANGUAGE_OPTIONS.map(opt => (
+              <TouchableOpacity
+                key={opt.value}
+                style={s.retentionOption}
+                onPress={() => chooseSpokenLang(opt.value)}
+              >
+                <MaterialIcons
+                  name={spokenLang === opt.value ? 'radio-button-checked' : 'radio-button-unchecked'}
+                  size={20}
+                  color={spokenLang === opt.value ? C.primary : C.textSec}
+                />
+                <View style={{ flex: 1, marginLeft: 10 }}>
+                  <Text style={s.retentionOptionLabel}>{opt.label}</Text>
+                  <Text style={s.rowSub}>{opt.detail}</Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {/* Offline transcription: on-device whisper.cpp so airplane-mode captures still
+              produce words, events and checklists. The toggle owns the one-time model download. */}
+          <View style={[s.row, { marginTop: 8 }]}>
+            <MaterialIcons name="cloud-off" size={24} color={C.textSec} />
+            <View style={{ flex: 1, marginLeft: 16 }}>
+              <Text style={s.rowLabelPlain}>Offline transcription</Text>
+              <Text style={s.rowSub}>
+                Transcribe voice notes on this device when there&rsquo;s no connection. Downloads a
+                one-time model (~181 MB). Audio never leaves your phone.
+              </Text>
+            </View>
+            <Switch
+              value={offlineOn}
+              onValueChange={toggleOffline}
+              trackColor={{ false: C.borderSub, true: C.primary + '80' }}
+              thumbColor={offlineOn ? C.primary : '#f4f3f4'}
+            />
+          </View>
+
+          {offlineOn && modelState.state === 'downloading' && (
+            <View style={s.row}>
+              <ActivityIndicator size="small" color={C.primary} />
+              <View style={{ flex: 1, marginLeft: 16 }}>
+                <Text style={s.rowLabelPlain}>Downloading model&hellip;</Text>
+                <Text style={s.rowSub}>{Math.round(modelState.progress * 100)}% of 181 MB</Text>
+              </View>
+            </View>
+          )}
+
+          {offlineOn && modelState.state === 'error' && (
+            <TouchableOpacity style={s.row} onPress={retryModelDownload}>
+              <MaterialIcons name="error-outline" size={24} color={C.danger ?? '#c0392b'} />
+              <View style={{ flex: 1, marginLeft: 16 }}>
+                <Text style={s.rowLabelPlain}>Model download failed</Text>
+                <Text style={s.rowSub}>{modelState.error || 'Tap to retry'}</Text>
+              </View>
+            </TouchableOpacity>
+          )}
+
+          {offlineOn && modelState.state === 'ready' && (
+            <TouchableOpacity style={s.row} onPress={confirmDeleteModel}>
+              <MaterialIcons name="delete-outline" size={24} color={C.textSec} />
+              <View style={{ flex: 1, marginLeft: 16 }}>
+                <Text style={s.rowLabelPlain}>Delete offline model</Text>
+                <Text style={s.rowSub}>Free up ~181 MB. You can re-download it any time.</Text>
+              </View>
+            </TouchableOpacity>
+          )}
+
+          {CONVERSATION_MODE_ENABLED && (
+            <View style={[s.row, { marginTop: 8 }]}>
+              <MaterialIcons name="volume-up" size={24} color={C.textSec} />
+              <View style={{ flex: 1, marginLeft: 16 }}>
+                <Text style={s.rowLabelPlain}>Announce conversation recordings</Text>
+                <Text style={s.rowSub}>
+                  Play an audible &ldquo;Recording started&rdquo; out loud when a conversation
+                  capture begins, so everyone in the room hears it.
+                </Text>
+              </View>
+              <Switch
+                value={announceOn}
+                onValueChange={toggleAnnounce}
+                trackColor={{ false: C.borderSub, true: C.primary + '80' }}
+                thumbColor={announceOn ? C.primary : '#f4f3f4'}
+              />
+            </View>
+          )}
 
           <View style={s.divider} />
 
@@ -357,6 +628,8 @@ const s = StyleSheet.create({
   rowLabelPlain: { fontSize: 18, color: C.text },
   rowSub: { fontSize: 14, color: C.textSec, marginTop: 2 },
   inlinePicker: { paddingHorizontal: 16, paddingBottom: 8 },
+  retentionOption: { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 6 },
+  retentionOptionLabel: { fontSize: 15, color: C.text, fontWeight: '500' },
   divider: { height: 1, backgroundColor: C.borderSub + '40', marginVertical: 4 },
   pwInput: {
     width: '100%', height: 52, borderWidth: borderWidth.thick, borderColor: C.borderSub, borderRadius: radius.md,

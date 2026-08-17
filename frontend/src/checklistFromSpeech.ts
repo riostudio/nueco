@@ -55,6 +55,13 @@ export function parseChecklistFromSpeech(transcript: string): ChecklistFromSpeec
   return { isChecklist: true, items: items.length > 0 ? items : [''] };
 }
 
+/** True when the transcript opens with a shopping-list creation command ("start a shopping
+ * list: milk, eggs") - used to type the resulting artifact records as shopping items. */
+export function isShoppingListRequest(transcript: string): boolean {
+  const match = (transcript || '').trim().match(CHECKLIST_TRIGGER);
+  return !!match && /shopping\s*list/i.test(match[0]);
+}
+
 function escapeHtml(t: string): string {
   return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }

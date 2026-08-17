@@ -105,11 +105,18 @@ console.log('undecryptable field → placeholder, no throw:');
   ok('wrong-key name → placeholder', wrong.name === UNDECRYPTABLE_PLACEHOLDER);
   ok('wrong-key description → placeholder', wrong.description === UNDECRYPTABLE_PLACEHOLDER);
 
-  // Corrupt token in an enc_version=1 trip.
-  const corrupt = { name: 'not-a-valid-token', description: encryptTripFields({ description: 'ok' }, dek).description, enc_version: ENC_VERSION };
+  // Corrupt ciphertext in an enc_version=1 trip: token shape is right, payload tampered.
+  const goodName = encryptTripFields({ name: 'good' }, dek).name as string;
+  const tampered = goodName.slice(0, 4) + (goodName[4] === 'A' ? 'B' : 'A') + goodName.slice(5);
+  const corrupt = { name: tampered, description: encryptTripFields({ description: 'ok' }, dek).description, enc_version: ENC_VERSION };
   const out = decryptTripFields(corrupt as any, dek);
-  ok('corrupt name → placeholder', out.name === UNDECRYPTABLE_PLACEHOLDER);
+  ok('tampered ciphertext → placeholder', out.name === UNDECRYPTABLE_PLACEHOLDER);
   ok('sibling valid field still decrypts', out.description === 'ok');
+
+  // Plaintext mislabeled under enc_version=1 passes through untouched (self-heal).
+  const mislabeled = { name: 'not-a-valid-token', description: 'plain', enc_version: ENC_VERSION };
+  const pass = decryptTripFields(mislabeled as any, dek);
+  ok('non-ciphertext string passes through unchanged', pass.name === 'not-a-valid-token' && pass.description === 'plain');
 }
 
 console.log('empty strings:');

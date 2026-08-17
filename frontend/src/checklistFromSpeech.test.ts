@@ -2,7 +2,7 @@
  * Unit tests for the spoken-checklist recognizer. Framework-free:
  *   node --import ./src/crypto/_ts-resolver.mjs src/checklistFromSpeech.test.ts
  */
-import { parseChecklistFromSpeech, buildChecklistHtml } from './checklistFromSpeech.ts';
+import { parseChecklistFromSpeech, buildChecklistHtml, isShoppingListRequest } from './checklistFromSpeech.ts';
 
 let passed = 0;
 let failed = 0;
@@ -87,6 +87,13 @@ function main() {
   {
     const html = buildChecklistHtml([]);
     ok('empty items -> empty taskList (no li)', html === '<ul data-type="taskList"></ul>');
+  }
+
+  console.log('isShoppingListRequest:');
+  {
+    ok('shopping-list command -> true', isShoppingListRequest('start a shopping list: milk, eggs') === true);
+    ok('plain checklist command -> false', isShoppingListRequest('create a checklist: call mom') === false);
+    ok('non-checklist transcript -> false', isShoppingListRequest('remember to buy milk tomorrow') === false);
   }
 
   console.log(`\n${passed} passed, ${failed} failed`);

@@ -76,6 +76,22 @@ export interface CalendarEvent {
   recurrence: Recurrence | null;
   timezone: string | null;
   trip_id: string | null; // Groups this event under a Trip (itinerary view) - see Trip below.
+  // Google Calendar bridge (client-side Google API sync). Identifies the mirrored Google event;
+  // google_event_updated is Google's `updated` timestamp used for last-write-wins conflict
+  // resolution; attendees mirrors Google's attendee list (read-only display).
+  google_event_id?: string | null;
+  google_calendar_id?: string | null;
+  google_event_updated?: string | null;
+  attendees?: GoogleAttendee[] | null;
+}
+
+// Mirrored from Google Calendar's attendee object (subset we care about).
+export interface GoogleAttendee {
+  email: string;
+  displayName?: string;
+  responseStatus?: 'needsAction' | 'declined' | 'tentative' | 'accepted';
+  organizer?: boolean;
+  self?: boolean;
 }
 
 export interface Trip {

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from core.deps import get_current_user
 from core.ratelimit import (
+    EXTRACTION_QUOTA,
     TEXT_PROCESS_QUOTA,
     TRANSCRIBE_QUOTA,
     VOICE_INTENT_QUOTA,
@@ -15,6 +16,8 @@ from core.ratelimit import (
 from . import service
 from .service import AIEmptyResponseError, AIResponseParseError, InvalidTextActionError
 from .schemas import (
+    ExtractArtifactsRequest,
+    ExtractArtifactsResponse,
     TextProcessRequest,
     TextProcessResponse,
     TranscribeBase64Request,
@@ -160,3 +163,19 @@ async def classify_voice_intent_route(request: VoiceIntentClassifyRequest, curre
     except Exception as e:
         logger.error(f"Voice intent classification error: {e}")
         raise HTTPException(status_code=500, detail=f"Voice intent classification failed: {str(e)}")
+
+
+@router.post("/extract-artifacts", response_model=ExtractArtifactsResponse)
+async def extract_artifacts_route(request: ExtractArtifactsRequest, current_user: dict = Depends(get_current_user)):
+    """Extract optional artifacts (events / shopping / checklist / trip) from a voice transcript
+    (A4). The full transcript is always returned as note_content; every artifact carries a
+    source_span verified server-side against the transcript, so nothing fabricated can pass
+    (requires authentication)"""
+    _enforce_ai_quota(current_user, "extract-artifacts", EXTRACTION_QUOTA)
+    try:
+        return await service.extract_artifacts(request.transcript, request.reference_date, request.timezone)
+    except (AIEmptyResponseError, AIResponseParseError) as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.error(f"Artifact extraction error: {e}")
+        raise HTTPException(status_code=500, detail=f"Artifact extraction failed: {str(e)}")

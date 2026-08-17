@@ -9,6 +9,7 @@
 import { Platform } from 'react-native';
 import { nextOccurrenceOnOrAfter } from './recurrence';
 import { bumpDeviceCalendarSync } from './deviceCalendarSync';
+import { isGoogleSyncActive } from './google/googleSync';
 import type { CalendarEvent, Recurrence } from './types';
 
 let ExpoCalendar: typeof import('expo-calendar') | null = null;
@@ -66,6 +67,13 @@ export interface WriteDeviceEventInput {
  * the Nueco event itself is unaffected. */
 export async function writeEventToDeviceCalendar(input: WriteDeviceEventInput): Promise<string | null> {
   if (!ExpoCalendar || isWeb) return null;
+  // When Google Calendar sync is connected, the outbound path talks to Google's API directly
+  // (googleSync.saveEventToGoogle). Writing here too would double-create the event on Google.
+  try {
+    if (await isGoogleSyncActive()) return null;
+  } catch {
+    // If the check itself fails, fall through to the device write (pre-Google behavior).
+  }
   try {
     const cals = await loadWritableCalendars({ prompt: true });
     if (!cals.length) return null;

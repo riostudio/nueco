@@ -140,3 +140,73 @@ class VoiceIntentClassifyResponse(BaseModel):
     intent: VoiceIntent
     trip_name: Optional[str] = None
     events: List[VoiceEventOut] = []
+
+
+# ---------------------------------------------------------------------------
+# A4 artifact extraction. The full transcript is ALWAYS the note (source of truth); these
+# artifacts are additive extras. Every extracted item carries a source_span quoting the exact
+# words that produced it - service.py verifies each span against the transcript and drops any
+# item that fails, so a fabricated item can never reach the client.
+# ---------------------------------------------------------------------------
+
+
+class ExtractArtifactsRequest(BaseModel):
+    transcript: str = Field(min_length=1)
+    reference_date: str  # ISO date - the device's "today", avoids server-timezone skew
+    timezone: str         # IANA name, e.g. "Australia/Sydney"
+
+
+def _strip_to_str(value) -> str:
+    """Missing/blank/non-string -> "", which fails min_length and drops the entry."""
+    return value.strip() if isinstance(value, str) else ""
+
+
+class ExtractedItemOut(BaseModel):
+    """One shopping-list or checklist item."""
+    text: str = Field(min_length=1)
+    source_span: str = Field(min_length=1)
+    confidence: EventConfidence = "low"
+
+    @field_validator("text", "source_span", mode="before")
+    @classmethod
+    def _require_text(cls, value):
+        return _strip_to_str(value)
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def _unknown_confidence_is_low(cls, value):
+        """Confidence only drives how assertively the UI suggests the item, so an unrecognised
+        value degrades to "low" (ask) rather than costing the item."""
+        return value if value in get_args(EventConfidence) else "low"
+
+
+class ExtractedEventOut(VoiceEventOut):
+    """A scheduled event with the same validation as the voice-intent classifier's events, plus
+    a mandatory source_span."""
+    source_span: str = Field(min_length=1)
+
+    @field_validator("source_span", mode="before")
+    @classmethod
+    def _require_span(cls, value):
+        return _strip_to_str(value)
+
+
+class ExtractedTripOut(BaseModel):
+    name: str = Field(min_length=1)
+    source_span: str = Field(min_length=1)
+    events: List[ExtractedEventOut] = []
+
+    @field_validator("name", "source_span", mode="before")
+    @classmethod
+    def _require_text(cls, value):
+        return _strip_to_str(value)
+
+
+class ExtractArtifactsResponse(BaseModel):
+    # The full transcript, echoed by the server rather than the model - the note is the source of
+    # truth and never depends on what the model decided to repeat.
+    note_content: str
+    events: List[ExtractedEventOut] = []
+    shopping_items: List[ExtractedItemOut] = []
+    checklist_items: List[ExtractedItemOut] = []
+    trip: Optional[ExtractedTripOut] = None

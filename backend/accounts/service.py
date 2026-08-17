@@ -42,6 +42,9 @@ NON_USER_SCOPED_COLLECTIONS = {
     # in the old list, so erasure ran delete_many({"user_id": ...}) against it and matched nothing -
     # covered on paper, untouched in practice, which is why _erase_push_receipts exists.
     "push_receipts",
+    # Shadow-transcription eval records (textai/transcription.py): deliberately anonymous - no
+    # user_id - and erased by the 7-day TTL index created in server.py instead.
+    "transcription_shadow",
 }
 
 

@@ -12,7 +12,8 @@
       },
       "env": {
         "EXPO_PUBLIC_POSTHOG_KEY": "phc_AeYfLC2pgSyUDiyPuTxccVWC36yz6CzurL9HvDUpXHT4",
-        "EXPO_PUBLIC_POSTHOG_HOST": "https://us.i.posthog.com"
+        "EXPO_PUBLIC_POSTHOG_HOST": "https://us.i.posthog.com",
+        "GOOGLE_ANDROID_CLIENT_ID": "718079885614-m7vrgvbo9232rqqq4pgijnmmh4bhhj8d.apps.googleusercontent.com"
       }
     },
     "preview": {
@@ -22,14 +23,40 @@
       },
       "env": {
         "EXPO_PUBLIC_POSTHOG_KEY": "phc_AeYfLC2pgSyUDiyPuTxccVWC36yz6CzurL9HvDUpXHT4",
-        "EXPO_PUBLIC_POSTHOG_HOST": "https://us.i.posthog.com"
+        "EXPO_PUBLIC_POSTHOG_HOST": "https://us.i.posthog.com",
+        "GOOGLE_ANDROID_CLIENT_ID": "718079885614-m7vrgvbo9232rqqq4pgijnmmh4bhhj8d.apps.googleusercontent.com"
+      }
+    },
+    "preview-bundle": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "env": {
+        "EXPO_PUBLIC_POSTHOG_KEY": "phc_AeYfLC2pgSyUDiyPuTxccVWC36yz6CzurL9HvDUpXHT4",
+        "EXPO_PUBLIC_POSTHOG_HOST": "https://us.i.posthog.com",
+        "GOOGLE_ANDROID_CLIENT_ID": "718079885614-m7vrgvbo9232rqqq4pgijnmmh4bhhj8d.apps.googleusercontent.com"
       }
     },
     "production": {
       "autoIncrement": true,
       "env": {
+        "NUESCO_RELEASE": "1",
         "EXPO_PUBLIC_POSTHOG_KEY": "phc_AeYfLC2pgSyUDiyPuTxccVWC36yz6CzurL9HvDUpXHT4",
-        "EXPO_PUBLIC_POSTHOG_HOST": "https://us.i.posthog.com"
+        "EXPO_PUBLIC_POSTHOG_HOST": "https://us.i.posthog.com",
+        "GOOGLE_ANDROID_CLIENT_ID": "718079885614-m7vrgvbo9232rqqq4pgijnmmh4bhhj8d.apps.googleusercontent.com"
+      }
+    },
+    "production-apk": {
+      "autoIncrement": true,
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "NUESCO_RELEASE": "1",
+        "EXPO_PUBLIC_POSTHOG_KEY": "phc_AeYfLC2pgSyUDiyPuTxccVWC36yz6CzurL9HvDUpXHT4",
+        "EXPO_PUBLIC_POSTHOG_HOST": "https://us.i.posthog.com",
+        "GOOGLE_ANDROID_CLIENT_ID": "718079885614-m7vrgvbo9232rqqq4pgijnmmh4bhhj8d.apps.googleusercontent.com"
       }
     }
   },

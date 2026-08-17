@@ -8,8 +8,10 @@
 //
 // EAS sets EAS_BUILD_PROFILE during `eas build` (e.g. "preview", "production").
 // Local/dev runs (undefined profile) are treated as non-production.
-
-const isProduction = process.env.EAS_BUILD_PROFILE === 'production';
+// NUESCO_RELEASE is set by the production eas.json profiles: local EAS builds don't expose
+// EAS_BUILD_PROFILE to this file, so the env marker is what keeps diagnostics/cleartext off
+// in locally-built release artifacts.
+const isProduction = process.env.EAS_BUILD_PROFILE === 'production' || process.env.NUESCO_RELEASE === '1';
 
 module.exports = ({ config }) => ({
   ...config,
@@ -35,6 +37,10 @@ module.exports = ({ config }) => ({
     // Kill switch for the 5th-note feedback toast (src/feedbackToast.ts). Build-time only - flip
     // to false and ship a new build to disable; there's no remote/live toggle for this flag.
     feedbackToast: true,
+    // Google OAuth client ID for the Android app (public client - not a secret). Baked in at
+    // build time from GOOGLE_ANDROID_CLIENT_ID for the Google Calendar connect flow
+    // (src/google/auth.ts). Empty means "Google connect unavailable in this build".
+    googleAndroidClientId: process.env.GOOGLE_ANDROID_CLIENT_ID || '',
   },
   plugins: [
     ...(config.plugins ?? []),

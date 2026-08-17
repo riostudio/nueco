@@ -22,10 +22,11 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { takePendingVoiceExtraction, type PendingVoiceExtraction } from '../src/pendingVoiceEvents';
 import { setPendingLinkedEventIds } from '../src/pendingLinkedEvents';
-import { createEventOffline, createTripOffline } from '../src/offlineSync';
+import { createEventOffline, createTripOffline, updateOfflineClassifyItem, createArtifactRecords } from '../src/offlineSync';
 import { writeEventToDeviceCalendar } from '../src/deviceCalendarWrite';
+import { saveEventToGoogle } from '../src/google/googleSync';
 import { formatRecurrenceSummary } from '../src/recurrence';
-import { ExtractedEvent } from '../src/types';
+import { ExtractedEvent, type CalendarEvent } from '../src/types';
 import { C, radius, borderWidth } from '../src/theme';
 import { MONTH_NAMES } from '../src/dateNames';
 import { Button } from '../src/components';
@@ -73,6 +74,9 @@ export default function VoiceEventScreen() {
   const [staged, setStaged] = useState<PendingVoiceExtraction | null>(null);
   const [drafts, setDrafts] = useState<DraftEvent[]>([]);
   const [tripName, setTripName] = useState('');
+  // Where the saved event lives: false = calendar only (nothing shown in the note),
+  // true = linked back to the note so its event card appears there. Default is calendar-only.
+  const [includeInNote, setIncludeInNote] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -155,10 +159,10 @@ export default function VoiceEventScreen() {
         tripId = trip.id;
       }
 
-      // A real (already-created) note the user was dictating in - link every event created here
-      // back to it. Empty for a brand-new note that hadn't been created yet; that case is still
-      // handled (see pendingLinkedEvents.ts below), just without this best-effort dual-write.
-      const noteId = staged.noteId || null;
+      // A real (already-created) note the user was dictating in - but only link the event back
+      // to it when the user chose "Note". The "Calendar" choice means the capture shows up in
+      // the calendar only: no linked-event card and no transcript text in the note.
+      const noteId = includeInNote ? (staged.noteId || null) : null;
       const createdEventIds: string[] = [];
 
       for (const draft of drafts) {
@@ -204,13 +208,39 @@ export default function VoiceEventScreen() {
           { push: true },
         );
         createdEventIds.push(created.id);
+        // Outbound Google Calendar mirror (no-op unless Google sync is connected).
+        saveEventToGoogle(created as unknown as CalendarEvent);
       }
 
       // Stage these for editor.tsx to pick up and display as linked-event cards once it regains
-      // focus (see pendingLinkedEvents.ts) - works whether or not the note existed yet, since
-      // editor.tsx applies this to its own live state rather than requiring a server round-trip.
-      if (createdEventIds.length > 0) {
+      // focus (see pendingLinkedEvents.ts) - only for the "Note" choice; "Calendar" keeps the
+      // event out of the note entirely.
+      if (includeInNote && createdEventIds.length > 0) {
         setPendingLinkedEventIds(createdEventIds);
+      }
+
+      // If this extraction came from the on-device rule engine (offline capture), record which
+      // events the user actually created so the cloud second pass on reconnect can offer an
+      // in-place upgrade of exactly those events.
+      if (staged?.localClassifyQueueId && createdEventIds.length > 0) {
+        updateOfflineClassifyItem(staged.localClassifyQueueId, { createdEventIds }).catch(() => {});
+      }
+
+      // A1: durable per-type artifact records for what this capture produced, attached to the
+      // note (only when the capture is included in it - the "Calendar" choice keeps everything
+      // out of the note). Fire-and-forget: a ledger miss must never fail the save itself.
+      if (noteId) {
+        const records: { note_id: string; type: 'event' | 'trip'; ref_id: string; label: string }[] =
+          drafts.map((draft, i) => ({
+            note_id: noteId,
+            type: 'event' as const,
+            ref_id: createdEventIds[i] ?? '',
+            label: draft.title.trim(),
+          }));
+        if (tripId) {
+          records.push({ note_id: noteId, type: 'trip', ref_id: tripId, label: tripName.trim() });
+        }
+        createArtifactRecords(records).catch(() => {});
       }
 
       // Always return to the note being dictated in, so the user sees the event(s) they just
@@ -316,6 +346,42 @@ export default function VoiceEventScreen() {
             ) : null}
           </View>
         ))}
+
+        {/* Where the saved event shows up: Calendar keeps it out of the note entirely;
+            Note displays the event card in the note (the transcript itself is never inserted). */}
+        <View style={s.eventCard}>
+          <Text style={s.label}>Save as?</Text>
+          <TouchableOpacity
+            testID="voice-event-mode-event-only"
+            style={[s.choiceRow, !includeInNote && s.choiceRowActive]}
+            onPress={() => setIncludeInNote(false)}
+          >
+            <MaterialIcons
+              name={includeInNote ? 'radio-button-unchecked' : 'radio-button-checked'}
+              size={22}
+              color={includeInNote ? C.borderSub : C.primary}
+            />
+            <View style={{ flex: 1 }}>
+              <Text style={s.choiceTitle}>Calendar</Text>
+              <Text style={s.choiceSub}>Keep it out of the note</Text>
+            </View>
+          </TouchableOpacity>
+          <TouchableOpacity
+            testID="voice-event-mode-include-note"
+            style={[s.choiceRow, includeInNote && s.choiceRowActive]}
+            onPress={() => setIncludeInNote(true)}
+          >
+            <MaterialIcons
+              name={includeInNote ? 'radio-button-checked' : 'radio-button-unchecked'}
+              size={22}
+              color={includeInNote ? C.primary : C.borderSub}
+            />
+            <View style={{ flex: 1 }}>
+              <Text style={s.choiceTitle}>Note</Text>
+              <Text style={s.choiceSub}>Show the event card in the note</Text>
+            </View>
+          </TouchableOpacity>
+        </View>
 
         <View style={s.actions}>
           <Button
@@ -482,6 +548,14 @@ const s = StyleSheet.create({
   },
   pickerBtnText: { flex: 1, fontSize: 17, color: C.text },
   readonlyValue: { fontSize: 16, color: C.text },
+  choiceRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    borderWidth: borderWidth.regular, borderColor: C.border, borderRadius: radius.md,
+    padding: 12, marginTop: 10,
+  },
+  choiceRowActive: { borderColor: C.primary, backgroundColor: C.primary + '0D' },
+  choiceTitle: { fontSize: 15, fontWeight: '600', color: C.text },
+  choiceSub: { fontSize: 13, color: C.textSec, marginTop: 2 },
   pickerModalOverlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
   pickerModalContent: { backgroundColor: C.surface, borderTopLeftRadius: 20, borderTopRightRadius: 20, paddingBottom: 24 },
   pickerModalHeader: {

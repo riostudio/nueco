@@ -113,11 +113,19 @@ console.log('undecryptable field → placeholder, no throw:');
   ok('wrong-key title → placeholder', wrong.title === UNDECRYPTABLE_PLACEHOLDER);
   ok('wrong-key content → placeholder', wrong.content === UNDECRYPTABLE_PLACEHOLDER);
 
-  // Corrupt token in an enc_version=1 note.
-  const corrupt = { title: 'not-a-valid-token', content: encryptNoteFields({ content: 'ok' }, dek).content, enc_version: ENC_VERSION };
+  // Corrupt ciphertext in an enc_version=1 note: token shape is right, payload tampered.
+  const goodTitle = encryptNoteFields({ title: 'good' }, dek).title as string;
+  const tampered = goodTitle.slice(0, 4) + (goodTitle[4] === 'A' ? 'B' : 'A') + goodTitle.slice(5);
+  const corrupt = { title: tampered, content: encryptNoteFields({ content: 'ok' }, dek).content, enc_version: ENC_VERSION };
   const out = decryptNoteFields(corrupt as any, dek);
-  ok('corrupt title → placeholder', out.title === UNDECRYPTABLE_PLACEHOLDER);
+  ok('tampered ciphertext → placeholder', out.title === UNDECRYPTABLE_PLACEHOLDER);
   ok('sibling valid field still decrypts', out.content === 'ok');
+
+  // Plaintext mislabeled under enc_version=1 (the logout-race corruption) must pass
+  // through untouched so the note stays readable and self-heals on next save.
+  const mislabeled = { title: 'not-a-valid-token', content: 'plain', enc_version: ENC_VERSION };
+  const pass = decryptNoteFields(mislabeled as any, dek);
+  ok('non-ciphertext string passes through unchanged', pass.title === 'not-a-valid-token' && pass.content === 'plain');
 }
 
 console.log('empty strings and empty tags:');

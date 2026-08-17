@@ -21,6 +21,7 @@ import { encryptEventForServer } from './crypto/eventCrypto';
 import { deleteEventOffline } from './offlineSync';
 import { bumpDeviceCalendarSync } from './deviceCalendarSync';
 import { isCalendarSelectionUnchanged, planCalendarSync, type DeviceEvent } from './calendarSyncCore';
+import { isGoogleSyncActive, runGoogleSync } from './google/googleSync';
 
 let ExpoCalendar: typeof import('expo-calendar') | null = null;
 if (Platform.OS !== 'web') {
@@ -99,6 +100,20 @@ async function readHashes(): Promise<Record<string, string>> {
  * `THROTTLE_MS` unless `force` is passed. Never deletes a Nueco event.
  */
 export async function runCalendarSync(opts: { force?: boolean } = {}): Promise<void> {
+  try {
+    // When a Google account is connected, Google Calendar sync owns the two-way bridge and talks
+    // to Google's API directly (pure REST - no native calendar module needed). Skip the
+    // device-calendar read path: Google events are ALSO synced into the device's native calendar
+    // by the OS, so running both would import each event twice.
+    if (await isGoogleSyncActive()) {
+      await runGoogleSync(opts);
+      return;
+    }
+  } catch (e) {
+    console.error('Google sync run failed:', e);
+    // Fall through to the device-calendar path below as a safe default.
+  }
+
   if (!ExpoCalendar || Platform.OS === 'web') return;
   try {
     if (!(await isCalendarSyncEnabled())) return;

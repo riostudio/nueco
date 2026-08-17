@@ -10,11 +10,13 @@
 import {
   encryptNoteFields,
   decryptNoteFields,
+  hasEncryptableFields,
   type EncryptableNote,
 } from './noteCryptoCore';
 import { loadDek } from './keystore';
 import { E2EE_KEYS_ENABLED } from './flags';
 import { yieldToJS } from './yieldToJS';
+import { Platform } from 'react-native';
 
 // Yield to the event loop periodically so decrypting a large collection in one fullSync pass
 // doesn't freeze touch handling / animations app-wide for the whole loop - see the
@@ -44,7 +46,16 @@ export {
 export async function encryptNoteForServer<T extends EncryptableNote>(payload: T): Promise<T> {
   if (!E2EE_KEYS_ENABLED) return payload;
   const dek = await loadDek();
-  if (!dek) return payload;
+  if (!dek) {
+    // Web has no SecureStore, so E2EE is native-only and the no-op stands there. On native,
+    // pushing plaintext while the server copy keeps enc_version=1 turns the next decrypt into
+    // a placeholder (a logout racing an unawaited sync did exactly this) - refuse instead; the
+    // sync queue retains the item and retries once the key is back.
+    if (Platform.OS !== 'web' && hasEncryptableFields(payload)) {
+      throw new Error('E2EE key not loaded - refusing to push plaintext');
+    }
+    return payload;
+  }
   return encryptNoteFields(payload, dek);
 }
 

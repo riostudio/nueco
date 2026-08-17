@@ -12,14 +12,19 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import NetInfo, { NetInfoState } from '@react-native-community/netinfo';
+import { Platform } from 'react-native';
 import uuid from 'react-native-uuid';
-import { notesApi, eventsApi, tripsApi } from './api';
+import { notesApi, eventsApi, tripsApi, voiceIntentApi, textProcessApi } from './api';
 import { encryptNoteForServer, decryptNoteFromServer, decryptNotesFromServer } from './crypto/noteCrypto';
 import { encryptEventForServer, decryptEventsFromServer } from './crypto/eventCrypto';
 import { encryptTripForServer, decryptTripsFromServer } from './crypto/tripCrypto';
+import { E2EE_KEYS_ENABLED } from './crypto/flags';
+import { loadDek } from './crypto/keystore';
 import { incrementNoteCreatedCount } from './feedbackToast';
+import { migrateRecordingLinks, listRecordings } from './audio/recordingStore';
 import { mergeRecords, recordTimestamp } from './syncMergeCore';
-import type { Recurrence, NoteObject } from './types';
+import { classificationsDiffer } from './voice/localIntentClassifier';
+import type { Recurrence, NoteObject, GoogleAttendee, VoiceIntentResult } from './types';
 
 // ---- Types ----
 
@@ -70,6 +75,12 @@ export interface LocalEvent {
   recurrence?: Recurrence | null;
   timezone?: string | null;
   trip_id?: string | null; // Groups this event under a Trip - see LocalTrip below.
+  // Google Calendar bridge - see CalendarEvent in types.ts. Identifies the mirrored Google
+  // event for the client-side Google Calendar sync (src/google/).
+  google_event_id?: string | null;
+  google_calendar_id?: string | null;
+  google_event_updated?: string | null;
+  attendees?: GoogleAttendee[] | null;
   // Local-only: the id returned by `Notifications.scheduleNotificationAsync` for this
   // event's reminder. Meaningful only on the device that scheduled it - never sent to or
   // read from the server (see `event-editor.tsx`'s `scheduleReminder`/`cancelLocalNotification`,
@@ -121,7 +132,10 @@ const FILES = {
   NOTES: `${FILE_DIR}notes.json`,
   EVENTS: `${FILE_DIR}events.json`,
   TRIPS: `${FILE_DIR}trips.json`,
+  ARTIFACTS: `${FILE_DIR}artifacts.json`,
   SYNC_QUEUE: `${FILE_DIR}syncQueue.json`,
+  OFFLINE_CLASSIFY_QUEUE: `${FILE_DIR}offlineClassifyQueue.json`,
+  OFFLINE_STRUCTURE_QUEUE: `${FILE_DIR}offlineStructureQueue.json`,
 };
 
 let _dirReady = false;
@@ -145,7 +159,9 @@ export async function clearLocalData(): Promise<void> {
   _notesCache = null;
   _eventsCache = null;
   _tripsCache = null;
+  _artifactsCache = null;
   _queueCache = null;
+  _structureQueueCache = null;
 }
 
 // Reads a JSON file, falling back to (and migrating from) a legacy AsyncStorage
@@ -246,8 +262,74 @@ const withNotesLock = createMutex();
 // nothing was ever enqueued to sync. This alias map lets updateNoteOffline/deleteNoteOffline
 // transparently resolve a stale id to its current one instead of silently no-op'ing.
 const _noteIdAliases = new Map<string, string>();
-function resolveNoteId(id: string): string {
+// Exported so the editor can resolve a note's current id when linking voice recordings:
+// the id swaps from local_X to server id at sync time, mid-session, out from under
+// noteIdRef (which deliberately keeps the temp id until exit).
+export function resolveNoteId(id: string): string {
   return _noteIdAliases.get(id) || id;
+}
+
+// The in-memory alias map dies with the process, but recordings linked against a temp id
+// outlive it - after a restart there was nothing left to re-point them (players silently
+// vanished on notes created before the link fix). Persist every alias so a startup repair
+// can always finish the migration.
+const NOTE_ID_ALIASES_KEY = 'note_id_aliases_v1';
+
+async function persistNoteIdAlias(oldId: string, newId: string): Promise<void> {
+  try {
+    const raw = await AsyncStorage.getItem(NOTE_ID_ALIASES_KEY);
+    const map = raw ? JSON.parse(raw) : {};
+    map[oldId] = newId;
+    await AsyncStorage.setItem(NOTE_ID_ALIASES_KEY, JSON.stringify(map));
+  } catch {
+    // Best-effort: the in-session migration already ran; persistence only matters post-restart.
+  }
+}
+
+function normalizeText(t: string): string {
+  return t.toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function noteBodyAsText(html: string): string {
+  return normalizeText(html
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&quot;/g, '"'));
+}
+
+/** Startup repair for recordings stranded on a pre-sync temp note id. Replays persisted
+ * aliases, then falls back to content-matching: a dictation's opening line appears verbatim
+ * in exactly one note body, which is enough to re-link it. Never touches records that are
+ * already linked to a real note. */
+export async function repairStaleRecordingLinks(): Promise<void> {
+  let aliases: Record<string, string> = {};
+  try {
+    const raw = await AsyncStorage.getItem(NOTE_ID_ALIASES_KEY);
+    if (raw) aliases = JSON.parse(raw) || {};
+  } catch {
+    aliases = {};
+  }
+  for (const [oldId, newId] of Object.entries(aliases)) {
+    if (oldId !== newId) await migrateRecordingLinks(oldId, newId).catch(() => {});
+  }
+  const records = await listRecordings().catch(() => []);
+  const orphans = records.filter(r => typeof r.noteId === 'string' && r.noteId.startsWith('local_'));
+  if (orphans.length === 0) return;
+  const notes = (await getLocalNotes().catch(() => []))
+    .map(n => ({ id: n.id, text: noteBodyAsText(n.content || '') }));
+  for (const rec of orphans) {
+    const firstLine = (rec.transcriptText || '').split('\n').find(l => l.trim());
+    const probe = normalizeText(firstLine || '').slice(0, 60);
+    if (probe.length < 12) continue;
+    const matches = notes.filter(n => n.text.includes(probe));
+    if (matches.length === 1) {
+      await migrateRecordingLinks(rec.noteId!, matches[0].id).catch(() => {});
+    }
+  }
 }
 
 export async function getLocalNotes(): Promise<LocalNote[]> {
@@ -286,6 +368,63 @@ export async function saveLocalTrips(trips: LocalTrip[]): Promise<void> {
   await writeJsonFile(FILES.TRIPS, trips);
 }
 
+// ---- Artifact records (A1) ----
+// Minimal per-type records of what a capture produced, attached to the note it came from.
+// File-backed like notes/events/trips so they survive backgrounding and app kill on both
+// platforms. Local-only (never synced); source_span stays null until A4's extraction.
+
+export type ArtifactType = 'event' | 'shopping_item' | 'checklist_item' | 'trip';
+
+export interface ArtifactRecord {
+  id: string;
+  note_id: string;
+  type: ArtifactType;
+  /** Id of the backing record when one exists (event/trip); '' for inline items. */
+  ref_id: string;
+  /** Display text: item text or event/trip title. */
+  label: string;
+  source_span: string | null;
+  created_at: string;
+}
+
+let _artifactsCache: ArtifactRecord[] | null = null;
+
+async function readArtifacts(): Promise<ArtifactRecord[]> {
+  if (_artifactsCache) return [..._artifactsCache];
+  const artifacts = await readJsonFile<ArtifactRecord[]>(FILES.ARTIFACTS, [], 'offline:artifacts');
+  _artifactsCache = artifacts;
+  return [...artifacts];
+}
+
+async function writeArtifacts(artifacts: ArtifactRecord[]): Promise<void> {
+  _artifactsCache = [...artifacts];
+  await writeJsonFile(FILES.ARTIFACTS, artifacts);
+}
+
+export async function createArtifactRecords(
+  items: Pick<ArtifactRecord, 'note_id' | 'type' | 'ref_id' | 'label'>[],
+): Promise<void> {
+  if (items.length === 0) return;
+  const now = new Date().toISOString();
+  const artifacts = await readArtifacts();
+  for (const item of items) {
+    artifacts.push({ ...item, id: `artifact_${uuid.v4()}`, source_span: null, created_at: now });
+  }
+  await writeArtifacts(artifacts);
+}
+
+export async function getArtifactsForNote(noteId: string): Promise<ArtifactRecord[]> {
+  const artifacts = await readArtifacts();
+  return artifacts.filter(a => a.note_id === noteId);
+}
+
+/** Drop records pointing at a deleted backing record (e.g. an unlinked event). */
+export async function removeArtifactRecordsByRef(refId: string): Promise<void> {
+  const artifacts = await readArtifacts();
+  const kept = artifacts.filter(a => a.ref_id !== refId);
+  if (kept.length !== artifacts.length) await writeArtifacts(kept);
+}
+
 // ---- Sync Queue ----
 
 // Same in-memory mirror the notes/events/trips collections get above, and for a sharper version
@@ -302,6 +441,17 @@ export async function getSyncQueue(): Promise<SyncQueueItem[]> {
   const queue = await readJsonFile<SyncQueueItem[]>(FILES.SYNC_QUEUE, [], KEYS.SYNC_QUEUE);
   _queueCache = queue;
   return [...queue];
+}
+
+/** Current connectivity, for analytics (save_outcome's offline_queued flag). Fail-open: an
+ *  unreadable state reports online so we never mislabel a save as queued. */
+export async function isNetworkAvailable(): Promise<boolean> {
+  try {
+    const state = await NetInfo.fetch();
+    return state.isConnected !== false;
+  } catch {
+    return true;
+  }
 }
 
 export async function saveSyncQueue(queue: SyncQueueItem[]): Promise<void> {
@@ -773,6 +923,10 @@ async function processNoteOperation(item: SyncQueueItem): Promise<void> {
           notes[idx] = { ...notes[idx], id: created.id, _isLocal: false };
           await saveLocalNotes(notes);
           _noteIdAliases.set(item.id, created.id);
+          persistNoteIdAlias(item.id, created.id);
+          // Recordings captured while the note still had its temp id point at that id;
+          // re-point them so reopening the note (by server id) still finds its players.
+          migrateRecordingLinks(item.id, created.id).catch(() => {});
         }
       });
       break;
@@ -852,6 +1006,13 @@ async function processTripOperation(item: SyncQueueItem): Promise<void> {
 export async function fullSync(opts: { force?: boolean } = {}): Promise<void> {
   if (_isFullSyncing) return;
   if (!opts.force && Date.now() - _lastFullSyncAt < FULL_SYNC_THROTTLE_MS) return;
+  // Pulling while the DEK isn't loaded yet (the window right after login, before the key
+  // bootstrap finishes) decrypts as a no-op and merges raw ciphertext into the plaintext
+  // local store - the list then flashes v1.… tokens until the next sync. Skip the whole
+  // sync without stamping the throttle so the next trigger retries; callers re-fire once
+  // the bootstrap lands (isSyncReady / focus / poll). Pushes are safe either way: the
+  // encrypt layer refuses plaintext without a DEK.
+  if (E2EE_KEYS_ENABLED && Platform.OS !== 'web' && !(await loadDek())) return;
   _isFullSyncing = true;
   try {
     // 1. Push pending local changes first
@@ -949,6 +1110,214 @@ export async function fullSync(opts: { force?: boolean } = {}): Promise<void> {
   }
 }
 
+// ---- Offline classification second pass ----
+// Captures classified by the on-device rule engine (no connection) queue their transcript here.
+// When connectivity returns the cloud classifier gets one quiet second pass; a meaningfully
+// better answer is surfaced to the user as an opt-in upgrade. Transcript text only - offline
+// audio is never re-uploaded, by design.
+
+export interface OfflineClassifyItem {
+  id: string;
+  transcript: string;
+  localResult: VoiceIntentResult;
+  referenceDate: string;
+  timezone: string;
+  timestamp: string;
+  /** Set by voice-event.tsx after the user confirms the locally-classified events. */
+  createdEventIds?: string[];
+}
+
+export interface ClassifyImprovement {
+  item: OfflineClassifyItem;
+  cloud: VoiceIntentResult;
+}
+
+let _classifyQueueCache: OfflineClassifyItem[] | null = null;
+const withClassifyLock = createMutex();
+
+async function readClassifyQueue(): Promise<OfflineClassifyItem[]> {
+  if (_classifyQueueCache) return [..._classifyQueueCache];
+  const queue = await readJsonFile<OfflineClassifyItem[]>(FILES.OFFLINE_CLASSIFY_QUEUE, [], 'offline:classifyQueue');
+  _classifyQueueCache = queue;
+  return [...queue];
+}
+
+async function writeClassifyQueue(queue: OfflineClassifyItem[]): Promise<void> {
+  _classifyQueueCache = [...queue];
+  await writeJsonFile(FILES.OFFLINE_CLASSIFY_QUEUE, queue);
+}
+
+export async function enqueueOfflineClassify(item: OfflineClassifyItem): Promise<void> {
+  await withClassifyLock(async () => {
+    const queue = await readClassifyQueue();
+    if (!queue.some(q => q.id === item.id)) {
+      queue.push(item);
+      await writeClassifyQueue(queue);
+    }
+  });
+}
+
+/** voice-event.tsx records which events the user actually created from a local classification. */
+export async function updateOfflineClassifyItem(id: string, patch: Partial<OfflineClassifyItem>): Promise<void> {
+  await withClassifyLock(async () => {
+    const queue = await readClassifyQueue();
+    const idx = queue.findIndex(q => q.id === id);
+    if (idx >= 0) {
+      queue[idx] = { ...queue[idx], ...patch };
+      await writeClassifyQueue(queue);
+    }
+  });
+}
+
+let _classifyImprovementListener: ((improvements: ClassifyImprovement[]) => void) | null = null;
+
+/** Wired once from app/_layout.tsx to surface upgrades (Alert with Review/Dismiss). */
+export function setClassifyImprovementListener(cb: ((improvements: ClassifyImprovement[]) => void) | null): void {
+  _classifyImprovementListener = cb;
+}
+
+export async function removeOfflineClassifyItem(id: string): Promise<void> {
+  await withClassifyLock(async () => {
+    const queue = await readClassifyQueue();
+    await writeClassifyQueue(queue.filter(q => q.id !== id));
+  });
+}
+
+/**
+ * Run the queued local classifications through the cloud classifier. Items that fail (network
+ * dropped mid-flight, quota, etc.) stay queued for the next reconnect. Returns nothing: diffs
+ * are pushed to the registered listener so the UI layer stays out of this module.
+ */
+export async function processOfflineClassifyQueue(): Promise<void> {
+  const queue = await readClassifyQueue();
+  if (queue.length === 0) return;
+  const improvements: ClassifyImprovement[] = [];
+  for (const item of queue) {
+    try {
+      const cloud = await voiceIntentApi.classify(item.transcript, item.referenceDate, item.timezone);
+      if (classificationsDiffer(item.localResult, cloud)) {
+        improvements.push({ item, cloud });
+      } else {
+        await removeOfflineClassifyItem(item.id);
+      }
+    } catch {
+      // Leave queued - the next reconnect retries.
+    }
+  }
+  if (improvements.length > 0 && _classifyImprovementListener) {
+    _classifyImprovementListener(improvements);
+  }
+}
+
+// ---- Offline structuring second pass ----
+// Raw words are saved the instant capture ends; the cloud structuring pass is the bonus layer.
+// When capture happens offline the structuring job queues here and applies itself when
+// connectivity returns. Application is guarded at the store level: the replacement only fires
+// if the raw block is still byte-for-byte present in the note, so it can never clobber anything
+// the user has typed since.
+
+export interface OfflineStructureItem {
+  /** Capture id shared with the A0 instrumentation. */
+  id: string;
+  noteId: string;
+  rawText: string;
+  /** HTML block as it was inserted into the note - the guard string for replacement. */
+  rawBlockHtml: string;
+  timestamp: string;
+}
+
+export interface StructureApplication {
+  item: OfflineStructureItem;
+  structuredHtml: string;
+  viaQueue: boolean;
+  /** When the structuring call that produced this result started. */
+  startedAt: number;
+}
+
+let _structureQueueCache: OfflineStructureItem[] | null = null;
+const withStructureLock = createMutex();
+
+async function readStructureQueue(): Promise<OfflineStructureItem[]> {
+  if (_structureQueueCache) return [..._structureQueueCache];
+  const queue = await readJsonFile<OfflineStructureItem[]>(FILES.OFFLINE_STRUCTURE_QUEUE, [], 'offline:structureQueue');
+  _structureQueueCache = queue;
+  return [...queue];
+}
+
+async function writeStructureQueue(queue: OfflineStructureItem[]): Promise<void> {
+  _structureQueueCache = [...queue];
+  await writeJsonFile(FILES.OFFLINE_STRUCTURE_QUEUE, queue);
+}
+
+export async function enqueueOfflineStructure(item: OfflineStructureItem): Promise<void> {
+  await withStructureLock(async () => {
+    const queue = await readStructureQueue();
+    if (!queue.some(q => q.id === item.id)) {
+      queue.push(item);
+      await writeStructureQueue(queue);
+    }
+  });
+}
+
+export async function removeOfflineStructureItem(id: string): Promise<void> {
+  await withStructureLock(async () => {
+    const queue = await readStructureQueue();
+    await writeStructureQueue(queue.filter(q => q.id !== id));
+  });
+}
+
+let _structureCompleteListener: ((applied: StructureApplication) => void) | null = null;
+
+/** Wired from editor.tsx so an applied replacement can refresh the open editor view. */
+export function setStructureCompleteListener(cb: ((applied: StructureApplication) => void) | null): void {
+  _structureCompleteListener = cb;
+}
+
+/**
+ * Replace the raw capture block with the structured version - only if the raw block is still
+ * verbatim present. Returns false when the note is gone or the user has edited past it; both
+ * mean the job should be dropped, never retried.
+ */
+export async function applyStructuredContent(item: OfflineStructureItem, structuredHtml: string): Promise<boolean> {
+  const notes = await getLocalNotes();
+  // Resolve the id alias: a job queued while the note was still local_X may apply after sync
+  // swapped it for its server id.
+  const note = notes.find(n => n.id === resolveNoteId(item.noteId) && !n._pendingDelete);
+  if (!note) return false;
+  if (!item.rawBlockHtml || !note.content.includes(item.rawBlockHtml)) return false;
+  const content = note.content.replace(item.rawBlockHtml, structuredHtml);
+  await updateNoteOffline(note.id, { content });
+  return true;
+}
+
+/**
+ * Run queued structuring jobs through the cloud processor. Failures (network dropped mid-flight,
+ * quota) stay queued for the next reconnect; a job whose note no longer matches is dropped.
+ */
+export async function processOfflineStructureQueue(): Promise<void> {
+  const queue = await readStructureQueue();
+  if (queue.length === 0) return;
+  for (const item of queue) {
+    try {
+      const startedAt = Date.now();
+      const result = await textProcessApi.processText(item.rawText, 'smart_format');
+      const html = (result?.text || '').trim();
+      // Empty structure result: nothing to swap in, and retrying won't change the model's mind.
+      if (!html) {
+        await removeOfflineStructureItem(item.id);
+        continue;
+      }
+      const applied = await applyStructuredContent(item, html);
+      await removeOfflineStructureItem(item.id);
+      if (applied && _structureCompleteListener) {
+        _structureCompleteListener({ item, structuredHtml: html, viaQueue: true, startedAt });
+      }
+    } catch {
+      // Leave queued - the next reconnect retries.
+    }
+  }
+}
+
 // ---- Network Listener (Background Sync) ----
 
 let _unsubscribeNetInfo: (() => void) | null = null;
@@ -960,6 +1329,10 @@ export function startBackgroundSync(): void {
     if (state.isConnected && state.isInternetReachable) {
       console.log('🌐 Back online - starting background sync...');
       await processSyncQueue();
+      // Second pass for captures that were classified by the local rule engine while offline.
+      await processOfflineClassifyQueue();
+      // Structuring jobs for captures saved raw while offline.
+      await processOfflineStructureQueue();
     }
   });
 

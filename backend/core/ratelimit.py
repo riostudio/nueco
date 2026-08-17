@@ -105,6 +105,9 @@ TRANSCRIBE_QUOTA = Quota(limit=10, window_seconds=60)
 VOICE_INTENT_QUOTA = Quota(limit=20, window_seconds=60)
 # TEXT PROCESSING is user-initiated per note (organise / summarise / smart format).
 TEXT_PROCESS_QUOTA = Quota(limit=15, window_seconds=60)
+# ARTIFACT EXTRACTION fires automatically after note captures (A4), same posture as voice intent:
+# the ceiling must sit above transcription's or it rejects work the user never explicitly asked for.
+EXTRACTION_QUOTA = Quota(limit=20, window_seconds=60)
 
 # Shared-quota backstop across all users, protecting the single OpenAI key. Deliberately generous:
 # it should never fire in normal operation, only blunt a genuine stampede.

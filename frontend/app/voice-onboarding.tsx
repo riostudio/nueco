@@ -19,9 +19,12 @@ import * as Haptics from 'expo-haptics';
 import { useAudioRecorder, AudioModule, RecordingPresets, setAudioModeAsync } from 'expo-audio';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../src/auth/context/AuthContext';
-import { transcribeApi, textProcessApi } from '../src/api';
-import { createNoteOffline } from '../src/offlineSync';
-import { trackOnboardingStep, trackNoteCreated, trackVoiceRecordingStarted, trackVoiceRecordingCompleted, trackVoiceTranscriptionInserted } from '../src/analytics';
+import { textProcessApi } from '../src/api';
+import { transcribeAudio, ModelNotReadyError } from '../src/audio/transcriptionRouter';
+import { createNoteOffline, isNetworkAvailable, enqueueOfflineStructure, applyStructuredContent, type OfflineStructureItem } from '../src/offlineSync';
+import { StructuredReveal } from '../src/components/StructuredReveal';
+import { REVEAL_DURATION_MS, REVEAL_HOLD_MS } from '../src/revealSpec';
+import { trackOnboardingStep, trackNoteCreated, trackVoiceRecordingStarted, trackVoiceRecordingCompleted, trackVoiceTranscriptionInserted, newCaptureId, trackRevealFired, trackSaveOutcome, markSegmentEnd, trackSegmentLatency } from '../src/analytics';
 import { RecordingWaveform } from '../src/components/RecordingWaveform';
 import { C } from '../src/theme';
 
@@ -53,9 +56,14 @@ export default function VoiceOnboardingScreen() {
 
   const [stage, setStage] = useState<Stage>('ask');
   const [transcript, setTranscript] = useState('');
-  const [tidy, setTidy] = useState<Tidy>('keep');
+  const [tidy, setTidy] = useState<Tidy>('organise');
   const [saving, setSaving] = useState(false);
+  // A3 reveal flow: structuring in flight -> structured result ready -> transition playing.
+  const [structuring, setStructuring] = useState(false);
+  const [structuredHtml, setStructuredHtml] = useState<string | null>(null);
+  const [revealing, setRevealing] = useState(false);
   const startedAt = useRef<number | null>(null);
+  const captureIdRef = useRef<string>(newCaptureId());
 
   // Slow breathing halo behind the mic: expands and fades out, pauses, repeats. Signals "ready to
   // listen" without the urgency of a fast pulse, and is the only motion on an otherwise still
@@ -107,6 +115,7 @@ export default function VoiceOnboardingScreen() {
         return;
       }
       trackOnboardingStep('permission_granted');
+      captureIdRef.current = newCaptureId();
       await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: true });
       await recorder.prepareToRecordAsync();
       recorder.record();
@@ -123,13 +132,14 @@ export default function VoiceOnboardingScreen() {
     try {
       setStage('transcribing');
       await recorder.stop();
+      markSegmentEnd();
       const uri = recorder.uri;
       const seconds = startedAt.current ? Math.round((Date.now() - startedAt.current) / 1000) : 0;
       startedAt.current = null;
       trackVoiceRecordingCompleted(seconds);
       if (!uri) throw new Error('no recording uri');
 
-      const result = await transcribeApi.transcribe(uri);
+      const result = await transcribeAudio(uri);
       // The backend filters Whisper's silence hallucinations, so an empty result here genuinely
       // means nothing was said - the worst possible moment to show a confirmation screen quoting
       // an empty string.
@@ -144,30 +154,31 @@ export default function VoiceOnboardingScreen() {
     } catch (e) {
       console.error('Onboarding transcription failed:', e);
       setStage('ask');
-      Alert.alert('Couldn’t turn that into words', 'Have another go whenever.');
+      if (e instanceof ModelNotReadyError) {
+        Alert.alert(
+          'You’re offline',
+          'Offline transcription isn’t set up on this device yet. Download the on-device model in Settings, or reconnect to try again.',
+        );
+      } else {
+        Alert.alert('Couldn’t turn that into words', 'Have another go whenever.');
+      }
     }
   }, [recorder]);
 
   const saveNote = useCallback(async () => {
     if (saving) return;
     setSaving(true);
+    const capture_id = captureIdRef.current;
     try {
-      let text = transcript;
-      if (tidy === 'organise') {
-        try {
-          const res = await textProcessApi.processText(transcript, 'organize');
-          if (res?.text) text = res.text;
-        } catch {
-          // Tidying is a bonus - a failure here must not cost the user their first note.
-        }
-      }
-      const { title, body } = splitTitleAndBody(text);
+      // Raw words saved first, always. Structuring is the bonus layer and can never block the
+      // save or lose the words.
+      const { title, body } = splitTitleAndBody(transcript);
       const html = body
         .split(/\n{2,}/)
         .map(p => `<p>${escapeHtml(p).replace(/\n/g, '<br>')}</p>`)
         .join('');
 
-      await createNoteOffline({
+      const note = await createNoteOffline({
         title,
         content: html,
         tags: [],
@@ -178,19 +189,91 @@ export default function VoiceOnboardingScreen() {
         objects: [],
       } as any, { push: true });
 
-      const words = text.split(/\s+/).filter(Boolean).length;
+      trackSaveOutcome({
+        capture_id,
+        raw_save: 'ok',
+        structuring: 'skipped',
+        offline_queued: !(await isNetworkAvailable()),
+      });
+      const words = transcript.split(/\s+/).filter(Boolean).length;
       trackVoiceTranscriptionInserted(0, words);
       trackNoteCreated({ has_scheduled_event: false, has_image_attached: false, is_shared: false, source: 'voice' });
       trackOnboardingStep('note_saved');
       // The one celebration in the whole flow, and only ever on the first note.
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-      await leave('completed');
+
+      if (tidy !== 'organise') {
+        await leave('completed');
+        return;
+      }
+
+      const item: OfflineStructureItem = {
+        id: capture_id,
+        noteId: note.id,
+        rawText: transcript,
+        rawBlockHtml: html,
+        timestamp: new Date().toISOString(),
+      };
+
+      if (!(await isNetworkAvailable())) {
+        // Offline: words are safe; structuring applies in place on reconnect and the reveal
+        // happens wherever the note is opened then.
+        await enqueueOfflineStructure(item);
+        await leave('completed');
+        return;
+      }
+
+      // A3: the transform must be visible here, not off-screen. Keep the raw card up while
+      // structuring runs, then play the shared before->after transition before leaving.
+      setStructuring(true);
+      try {
+        // Shorter leash than the default 45s: the user is watching this screen.
+        const res = await textProcessApi.processText(transcript, 'smart_format', 20000);
+        const structured = (res?.text || '').trim();
+        if (!structured) {
+          await leave('completed');
+          return;
+        }
+        const applied = await applyStructuredContent(item, structured);
+        if (!applied) {
+          await leave('completed');
+          return;
+        }
+        setStructuredHtml(structured);
+        setRevealing(true);
+        // reveal_fired / segment_latency / save_outcome fire from the transition's COMPLETE
+        // callback (onRevealComplete) - A0 semantics, not the API response.
+      } catch (e) {
+        console.error('Onboarding structuring failed:', e);
+        // Tidying is a bonus - the raw words are already saved above.
+        trackSaveOutcome({
+          capture_id,
+          raw_save: 'ok',
+          structuring: e instanceof Error && /timeout|abort/i.test(e.message) ? 'timeout' : 'fail',
+          offline_queued: false,
+        });
+        await leave('completed');
+      }
     } catch (e) {
       console.error('Onboarding save failed:', e);
+      trackSaveOutcome({ capture_id, raw_save: 'fail', structuring: 'skipped', offline_queued: false });
       Alert.alert('Couldn’t save that one', 'Your words are still here. Have another go.');
       setSaving(false);
     }
   }, [saving, transcript, tidy, leave]);
+
+  const onRevealComplete = useCallback(() => {
+    trackRevealFired({
+      capture_id: captureIdRef.current,
+      surface: 'onboarding',
+      reveal_duration_ms: REVEAL_DURATION_MS,
+      trigger: 'structuring_complete',
+    });
+    trackSegmentLatency();
+    trackSaveOutcome({ capture_id: captureIdRef.current, raw_save: 'ok', structuring: 'ok', offline_queued: false });
+    // Let the structured state register for a beat before navigating away.
+    setTimeout(() => { leave('completed'); }, REVEAL_HOLD_MS);
+  }, [leave]);
 
   // ---- ask -----------------------------------------------------------------
   if (stage === 'ask') {
@@ -278,27 +361,43 @@ export default function VoiceOnboardingScreen() {
 
   // ---- review --------------------------------------------------------------
   const preview = splitTitleAndBody(transcript);
+  const busyReveal = structuring || revealing;
   return (
     <SafeAreaView style={s.container} edges={['top', 'bottom']}>
       <ScrollView contentContainerStyle={s.reviewScroll} showsVerticalScrollIndicator={false}>
-        <Text style={s.reviewTitle}>Here’s what you said</Text>
+        <Text style={s.reviewTitle}>{revealing ? 'Here’s your note' : 'Here’s what you said'}</Text>
 
-        <View style={s.noteCard}>
-          {!!preview.title && <Text style={s.noteCardTitle}>{preview.title}</Text>}
-          <Text style={s.noteCardBody}>{preview.body}</Text>
-        </View>
+        <StructuredReveal
+          before={
+            <View style={s.noteCard}>
+              {!!preview.title && <Text style={s.noteCardTitle}>{preview.title}</Text>}
+              <Text style={s.noteCardBody}>{preview.body}</Text>
+            </View>
+          }
+          structuredHtml={structuredHtml}
+          revealing={revealing}
+          onComplete={onRevealComplete}
+        />
 
-        <Text style={s.tidyPrompt}>Want Nueco to tidy this up?</Text>
+        {structuring && !revealing && (
+          <Text style={s.organisingLine}>Putting that in order…</Text>
+        )}
 
-        <TouchableOpacity style={s.tidyRow} onPress={() => setTidy('keep')} activeOpacity={0.8} testID="tidy-keep">
-          <Text style={[s.tidyLabel, tidy === 'keep' && s.tidyLabelOn]}>Leave it as I said it</Text>
-          {tidy === 'keep' && <MaterialIcons name="check" size={20} color={C.primary} />}
-        </TouchableOpacity>
+        {!busyReveal && (
+          <>
+            <Text style={s.tidyPrompt}>Want Nueco to tidy this up?</Text>
 
-        <TouchableOpacity style={s.tidyRow} onPress={() => setTidy('organise')} activeOpacity={0.8} testID="tidy-organise">
-          <Text style={[s.tidyLabel, tidy === 'organise' && s.tidyLabelOn]}>Organise into sections</Text>
-          {tidy === 'organise' && <MaterialIcons name="check" size={20} color={C.primary} />}
-        </TouchableOpacity>
+            <TouchableOpacity style={s.tidyRow} onPress={() => setTidy('keep')} activeOpacity={0.8} testID="tidy-keep">
+              <Text style={[s.tidyLabel, tidy === 'keep' && s.tidyLabelOn]}>Leave it as I said it</Text>
+              {tidy === 'keep' && <MaterialIcons name="check" size={20} color={C.primary} />}
+            </TouchableOpacity>
+
+            <TouchableOpacity style={s.tidyRow} onPress={() => setTidy('organise')} activeOpacity={0.8} testID="tidy-organise">
+              <Text style={[s.tidyLabel, tidy === 'organise' && s.tidyLabelOn]}>Organise into sections</Text>
+              {tidy === 'organise' && <MaterialIcons name="check" size={20} color={C.primary} />}
+            </TouchableOpacity>
+          </>
+        )}
       </ScrollView>
 
       <View style={s.actions}>
@@ -347,6 +446,7 @@ const s = StyleSheet.create({
   },
   noteCardTitle: { fontSize: 16, fontWeight: '700', color: C.text, lineHeight: 22 },
   noteCardBody: { fontSize: 15, color: C.textSec, lineHeight: 23 },
+  organisingLine: { fontSize: 14, color: C.textSec, marginTop: 12, textAlign: 'center' },
   tidyPrompt: { fontSize: 15, color: C.textSec, marginTop: 24, marginBottom: 10 },
   tidyRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',

@@ -4,6 +4,7 @@ callers (backend/textai/router.py) unwrap the framework upload type into bytes/f
 """
 import json
 import logging
+import re
 import time
 from typing import Optional
 
@@ -15,6 +16,10 @@ from .schemas import (
     VALID_NOTE_TYPES,
     VALID_TEXT_ACTIONS,
     VALID_VOICE_INTENTS,
+    ExtractArtifactsResponse,
+    ExtractedEventOut,
+    ExtractedItemOut,
+    ExtractedTripOut,
     TextProcessResponse,
     VoiceEventOut,
     VoiceIntentClassifyResponse,
@@ -85,6 +90,39 @@ Respond with ONLY a JSON object of this exact shape:
 When intent is "note", "events" MUST be an empty array and "trip_name" MUST be null - do not
 extract events out of ordinary note content. When intent is anything else, "events" must contain
 at least one item. No other text, no markdown code fence."""
+
+
+EXTRACT_ARTIFACTS_PROMPT_TEMPLATE = """You are reading a voice-note transcript from a note-taking app. The FULL transcript is always
+kept as the note itself - your job is only to spot optional add-on artifacts the speaker clearly
+asked for. Extract conservatively: when in doubt, return nothing for that category. A story,
+diary entry, or general thought is NOT an artifact.
+
+Today's date is {reference_date}. The user's timezone is {timezone}. Resolve relative dates
+("tomorrow", "next Tuesday") against these.
+
+Look for, and extract ONLY if genuinely present:
+- events: a scheduled thing with a stated or clearly-implied date/time.
+- shopping_items: things to buy (groceries, supplies), each with its quantity if stated.
+- checklist_items: discrete tasks/to-dos to get done.
+- trip: a group of events described as one journey/plan with a shared name.
+
+Every item you return MUST include "source_span": the exact words, copied verbatim from the
+transcript, that justify that item. If you can't point at the words, don't return the item.
+
+Respond with ONLY a JSON object of this exact shape:
+{{
+  "events": [{{"title": "", "start_time": "ISO 8601 with UTC offset", "end_time": "ISO or null", "location": "", "recurrence": null, "confidence": "high or low", "source_span": "verbatim words"}}],
+  "shopping_items": [{{"text": "item with quantity", "confidence": "high or low", "source_span": "verbatim words"}}],
+  "checklist_items": [{{"text": "task", "confidence": "high or low", "source_span": "verbatim words"}}],
+  "trip": null
+}}
+
+For "trip", if present use: {{"name": "", "source_span": "verbatim words", "events": [same shape as events above]}}.
+Keep "recurrence" as null unless the speaker clearly stated a repeat. No other text, no markdown code fence.
+
+Here is the transcript:
+
+{transcript}"""
 
 
 class AIEmptyResponseError(Exception):
@@ -312,3 +350,102 @@ async def classify_voice_intent(
 
     logger.info(f"Voice intent classification successful: intent={intent}, event_count={len(events)}")
     return VoiceIntentClassifyResponse(intent=intent, trip_name=trip_name, events=events)
+
+
+def _span_in_transcript(span, transcript: str) -> bool:
+    """The plan's no-fabrication rule, enforced server-side: an extracted artifact is only real if
+    its source_span appears verbatim in the transcript that produced it. Whitespace is normalized
+    (the model may re-flow a line) but the words must match exactly - otherwise the item is a
+    hallucination and gets dropped, never shipped to the client."""
+    if not isinstance(span, str) or not span.strip():
+        return False
+    normalized_span = " ".join(span.split())
+    normalized_transcript = " ".join(transcript.split())
+    return normalized_span in normalized_transcript
+
+
+def _extract_items(raw, transcript: str, model_cls, label: str) -> list:
+    """Validate a list of model entries against the schema AND the transcript. Per-entry, not
+    all-or-nothing: one fabricated item costs that item, not the four real ones beside it."""
+    if not isinstance(raw, list):
+        return []
+    kept = []
+    dropped_no_span = 0
+    dropped_schema = 0
+    for entry in raw:
+        try:
+            item = model_cls.model_validate(entry)
+        except ValidationError:
+            dropped_schema += 1
+            continue
+        if not _span_in_transcript(item.source_span, transcript):
+            dropped_no_span += 1
+            continue
+        kept.append(item)
+    # Counts only - never the dropped content (it's user-dictated and E2EE elsewhere in the app).
+    if dropped_schema or dropped_no_span:
+        logger.info(
+            f"Artifact extraction: {label} dropped schema={dropped_schema} unverified_span={dropped_no_span}"
+        )
+    return kept
+
+
+async def extract_artifacts(transcript: str, reference_date: str, timezone: str) -> ExtractArtifactsResponse:
+    """Extract optional artifacts (events / shopping / checklist / trip) from a voice transcript.
+
+    The full transcript is ALWAYS returned as note_content - artifacts are additive extras, never a
+    replacement. Every artifact carries a source_span verified against the transcript, so the
+    client can show "where did this come from" and a fabricated item can't survive this function.
+    """
+    client = get_openai_client()
+    prompt = EXTRACT_ARTIFACTS_PROMPT_TEMPLATE.format(
+        reference_date=reference_date, timezone=timezone, transcript=transcript,
+    )
+
+    logger.info(f"Extracting artifacts, transcript length: {len(transcript)}")
+    response = await client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "You are a careful assistant that extracts structured artifacts from voice-note transcripts. Respond only with a JSON object."},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.1,
+        response_format={"type": "json_object"},
+    )
+    raw = (response.choices[0].message.content or "").strip()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        raise AIResponseParseError("AI service returned an unexpected response")
+    if not isinstance(parsed, dict):
+        raise AIResponseParseError("AI service returned an unexpected response")
+
+    events = _extract_items(parsed.get("events"), transcript, ExtractedEventOut, "events")
+    shopping_items = _extract_items(parsed.get("shopping_items"), transcript, ExtractedItemOut, "shopping_items")
+    checklist_items = _extract_items(parsed.get("checklist_items"), transcript, ExtractedItemOut, "checklist_items")
+
+    trip = None
+    raw_trip = parsed.get("trip")
+    if isinstance(raw_trip, dict):
+        try:
+            candidate = ExtractedTripOut.model_validate(raw_trip)
+        except ValidationError:
+            candidate = None
+        # The trip itself AND each of its events must be grounded in the transcript.
+        if candidate and _span_in_transcript(candidate.source_span, transcript):
+            grounded_events = [e for e in candidate.events if _span_in_transcript(e.source_span, transcript)]
+            trip = ExtractedTripOut(
+                name=candidate.name, source_span=candidate.source_span, events=grounded_events,
+            )
+
+    logger.info(
+        "Artifact extraction successful: "
+        f"events={len(events)} shopping={len(shopping_items)} checklist={len(checklist_items)} trip={'yes' if trip else 'no'}"
+    )
+    return ExtractArtifactsResponse(
+        note_content=transcript,
+        events=events,
+        shopping_items=shopping_items,
+        checklist_items=checklist_items,
+        trip=trip,
+    )

@@ -112,11 +112,18 @@ console.log('undecryptable field → placeholder, no throw:');
   ok('wrong-key title → placeholder', wrong.title === UNDECRYPTABLE_PLACEHOLDER);
   ok('wrong-key description → placeholder', wrong.description === UNDECRYPTABLE_PLACEHOLDER);
 
-  // Corrupt token in an enc_version=1 event.
-  const corrupt = { title: 'not-a-valid-token', description: encryptEventFields({ description: 'ok' }, dek).description, enc_version: ENC_VERSION };
+  // Corrupt ciphertext in an enc_version=1 event: token shape is right, payload tampered.
+  const goodTitle = encryptEventFields({ title: 'good' }, dek).title as string;
+  const tampered = goodTitle.slice(0, 4) + (goodTitle[4] === 'A' ? 'B' : 'A') + goodTitle.slice(5);
+  const corrupt = { title: tampered, description: encryptEventFields({ description: 'ok' }, dek).description, enc_version: ENC_VERSION };
   const out = decryptEventFields(corrupt as any, dek);
-  ok('corrupt title → placeholder', out.title === UNDECRYPTABLE_PLACEHOLDER);
+  ok('tampered ciphertext → placeholder', out.title === UNDECRYPTABLE_PLACEHOLDER);
   ok('sibling valid field still decrypts', out.description === 'ok');
+
+  // Plaintext mislabeled under enc_version=1 passes through untouched (self-heal).
+  const mislabeled = { title: 'not-a-valid-token', description: 'plain', enc_version: ENC_VERSION };
+  const pass = decryptEventFields(mislabeled as any, dek);
+  ok('non-ciphertext string passes through unchanged', pass.title === 'not-a-valid-token' && pass.description === 'plain');
 }
 
 console.log('empty strings:');

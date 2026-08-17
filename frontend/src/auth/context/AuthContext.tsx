@@ -4,7 +4,7 @@ import { User } from '../types/auth.types';
 import { authApi } from '../api/authApi';
 import { dailyBrewApi } from '../../api';
 import { authStorage } from '../storage/authStorage';
-import { fullSync } from '../../offlineSync';
+import { fullSync, processSyncQueue } from '../../offlineSync';
 import { E2EE_KEYS_ENABLED } from '../../crypto/flags';
 import { bootstrapKeyOnLogin, recoverKeyWithCode, clearKeyOnLogout, type BootstrapResult } from '../../crypto/keySession';
 import { migrateNotesToEncrypted } from '../../crypto/noteMigration';
@@ -185,6 +185,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!password) throw new Error('No pending recovery session');
     await recoverKeyWithCode(code, password);
     pendingPasswordRef.current = null;
+    // The pre-recovery fullSync was skipped by the no-DEK guard; pull now that the key exists.
+    fullSync({ force: true }).catch(() => {});
   }, []);
 
   const updateUserName = useCallback(async (name: string) => {
@@ -202,6 +204,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(async () => {
+    // Flush pending pushes while the session token AND the DEK are still live. Without
+    // this, an unawaited processSyncQueue from the editor's back navigation can race the
+    // clearKeyOnLogout below and encrypt with no key loaded (refused by the encrypt
+    // guard), or worse, push plaintext that the server stores under enc_version=1.
+    await processSyncQueue().catch(() => {});
     await authApi.logout();
     if (E2EE_KEYS_ENABLED) {
       try {

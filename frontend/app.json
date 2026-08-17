@@ -38,6 +38,18 @@
       "intentFilters": [
         {
           "action": "VIEW",
+          "data": [
+            {
+              "scheme": "com.riostudio.memopad"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        },
+        {
+          "action": "VIEW",
           "autoVerify": true,
           "data": [
             {
@@ -60,6 +72,7 @@
     },
     "plugins": [
       "expo-router",
+      "./plugins/withFfmpegLibsDir",
       [
         "expo-splash-screen",
         {
@@ -69,7 +82,14 @@
           "backgroundColor": "#0A5443"
         }
       ],
-      "expo-audio",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Record voice notes hands-free",
+          "enableBackgroundRecording": false,
+          "enableBackgroundPlayback": false
+        }
+      ],
       [
         "expo-calendar",
         {

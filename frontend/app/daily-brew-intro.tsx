@@ -32,14 +32,20 @@ export default function DailyBrewIntroScreen() {
   useEffect(() => {
     if (!user) return;
     AsyncStorage.getItem(`${ONBOARDING_SEEN_KEY_PREFIX}${user.id}`)
-      .then((v) => { if (v) router.replace('/(tabs)'); })
+      .then((v) => {
+        if (v) {
+          router.replace('/(tabs)');
+          return;
+        }
+        // Marked the moment the intro is shown: the tabs gate re-runs on every focus, so a
+        // flag written only on "Next" meant backing out of this screen looped straight back
+        // into it.
+        AsyncStorage.setItem(`${ONBOARDING_SEEN_KEY_PREFIX}${user.id}`, '1').catch(() => {});
+      })
       .catch(() => {});
   }, [user]);
 
   const handleNext = async () => {
-    // Marked on leaving (not on mount) so the intro is never shown twice even if the user
-    // abandons the source-picker step that follows.
-    if (user) await AsyncStorage.setItem(`${ONBOARDING_SEEN_KEY_PREFIX}${user.id}`, '1').catch(() => {});
     // The source picker used to be a separate screen from the earlier "daily lift" onboarding
     // step; they're now one screen, so sending everyone there would ask the same three questions
     // a second time in the same run of onboarding. If that step has already been answered (which
