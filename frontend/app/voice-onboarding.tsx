@@ -19,12 +19,12 @@ import * as Haptics from 'expo-haptics';
 import { useAudioRecorder, AudioModule, RecordingPresets, setAudioModeAsync } from 'expo-audio';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '../src/auth/context/AuthContext';
-import { textProcessApi } from '../src/api';
+import { textProcessApi, artifactExtractionApi } from '../src/api';
 import { transcribeAudio, ModelNotReadyError } from '../src/audio/transcriptionRouter';
-import { createNoteOffline, isNetworkAvailable, enqueueOfflineStructure, applyStructuredContent, type OfflineStructureItem } from '../src/offlineSync';
+import { createNoteOffline, isNetworkAvailable, enqueueOfflineStructure, applyStructuredContent, createArtifactRecords, type OfflineStructureItem, type ArtifactType } from '../src/offlineSync';
 import { StructuredReveal } from '../src/components/StructuredReveal';
 import { REVEAL_DURATION_MS, REVEAL_HOLD_MS } from '../src/revealSpec';
-import { trackOnboardingStep, trackNoteCreated, trackVoiceRecordingStarted, trackVoiceRecordingCompleted, trackVoiceTranscriptionInserted, newCaptureId, trackRevealFired, trackSaveOutcome, markSegmentEnd, trackSegmentLatency } from '../src/analytics';
+import { trackOnboardingStep, trackNoteCreated, trackVoiceRecordingStarted, trackVoiceRecordingCompleted, trackVoiceTranscriptionInserted, newCaptureId, trackRevealFired, trackSaveOutcome, trackExtractionResult, markSegmentEnd, trackSegmentLatency } from '../src/analytics';
 import { RecordingWaveform } from '../src/components/RecordingWaveform';
 import { C } from '../src/theme';
 
@@ -165,6 +165,52 @@ export default function VoiceOnboardingScreen() {
     }
   }, [recorder]);
 
+  // A8: the first capture gets the same A4 extraction the editor runs, so a new user's first
+  // note is genuinely multi-artifact. Fully non-blocking - it can never hold up the save or the
+  // reveal. High-confidence artifacts attach to the note as records; low-confidence ones are
+  // never persisted without a tap, and onboarding has no suggestion bar to ask with, so they
+  // are tallied for instrumentation only.
+  const runFirstCaptureExtraction = useCallback(async (noteId: string, rawText: string, captureId: string) => {
+    try {
+      const referenceDate = new Date().toISOString().slice(0, 10);
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const res = await artifactExtractionApi.extract(rawText, referenceDate, timezone);
+
+      const types: ArtifactType[] = [];
+      const confidences: number[] = [];
+      let spanPresent = 0;
+      let spanMissing = 0;
+      const high: { type: ArtifactType; label: string; source_span: string }[] = [];
+      const tally = (type: ArtifactType, label: string, confidence: 'high' | 'low', span: string) => {
+        types.push(type);
+        confidences.push(confidence === 'high' ? 1 : 0.5);
+        if (span) spanPresent += 1; else spanMissing += 1;
+        if (confidence === 'high') high.push({ type, label, source_span: span });
+      };
+      res.events.forEach(ev => tally('event', ev.title, ev.confidence, ev.source_span));
+      res.shopping_items.forEach(it => tally('shopping_item', it.text, it.confidence, it.source_span));
+      res.checklist_items.forEach(it => tally('checklist_item', it.text, it.confidence, it.source_span));
+      if (res.trip) tally('trip', res.trip.name, 'high', res.trip.source_span);
+
+      trackExtractionResult({
+        capture_id: captureId,
+        artifact_types: types,
+        item_count: types.length,
+        confidences,
+        source_span_present_count: spanPresent,
+        source_span_missing_count: spanMissing,
+      });
+
+      if (high.length > 0) {
+        await createArtifactRecords(high.map(a => ({
+          note_id: noteId, type: a.type, ref_id: '', label: a.label, source_span: a.source_span,
+        })));
+      }
+    } catch (e) {
+      console.error('Onboarding artifact extraction failed:', e);
+    }
+  }, []);
+
   const saveNote = useCallback(async () => {
     if (saving) return;
     setSaving(true);
@@ -201,6 +247,12 @@ export default function VoiceOnboardingScreen() {
       trackOnboardingStep('note_saved');
       // The one celebration in the whole flow, and only ever on the first note.
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+
+      // A8: non-blocking multi-artifact extraction on the first capture. Fire-and-forget so it
+      // can never delay the save/reveal; failures are silent (note is already safe above).
+      if (await isNetworkAvailable()) {
+        runFirstCaptureExtraction(note.id, transcript, capture_id);
+      }
 
       if (tidy !== 'organise') {
         await leave('completed');
@@ -260,7 +312,7 @@ export default function VoiceOnboardingScreen() {
       Alert.alert('Couldn’t save that one', 'Your words are still here. Have another go.');
       setSaving(false);
     }
-  }, [saving, transcript, tidy, leave]);
+  }, [saving, transcript, tidy, leave, runFirstCaptureExtraction]);
 
   const onRevealComplete = useCallback(() => {
     trackRevealFired({
@@ -296,7 +348,7 @@ export default function VoiceOnboardingScreen() {
             </View>
           </View>
           <Text style={s.title}>Press the button. Say anything.</Text>
-          <Text style={s.sub}>That’s the whole thing.</Text>
+          <Text style={s.sub}>Just talk naturally — we’ll sort out what’s a note, task, or event.</Text>
         </View>
         <View style={s.actions}>
           {/* Stated at the moment of the ask rather than buried in settings. Framed as what the
@@ -343,9 +395,10 @@ export default function VoiceOnboardingScreen() {
 
           <Text style={s.listening}>{busy ? 'Turning that into words' : 'Listening…'}</Text>
           {!busy && (
-            // Deliberately free of dates and times: the voice-intent classifier reroutes anything
-            // schedule-shaped to event creation, which would derail a first-run demo.
-            <Text style={s.tryLine}>Try: “Things I want to remember about today.”</Text>
+            // A8: the example mixes narrative + one embedded event + one shopping item, so the
+            // first capture a new user makes can show real multi-artifact extraction. Extraction
+            // is additive and non-blocking here, so schedule-shaped words don't derail the demo.
+            <Text style={s.tryLine}>Try: “Good walk this morning — remind me to call the dentist Thursday at 10, and pick up milk on the way home.”</Text>
           )}
         </View>
         <View style={s.actions}>
