@@ -44,6 +44,8 @@ import { takePendingSketch } from '../src/pendingSketch';
 import { takePendingLinkedEventIds } from '../src/pendingLinkedEvents';
 import { decryptEventsFromServer } from '../src/crypto/eventCrypto';
 import { RadialProgress, SharedPostCard, Button } from '../src/components';
+import { StructuredReveal } from '../src/components/StructuredReveal';
+import { REVEAL_DURATION_MS } from '../src/revealSpec';
 import NoteImageCanvas from '../src/components/NoteImageCanvas';
 import { useNoteObjects } from '../src/useNoteObjects';
 import { decryptNoteFromServer } from '../src/crypto/noteCrypto';
@@ -638,12 +640,20 @@ export default function EditorScreen() {
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isProcessingText, setIsProcessingText] = useState(false);
-  const [showAiSuggestion, setShowAiSuggestion] = useState(false);
   // The dictation just inserted, plus the note's content immediately before it. Together they let
   // "Tidy up" replace that dictation in place rather than appending a tidied duplicate.
   const [lastDictation, setLastDictation] = useState<string | null>(null);
   const [preTidyContent, setPreTidyContent] = useState<string | null>(null);
-  const [transcribedText, setTranscribedText] = useState('');
+  // A5: a capture's before->after transition plays through the shared StructuredReveal overlay
+  // instead of swapping the editor content instantly; the editor swap happens at animation
+  // COMPLETE, which is also when reveal_fired fires (A0 semantics).
+  const [editorReveal, setEditorReveal] = useState<{ item: OfflineStructureItem; html: string; viaQueue: boolean } | null>(null);
+  const editorRevealRef = useRef<{ item: OfflineStructureItem; html: string; viaQueue: boolean } | null>(null);
+  editorRevealRef.current = editorReveal;
+  // The structured block currently in the note for the last dictation - backs the one-tap
+  // "View original" and no-confirm "Revert" controls in the tidy bar.
+  const [lastStructured, setLastStructured] = useState<{ rawText: string; html: string } | null>(null);
+  const [showingOriginal, setShowingOriginal] = useState(false);
   // A5: A4 extraction suggestions for the latest capture(s) in this note, newest batch appended.
   const [artifactSuggestions, setArtifactSuggestions] = useState<ArtifactSuggestion[]>([]);
   const [images, setImages] = useState<string[]>([]);
@@ -1632,28 +1642,58 @@ export default function EditorScreen() {
   const buildRawBlockHtml = (text: string) =>
     (text || '').trim().split(/\n{2,}/).map(p => `<p>${escapeHtml(p).replace(/\n/g, '<br>')}</p>`).join('');
 
-  const applyStructureToView = useCallback((item: OfflineStructureItem, structuredHtml: string, viaQueue: boolean, startedAt: number) => {
-    // The store-level swap ran the same guard against persisted content; run it again against
-    // the live view so a keystroke made in the gap can't be stomped on screen either.
-    if (!contentRef.current.includes(item.rawBlockHtml)) return;
-    const nextContent = contentRef.current.replace(item.rawBlockHtml, structuredHtml);
+  // A5: the before->after transition plays through the shared StructuredReveal overlay (same
+  // component and timing as onboarding - SHARED SPEC). The editor swap is deferred to the
+  // animation's COMPLETE callback, which is also when reveal_fired fires: the event measures the
+  // transition, not the API response (A0 semantics).
+  const beginEditorReveal = useCallback((item: OfflineStructureItem, html: string, viaQueue: boolean) => {
+    if (!contentRef.current.includes(item.rawBlockHtml)) {
+      trackSaveOutcome({ capture_id: item.id, raw_save: 'ok', structuring: 'skipped', offline_queued: viaQueue });
+      return;
+    }
+    setEditorReveal({ item, html, viaQueue });
+  }, []);
+
+  const onEditorRevealComplete = useCallback(() => {
+    const reveal = editorRevealRef.current;
+    if (!reveal) return;
+    setEditorReveal(null);
+    // A keystroke in the gap means the raw block is gone from the view - keep what the user
+    // typed instead of stomping it.
+    if (!contentRef.current.includes(reveal.item.rawBlockHtml)) {
+      trackSaveOutcome({ capture_id: reveal.item.id, raw_save: 'ok', structuring: 'skipped', offline_queued: reveal.viaQueue });
+      return;
+    }
+    const nextContent = contentRef.current.replace(reveal.item.rawBlockHtml, reveal.html);
     contentRef.current = nextContent;
     editorApiRef.current?.setContent(nextContent);
     saveImmediately();
-    // A structured dictation no longer needs the manual tidy fallback bar.
-    if (item.id === captureIdRef.current) {
-      setLastDictation(null);
-      setPreTidyContent(null);
-    }
+    setLastStructured({ rawText: reveal.item.rawText, html: reveal.html });
     trackRevealFired({
-      capture_id: item.id,
+      capture_id: reveal.item.id,
       surface: 'editor',
-      reveal_duration_ms: Date.now() - startedAt,
-      trigger: viaQueue ? 'offline_sync_complete' : 'structuring_complete',
+      reveal_duration_ms: REVEAL_DURATION_MS,
+      trigger: reveal.viaQueue ? 'offline_sync_complete' : 'structuring_complete',
     });
     trackSegmentLatency();
-    trackSaveOutcome({ capture_id: item.id, raw_save: 'ok', structuring: 'ok', offline_queued: viaQueue });
+    trackSaveOutcome({ capture_id: reveal.item.id, raw_save: 'ok', structuring: 'ok', offline_queued: reveal.viaQueue });
   }, [saveImmediately]);
+
+  // One-tap revert-to-raw, no confirmation dialog (A5 fail condition: a confirmation step).
+  // The raw words are never deleted - they live in lastStructured for as long as the bar shows.
+  const revertToOriginal = () => {
+    if (!lastStructured) return;
+    if (contentRef.current.includes(lastStructured.html)) {
+      const nextContent = contentRef.current.replace(lastStructured.html, buildRawBlockHtml(lastStructured.rawText));
+      contentRef.current = nextContent;
+      editorApiRef.current?.setContent(nextContent);
+      saveImmediately();
+    }
+    setLastStructured(null);
+    setShowingOriginal(false);
+    setLastDictation(null);
+    setPreTidyContent(null);
+  };
 
   // True when a process-text call failed because the backend's AI quota is exhausted (HTTP 429,
   // e.g. OpenAI credits at zero) - the one failure the on-device formatter can stand in for.
@@ -1674,7 +1714,6 @@ export default function EditorScreen() {
       await enqueueOfflineStructure(item);
       return;
     }
-    const startedAt = Date.now();
     try {
       const res = await textProcessApi.processText(rawText, 'smart_format');
       const html = (res?.text || '').trim();
@@ -1683,10 +1722,11 @@ export default function EditorScreen() {
         return;
       }
       // Flush anything typed since the insert so the store guard sees fresher content than the
-      // streamed save, then swap at the store level and mirror it into the open editor.
+      // streamed save, then swap at the store level; the visible before->after transition plays
+      // next via the shared reveal overlay (A5).
       await enqueuePersist({ push: false }).catch(() => {});
       const applied = await applyStructuredContent(item, html);
-      if (applied) applyStructureToView(item, html, false, startedAt);
+      if (applied) beginEditorReveal(item, html, false);
       else trackSaveOutcome({ capture_id: captureId, raw_save: 'ok', structuring: 'skipped', offline_queued: false });
     } catch (e) {
       // Cloud structuring died while online - typically the shared OpenAI quota hitting zero
@@ -1697,7 +1737,7 @@ export default function EditorScreen() {
         if (localHtml) {
           await enqueuePersist({ push: false }).catch(() => {});
           const applied = await applyStructuredContent(item, localHtml);
-          if (applied) applyStructureToView(item, localHtml, false, startedAt);
+          if (applied) beginEditorReveal(item, localHtml, false);
           else trackSaveOutcome({ capture_id: captureId, raw_save: 'ok', structuring: 'skipped', offline_queued: false });
           return;
         }
@@ -1810,10 +1850,10 @@ export default function EditorScreen() {
     setStructureCompleteListener(applied => {
       const myId = resolveNoteId(noteIdRef.current);
       if (!myId || resolveNoteId(applied.item.noteId) !== myId) return;
-      applyStructureToView(applied.item, applied.structuredHtml, applied.viaQueue, applied.startedAt);
+      beginEditorReveal(applied.item, applied.structuredHtml, applied.viaQueue);
     });
     return () => setStructureCompleteListener(null);
-  }, [applyStructureToView]);
+  }, [beginEditorReveal]);
 
   // Format date/time for display
   const formatEventDateTime = (dateStr: string): string => {
@@ -2218,10 +2258,7 @@ export default function EditorScreen() {
       // recording stops and the segment is handed to transcription. segment_latency measures
       // from here to the reveal (trackSegmentLatency fires at reveal time).
       markSegmentEnd();
-      console.log('Starting transcription for:', uri);
       const result = await transcribeAudio(uri, wasConversation ? { diarization: 'speaker' } : {});
-      console.log('Transcription result:', result);
-      setTranscribedText(result.text);
       if (wasConversation && !result.words?.some(w => w.speaker) && !speakerUnavailableNotifiedRef.current) {
         speakerUnavailableNotifiedRef.current = true;
         Alert.alert(
@@ -2391,7 +2428,6 @@ export default function EditorScreen() {
       // attempt is exactly when they're most likely to hesitate and say nothing.
       if (!result.text.trim()) {
         setIsTranscribing(false);
-        setTranscribedText('');
         Alert.alert('Nothing came through that time', 'Have another go whenever.');
         return;
       }
@@ -2406,6 +2442,8 @@ export default function EditorScreen() {
       setIsTranscribing(false);
       setPreTidyContent(contentRef.current);
       setLastDictation(result.text);
+      setLastStructured(null);
+      setShowingOriginal(false);
       insertTranscription(result.text);
       await appendToEditorStreamed(result.text);
       // A0 instrumentation: raw capture settled in the note. Structuring is automatic (A2) and
@@ -2473,35 +2511,25 @@ export default function EditorScreen() {
   const tidyLastDictation = async () => {
     if (!lastDictation || preTidyContent === null) return;
     setIsProcessingText(true);
-    const structuringStartedAt = Date.now();
     try {
       const result = await textProcessApi.processText(lastDictation, 'smart_format');
       const tidied = (result?.text || '').trim();
       if (!tidied) return;
       const rawBlock = buildRawBlockHtml(lastDictation);
       if (!contentRef.current.includes(rawBlock)) return; // auto-structuring (or the user) got here first
-      const nextContent = contentRef.current.replace(rawBlock, tidied);
-      contentRef.current = nextContent;
-      editorApiRef.current?.setContent(nextContent);
-      saveImmediately();
-      // A0 instrumentation: the structured replacement is today's reveal moment. A5 moves this
-      // firing to the transition-animation COMPLETE callback; keep both fields honest then.
-      trackRevealFired({
-        capture_id: captureIdRef.current,
-        surface: 'editor',
-        reveal_duration_ms: Date.now() - structuringStartedAt,
-        trigger: 'structuring_complete',
-      });
-      trackSegmentLatency();
-      trackSaveOutcome({
-        capture_id: captureIdRef.current,
-        raw_save: 'ok',
-        structuring: 'ok',
-        offline_queued: !(await isNetworkAvailable()),
-      });
-      // One tidy per dictation: a second pass would re-structure already-structured markup.
-      setLastDictation(null);
-      setPreTidyContent(null);
+      // The before->after transition plays through the shared reveal overlay (A5); the editor
+      // swap and reveal_fired/segment_latency/save_outcome all fire at animation COMPLETE.
+      beginEditorReveal(
+        {
+          id: captureIdRef.current,
+          noteId: resolveNoteId(noteIdRef.current) || 'new',
+          rawText: lastDictation,
+          rawBlockHtml: rawBlock,
+          timestamp: new Date().toISOString(),
+        },
+        tidied,
+        false,
+      );
     } catch (e) {
       // Quota-exhausted cloud (HTTP 429) while online: a checklist-shaped dictation can still be
       // tidied on-device. lastDictation stays set so a retry works once credits return.
@@ -2510,10 +2538,17 @@ export default function EditorScreen() {
         if (localHtml) {
           const rawBlock = buildRawBlockHtml(lastDictation);
           if (contentRef.current.includes(rawBlock)) {
-            const nextContent = contentRef.current.replace(rawBlock, localHtml);
-            contentRef.current = nextContent;
-            editorApiRef.current?.setContent(nextContent);
-            saveImmediately();
+            beginEditorReveal(
+              {
+                id: captureIdRef.current,
+                noteId: resolveNoteId(noteIdRef.current) || 'new',
+                rawText: lastDictation,
+                rawBlockHtml: rawBlock,
+                timestamp: new Date().toISOString(),
+              },
+              localHtml,
+              false,
+            );
             return;
           }
         }
@@ -2529,37 +2564,6 @@ export default function EditorScreen() {
       });
     } finally {
       setIsProcessingText(false);
-    }
-  };
-
-  const handleAiProcess = async (action: 'organize' | 'summarize' | 'keep') => {
-    setShowAiSuggestion(false);
-    
-    if (action === 'keep') {
-      // Streamed rather than pasted - see appendToEditorStreamed's comment on why dictation
-      // specifically benefits from the text arriving word by word.
-      insertTranscription(transcribedText);
-      await appendToEditorStreamed(transcribedText);
-      return;
-    }
-
-    try {
-      setIsProcessingText(true);
-      const result = await textProcessApi.processText(transcribedText, action);
-      insertTranscription(result.text);
-      await appendToEditorStreamed(result.text);
-    } catch (e) {
-      console.error('Text processing failed:', e);
-      // Quota-exhausted cloud while online: fall back to the on-device formatter when it can
-      // stand in; otherwise the words go in exactly as said.
-      const localHtml = isQuotaError(e) && (await isOnline()) ? formatTextLocally(transcribedText) : null;
-      const textToInsert = localHtml ?? transcribedText;
-      if (!localHtml) Alert.alert('Couldn’t tidy that one', 'Your words went in as you said them.');
-      insertTranscription(textToInsert);
-      await appendToEditorStreamed(textToInsert);
-    } finally {
-      setIsProcessingText(false);
-      setTranscribedText('');
     }
   };
 
@@ -3787,26 +3791,72 @@ export default function EditorScreen() {
         </View>
       </KeyboardAvoidingView>
       
-      {/* AI Processing Indicator */}
-      {/* Offered AFTER the words are already in the note, not as a gate before them. Dismissable,
-          and it disappears once used or once the user moves on - a suggestion, not a decision the
-          user has to make on every single capture. */}
-      {lastDictation && !isProcessingText && (
-        <View style={s.tidyBar}>
-          <Text style={s.tidyBarText} numberOfLines={1}>Added from your voice</Text>
-          <TouchableOpacity onPress={tidyLastDictation} style={s.tidyBarAction} testID="tidy-dictation">
-            <MaterialIcons name="auto-fix-high" size={16} color={C.primary} />
-            <Text style={s.tidyBarActionText}>Tidy up</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => { setLastDictation(null); setPreTidyContent(null); }} hitSlop={10}>
-            <MaterialIcons name="close" size={18} color={C.borderSub} />
-          </TouchableOpacity>
+      {/* A5 reveal: the capture's before->after transition, same shared component and timing as
+          onboarding. The editor content swaps at animation COMPLETE - never an instant swap. */}
+      {editorReveal && (
+        <View style={s.revealOverlay}>
+          <StructuredReveal
+            before={
+              <View style={s.revealCard}>
+                <Text style={s.revealCardText}>{editorReveal.item.rawText}</Text>
+              </View>
+            }
+            structuredHtml={editorReveal.html}
+            revealing
+            onComplete={onEditorRevealComplete}
+          />
         </View>
+      )}
+
+      {/* Confirm+revert control (A5): structuring already happened automatically, so this is not
+          an offer to tidy - it is the user's hold over what just changed. View original expands
+          the raw dictation (always available, never deleted); Revert restores it in one tap with
+          no confirmation step. The legacy "Tidy up" button only shows when auto-structuring
+          failed or was skipped, as a retry on the still-raw words. */}
+      {lastDictation && !isProcessingText && !editorReveal && (
+        lastStructured ? (
+          showingOriginal ? (
+            <View style={s.originalCard}>
+              <Text style={s.originalLabel}>What you said</Text>
+              <Text style={s.originalText} numberOfLines={5}>{lastStructured.rawText}</Text>
+              <TouchableOpacity onPress={() => setShowingOriginal(false)} style={s.tidyBarAction} hitSlop={10} testID="back-from-original">
+                <MaterialIcons name="arrow-back" size={16} color={C.primary} />
+                <Text style={s.tidyBarActionText}>Back to the note</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={s.tidyBar}>
+              <Text style={s.tidyBarText} numberOfLines={1}>Added from your voice</Text>
+              <TouchableOpacity onPress={() => setShowingOriginal(true)} style={s.tidyBarAction} hitSlop={10} testID="view-original">
+                <MaterialIcons name="history" size={16} color={C.primary} />
+                <Text style={s.tidyBarActionText}>View original</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={revertToOriginal} style={s.tidyBarAction} hitSlop={10} testID="revert-to-original">
+                <MaterialIcons name="undo" size={16} color={C.primary} />
+                <Text style={s.tidyBarActionText}>Revert</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => { setLastDictation(null); setPreTidyContent(null); setLastStructured(null); }} hitSlop={10}>
+                <MaterialIcons name="close" size={18} color={C.borderSub} />
+              </TouchableOpacity>
+            </View>
+          )
+        ) : (
+          <View style={s.tidyBar}>
+            <Text style={s.tidyBarText} numberOfLines={1}>Added from your voice</Text>
+            <TouchableOpacity onPress={tidyLastDictation} style={s.tidyBarAction} testID="tidy-dictation">
+              <MaterialIcons name="auto-fix-high" size={16} color={C.primary} />
+              <Text style={s.tidyBarActionText}>Tidy up</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => { setLastDictation(null); setPreTidyContent(null); }} hitSlop={10}>
+              <MaterialIcons name="close" size={18} color={C.borderSub} />
+            </TouchableOpacity>
+          </View>
+        )
       )}
 
       {/* A5: A4 extraction suggestions. High confidence = already added, dismissible. Low
           confidence = one-tap question - never persisted without that tap. */}
-      {artifactSuggestions.length > 0 && (
+      {artifactSuggestions.length > 0 && !editorReveal && (
         <View style={s.artifactBar}>
           <View style={{ flex: 1, gap: 8 }}>
             {artifactSuggestions.map(suggestion => {
@@ -3864,60 +3914,6 @@ export default function EditorScreen() {
         </View>
       )}
 
-      {/* AI Suggestion Modal */}
-      <Modal
-        visible={showAiSuggestion}
-        transparent
-        animationType="fade"
-        onRequestClose={() => handleAiProcess('keep')}
-      >
-        <View style={s.modalOverlay}>
-          <View style={s.aiSuggestionCard}>
-            <Text style={s.aiTitle}>Transcription Complete!</Text>
-            <Text style={s.aiSubtitle}>Would you like AI to improve your text?</Text>
-            
-            <View style={s.aiPreview}>
-              <Text style={s.aiPreviewText} numberOfLines={3}>
-                "{transcribedText.substring(0, 150)}{transcribedText.length > 150 ? '...' : ''}"
-              </Text>
-            </View>
-            
-            <TouchableOpacity
-              style={s.aiOption}
-              onPress={() => handleAiProcess('organize')}
-            >
-              <MaterialIcons name="format-list-bulleted" size={24} color={C.secondary} />
-              <View style={s.aiOptionText}>
-                <Text style={s.aiOptionTitle}>Organize</Text>
-                <Text style={s.aiOptionDesc}>Structure with paragraphs, bullets & headings</Text>
-              </View>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              style={s.aiOption}
-              onPress={() => handleAiProcess('summarize')}
-            >
-              <MaterialIcons name="compress" size={24} color={C.secondary} />
-              <View style={s.aiOptionText}>
-                <Text style={s.aiOptionTitle}>Summarize</Text>
-                <Text style={s.aiOptionDesc}>Condense into key points</Text>
-              </View>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              style={[s.aiOption, s.aiOptionKeep]}
-              onPress={() => handleAiProcess('keep')}
-            >
-              <MaterialIcons name="check" size={24} color={C.textSec} />
-              <View style={s.aiOptionText}>
-                <Text style={[s.aiOptionTitle, { color: C.textSec }]}>Keep as is</Text>
-                <Text style={s.aiOptionDesc}>Use the original transcription</Text>
-              </View>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-      
       {/* Image Picker Bottom Sheet */}
       <Modal
         visible={showImagePicker}
@@ -4033,7 +4029,7 @@ export default function EditorScreen() {
             <MaterialIcons name="delete" size={48} color={C.error} style={{ marginBottom: 16 }} />
             <Text style={s.deleteModalTitle}>Delete this note?</Text>
             <Text style={s.deleteModalMessage}>
-              Are you sure you want to delete "{title || 'this note'}"? This action cannot be undone.
+              Are you sure you want to delete &quot;{title || 'this note'}&quot;? This action cannot be undone.
             </Text>
             <View style={s.deleteModalButtons}>
               <TouchableOpacity
@@ -4451,6 +4447,19 @@ const s = StyleSheet.create({
   tidyBarText: { flex: 1, fontSize: 13, color: C.textSec },
   tidyBarAction: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   tidyBarActionText: { fontSize: 14, fontWeight: '600', color: C.primary },
+  // A5 reveal overlay: hosts the shared StructuredReveal transition above the bottom bars.
+  revealOverlay: { position: 'absolute', left: 16, right: 16, bottom: 150 },
+  revealCard: { backgroundColor: C.surfaceHi, borderRadius: 12, padding: 16 },
+  revealCardText: { fontSize: 15, color: C.textSec, lineHeight: 23 },
+  // Expanded "View original" state of the confirm+revert bar.
+  originalCard: {
+    position: 'absolute', left: 16, right: 16, bottom: 96,
+    backgroundColor: C.surfaceHi, borderRadius: 12, padding: 14, gap: 8,
+    shadowColor: '#0A5443', shadowOpacity: 0.12, shadowRadius: 10, shadowOffset: { width: 0, height: 3 },
+    elevation: 3,
+  },
+  originalLabel: { fontSize: 13, fontWeight: '600', color: C.textSec },
+  originalText: { fontSize: 14, color: C.text, lineHeight: 21 },
   // A5 artifact-suggestion bar: same card look as tidyBar, stacked above it so both can show.
   artifactBar: {
     position: 'absolute', left: 16, right: 16, bottom: 150,
@@ -4530,53 +4539,6 @@ const s = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#FFFFFF',
-  },
-  aiSuggestionCard: {
-    backgroundColor: C.surface,
-    borderRadius: 20,
-    padding: 24,
-    width: '100%',
-    maxWidth: 400,
-  },
-  aiTitle: {
-    fontSize: 24, fontWeight: '700', color: C.text, textAlign: 'center',
-    marginBottom: 8,
-  },
-  aiSubtitle: {
-    fontSize: 16, color: C.textSec, textAlign: 'center',
-    marginBottom: 16,
-  },
-  aiPreview: {
-    backgroundColor: C.bg,
-    padding: 12,
-    borderRadius: 12,
-    marginBottom: 20,
-  },
-  aiPreviewText: {
-    fontSize: 14, color: C.textSec, fontStyle: 'italic',
-  },
-  aiOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-    borderRadius: 12,
-    backgroundColor: C.bg,
-    marginBottom: 12,
-    borderWidth: 2,
-    borderColor: C.borderSub + '40',
-  },
-  aiOptionKeep: {
-    backgroundColor: 'transparent',
-    borderStyle: 'dashed',
-  },
-  aiOptionText: {
-    marginLeft: 16, flex: 1,
-  },
-  aiOptionTitle: {
-    fontSize: 18, fontWeight: '600', color: C.text,
-  },
-  aiOptionDesc: {
-    fontSize: 14, color: C.textSec, marginTop: 2,
   },
   // Image Styles
   imagesContainer: {
