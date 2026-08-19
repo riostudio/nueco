@@ -145,6 +145,10 @@ export function notesNeedingMigration<T extends EncryptableNote>(notes: T[]): T[
 }
 
 function tryDecrypt(token: string, dek: Uint8Array): string {
+  // A value that isn't a ciphertext token but arrived under enc_version=1 is mislabeled
+  // plaintext (a no-DEK push racing a key clear), not a decrypt failure - pass it through so
+  // the note heals instead of showing the placeholder.
+  if (!looksLikeCiphertext(token)) return token;
   try {
     return decryptString(token, dek);
   } catch {

@@ -25,6 +25,14 @@ class EventCreate(BaseModel):
     recurrence: Optional[Recurrence] = None
     timezone: Optional[str] = None  # IANA name (e.g. "Australia/Sydney"); anchors recurrence math to wall-clock time across DST
     trip_id: Optional[str] = None  # Groups this event under a Trip (backend/trips/) - opaque id, no validation here.
+    # Google Calendar bridge (client-side Google API sync). The backend is a passthrough store
+    # for these - it never talks to Google. google_event_id/google_calendar_id identify the
+    # mirrored Google event; google_event_updated is Google's `updated` timestamp used for
+    # last-write-wins conflict resolution; attendees is the mirrored read-only attendee list.
+    google_event_id: Optional[str] = None
+    google_calendar_id: Optional[str] = None
+    google_event_updated: Optional[str] = None
+    attendees: Optional[List[dict]] = None
     # Client-authoritative timestamp for offline-first conflict resolution, same contract as
     # NoteCreate/NoteUpdate's (see notes/schemas.py for why the client's clock must win over the
     # server's). Optional so older app builds that don't send it still work - the service falls
@@ -46,6 +54,10 @@ class EventUpdate(BaseModel):
     recurrence: Optional[Recurrence] = None
     timezone: Optional[str] = None
     trip_id: Optional[str] = None
+    google_event_id: Optional[str] = None
+    google_calendar_id: Optional[str] = None
+    google_event_updated: Optional[str] = None
+    attendees: Optional[List[dict]] = None
     updated_at: Optional[str] = None
 
 
@@ -70,6 +82,10 @@ class EventResponse(BaseModel):
     recurrence: Optional[Recurrence] = None
     timezone: Optional[str] = None
     trip_id: Optional[str] = None
+    google_event_id: Optional[str] = None
+    google_calendar_id: Optional[str] = None
+    google_event_updated: Optional[str] = None
+    attendees: Optional[List[dict]] = None
 
 
 class PaginatedEventsResponse(BaseModel):

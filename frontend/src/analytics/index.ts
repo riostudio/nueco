@@ -23,4 +23,12 @@ export {
   trackVoiceTranscriptionInserted,
   trackEvent,
   flushEvents,
+  newCaptureId,
+  trackRevealFired,
+  trackExtractionResult,
+  trackSaveOutcome,
+  trackArtifactDismissed,
+  markSegmentEnd,
+  trackSegmentLatency,
 } from './posthog';
+export type { ArtifactType } from './posthog';

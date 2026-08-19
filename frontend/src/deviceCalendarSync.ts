@@ -2,6 +2,7 @@ import { Platform } from 'react-native';
 import { requestCalendarAccountSync } from '../modules/calendar-account-sync';
 import { getLocalEvents } from './offlineSync';
 import { nextOccurrenceOnOrAfter } from './recurrence';
+import { isGoogleSyncActive } from './google/googleSync';
 import type { CalendarEvent } from './types';
 
 let ExpoCalendar: typeof import('expo-calendar') | null = null;
@@ -42,6 +43,13 @@ export async function bumpDeviceCalendarSync(): Promise<void> {
 // that event's editor.
 export async function refreshRecurringDeviceCalendarEntries(): Promise<void> {
   if (Platform.OS === 'web' || !ExpoCalendar) return;
+  // Google Calendar sync owns the bridge when active - Nueco stops maintaining its own
+  // device-calendar entries, so there's nothing here to keep fresh.
+  try {
+    if (await isGoogleSyncActive()) return;
+  } catch {
+    // fall through to the normal refresh
+  }
   let wroteAny = false;
   try {
     const events = await getLocalEvents();

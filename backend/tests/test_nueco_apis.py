@@ -1442,6 +1442,10 @@ class TestErasureCoverage:
         for path in backend_dir.rglob("*.py"):
             if "tests" in path.parts:
                 continue
+            # Skip virtualenvs and hidden dirs: site-packages files contain thousands of
+            # `db.<something>` examples that are pymongo docs, not backend collections.
+            if any(part.startswith(".") or part in {"venv", "site-packages"} for part in path.relative_to(backend_dir).parts):
+                continue
             referenced.update(
                 name for name in _COLLECTION_REFERENCE.findall(path.read_text())
                 if name not in _DB_HANDLE_ATTRS
@@ -1717,3 +1721,158 @@ class TestLLMOutputValidation:
             "text": "x", "action": "translate",
         })
         assert response.status_code == 400, response.text
+
+
+# ---------------------------------------------------------------------------
+# Artifact extraction (POST /api/extract-artifacts) - A4. The full transcript is always the note;
+# artifacts are additive extras and each carries a source_span the server verifies against the
+# transcript. Same fake-client pattern as the voice-intent tests above: no live OpenAI call.
+# ---------------------------------------------------------------------------
+
+EXTRACTION_TRANSCRIPT = (
+    "Tomorrow I need to buy milk and two eggs, and I have to call the plumber at 3pm. "
+    "Also remember to water the plants. Honestly today felt long."
+)
+
+
+class TestArtifactExtraction:
+
+    async def _extract(self, api_client, monkeypatch, payload: dict, transcript: str = EXTRACTION_TRANSCRIPT):
+        monkeypatch.setattr(
+            textai_service, "get_openai_client", lambda: _fake_openai_client(json.dumps(payload)),
+        )
+        return await api_client.post("/api/extract-artifacts", json={
+            "transcript": transcript,
+            "reference_date": "2026-07-30",
+            "timezone": "Australia/Sydney",
+        })
+
+    async def test_note_content_always_echoes_full_transcript(self, api_client, monkeypatch):
+        """The note is the source of truth and never depends on what the model repeated."""
+        response = await self._extract(api_client, monkeypatch, {
+            "events": [], "shopping_items": [], "checklist_items": [], "trip": None,
+        })
+        assert response.status_code == 200, response.text
+        assert response.json()["note_content"] == EXTRACTION_TRANSCRIPT
+
+    async def test_grounded_artifacts_round_trip(self, api_client, monkeypatch):
+        response = await self._extract(api_client, monkeypatch, {
+            "events": [{
+                "title": "Call the plumber",
+                "start_time": "2026-07-31T15:00:00+10:00",
+                "end_time": None, "location": "", "recurrence": None,
+                "confidence": "high", "source_span": "call the plumber at 3pm",
+            }],
+            "shopping_items": [
+                {"text": "milk", "confidence": "high", "source_span": "buy milk"},
+                {"text": "two eggs", "confidence": "high", "source_span": "two eggs"},
+            ],
+            "checklist_items": [
+                {"text": "Water the plants", "confidence": "high", "source_span": "water the plants"},
+            ],
+            "trip": None,
+        })
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert len(data["events"]) == 1
+        assert data["events"][0]["source_span"] == "call the plumber at 3pm"
+        assert [i["text"] for i in data["shopping_items"]] == ["milk", "two eggs"]
+        assert [i["text"] for i in data["checklist_items"]] == ["Water the plants"]
+        assert data["trip"] is None
+
+    async def test_fabricated_span_is_dropped_grounded_sibling_kept(self, api_client, monkeypatch):
+        """The plan's zero-fabrication gate: an item whose source_span isn't in the transcript is
+        dropped, but per-entry - it must not cost a real item beside it."""
+        response = await self._extract(api_client, monkeypatch, {
+            "events": [],
+            "shopping_items": [
+                {"text": "milk", "confidence": "high", "source_span": "buy milk"},
+                {"text": "goldfish", "confidence": "high", "source_span": "buy a goldfish"},
+            ],
+            "checklist_items": [], "trip": None,
+        })
+        assert response.status_code == 200, response.text
+        items = response.json()["shopping_items"]
+        assert [i["text"] for i in items] == ["milk"]
+
+    async def test_missing_source_span_is_dropped(self, api_client, monkeypatch):
+        """source_span is mandatory (plan: no exceptions) - an item without one never ships."""
+        response = await self._extract(api_client, monkeypatch, {
+            "events": [],
+            "shopping_items": [{"text": "milk", "confidence": "high"}],
+            "checklist_items": [{"text": "water plants", "confidence": "low", "source_span": "   "}],
+            "trip": None,
+        })
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["shopping_items"] == []
+        assert data["checklist_items"] == []
+
+    async def test_span_matching_ignores_whitespace_reflow_only(self, api_client, monkeypatch):
+        """The model may re-flow whitespace inside a span, but not change the words."""
+        response = await self._extract(api_client, monkeypatch, {
+            "events": [],
+            "shopping_items": [
+                {"text": "milk", "confidence": "high", "source_span": "buy   milk"},
+                {"text": "butter", "confidence": "high", "source_span": "buy butter"},
+            ],
+            "checklist_items": [], "trip": None,
+        })
+        assert response.status_code == 200, response.text
+        assert [i["text"] for i in response.json()["shopping_items"]] == ["milk"]
+
+    async def test_storytelling_yields_no_artifacts(self, api_client, monkeypatch):
+        """Conversational input must not become artifact clutter - empty lists are the right answer,
+        and the transcript still comes back as the note."""
+        response = await self._extract(api_client, monkeypatch, {
+            "events": [], "shopping_items": [], "checklist_items": [], "trip": None,
+        }, transcript="Honestly today felt long and I just want to rest.")
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["note_content"] == "Honestly today felt long and I just want to rest."
+        assert data["events"] == []
+        assert data["shopping_items"] == []
+        assert data["checklist_items"] == []
+        assert data["trip"] is None
+
+    async def test_trip_returned_when_grounded(self, api_client, monkeypatch):
+        trip_transcript = "Plan my Tokyo trip: flight Friday at 9am, hotel check-in at 3pm."
+        response = await self._extract(api_client, monkeypatch, {
+            "events": [], "shopping_items": [], "checklist_items": [],
+            "trip": {
+                "name": "Tokyo trip",
+                "source_span": "Plan my Tokyo trip",
+                "events": [{
+                    "title": "Flight", "start_time": "2026-07-31T09:00:00+10:00",
+                    "end_time": None, "location": "", "recurrence": None,
+                    "confidence": "high", "source_span": "flight Friday at 9am",
+                }],
+            },
+        }, transcript=trip_transcript)
+        assert response.status_code == 200, response.text
+        trip = response.json()["trip"]
+        assert trip["name"] == "Tokyo trip"
+        assert len(trip["events"]) == 1
+
+    async def test_trip_with_ungrounded_span_is_dropped(self, api_client, monkeypatch):
+        response = await self._extract(api_client, monkeypatch, {
+            "events": [], "shopping_items": [], "checklist_items": [],
+            "trip": {"name": "Paris", "source_span": "plan my Paris getaway", "events": []},
+        })
+        assert response.status_code == 200, response.text
+        assert response.json()["trip"] is None
+
+    async def test_malformed_json_returns_500(self, api_client, monkeypatch):
+        monkeypatch.setattr(textai_service, "get_openai_client", lambda: _fake_openai_client("not valid json"))
+        response = await api_client.post("/api/extract-artifacts", json={
+            "transcript": EXTRACTION_TRANSCRIPT,
+            "reference_date": "2026-07-30",
+            "timezone": "Australia/Sydney",
+        })
+        assert response.status_code == 500, response.text
+
+    async def test_empty_transcript_is_a_422(self, api_client):
+        response = await api_client.post("/api/extract-artifacts", json={
+            "transcript": "", "reference_date": "2026-07-30", "timezone": "Australia/Sydney",
+        })
+        assert response.status_code == 422, response.text

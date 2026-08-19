@@ -11,11 +11,13 @@
 import {
   encryptEventFields,
   decryptEventFields,
+  hasEncryptableFields,
   type EncryptableEvent,
 } from './eventCryptoCore';
 import { loadDek } from './keystore';
 import { E2EE_KEYS_ENABLED } from './flags';
 import { yieldToJS } from './yieldToJS';
+import { Platform } from 'react-native';
 
 // See noteCrypto.ts's DECRYPT_YIELD_EVERY - same reasoning, applied to events.
 const DECRYPT_YIELD_EVERY = 25;
@@ -35,7 +37,14 @@ export {
 export async function encryptEventForServer<T extends EncryptableEvent>(payload: T): Promise<T> {
   if (!E2EE_KEYS_ENABLED) return payload;
   const dek = await loadDek();
-  if (!dek) return payload;
+  if (!dek) {
+    // See noteCrypto.ts: pushing plaintext while the server copy keeps enc_version=1
+    // corrupts the next decrypt - refuse on native and let the sync queue retry.
+    if (Platform.OS !== 'web' && hasEncryptableFields(payload)) {
+      throw new Error('E2EE key not loaded - refusing to push plaintext');
+    }
+    return payload;
+  }
   return encryptEventFields(payload, dek);
 }
 

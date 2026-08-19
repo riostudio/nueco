@@ -97,6 +97,9 @@ export function eventsNeedingMigration<T extends EncryptableEvent>(events: T[]):
 }
 
 function tryDecrypt(token: string, dek: Uint8Array): string {
+  // Mislabeled plaintext (a no-DEK push racing a key clear) is not a decrypt failure -
+  // pass it through so the event heals instead of showing the placeholder.
+  if (!(token.startsWith(`v${ENC_VERSION}.`) && token.split('.').length === 3)) return token;
   try {
     return decryptString(token, dek);
   } catch {

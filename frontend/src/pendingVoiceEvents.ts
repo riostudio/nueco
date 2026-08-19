@@ -14,6 +14,10 @@ export interface PendingVoiceExtraction extends VoiceIntentResult {
   // brand-new note that hasn't been created locally yet. voice-event.tsx uses this to link the
   // event(s) it creates back to that note (see pendingLinkedEvents.ts).
   noteId: string;
+  // Set when this extraction came from the on-device rule engine (offline capture or cloud
+  // classifier failure). voice-event.tsx records the created event ids against this queue item
+  // so the reconnect second pass can offer an in-place upgrade.
+  localClassifyQueueId?: string;
 }
 
 let pending: PendingVoiceExtraction | null = null;

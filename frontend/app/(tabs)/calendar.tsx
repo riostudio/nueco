@@ -269,7 +269,7 @@ export default function CalendarScreen() {
         onPress={() =>
           router.push({
             pathname: '/event-editor',
-            params: { date: selectedDate.toISOString() },
+            params: { date: selectedDate.toISOString(), from: 'calendar' },
           })
         }
         activeOpacity={0.8}

@@ -9,6 +9,8 @@ import { encryptedSizeFor } from './crypto/attachmentCryptoCore';
 import type { CalendarEvent, VoiceIntentResult } from './types';
 import type { NewsItem } from './dailyBrew/dailyBrew';
 import { collectPages, type PagedPull } from './pagedPullCore';
+import type { WordTiming } from './audio/retention';
+import { getSpokenLanguagePref } from './audio/recordingStore';
 
 async function getAuthHeaders(): Promise<Record<string, string>> {
   const accessToken = await authStorage.getAccessToken();
@@ -357,7 +359,10 @@ export function uploadAttachment(file: UploadFile): Promise<AttachmentMeta> {
 }
 
 export const transcribeApi = {
-  transcribe: async (fileUri: string): Promise<{ text: string }> => {
+  transcribe: async (
+    fileUri: string,
+    opts: { diarization?: string } = {},
+  ): Promise<{ text: string; words?: WordTiming[] }> => {
     console.log('Transcribing file from URI:', fileUri);
     
     // Determine file extension from URI
@@ -381,11 +386,10 @@ export const transcribeApi = {
       const uploadUrl = `${BACKEND_API_BASE_URL}/transcribe-base64`;
       console.log('Uploading to:', uploadUrl);
       
-      // No language hint: the device's OS locale isn't a reliable stand-in for the language
-      // actually spoken into the mic (bilingual users, or a phone UI left in a different
-      // language than the user speaks) - forcing Whisper toward that locale mistranslated/
-      // garbled recordings that didn't match it. Whisper's own auto-detection from the audio
-      // is the correct default for a general dictation feature.
+      // No OS-locale hint: the device locale isn't a reliable stand-in for the language
+      // actually spoken into the mic. Auto-detect from the audio is the default, but the
+      // user can pin their spoken language in Settings when detection keeps flipping.
+      const spoken = await getSpokenLanguagePref();
       const response = await fetch(uploadUrl, {
         method: 'POST',
         headers: {
@@ -395,6 +399,8 @@ export const transcribeApi = {
         body: JSON.stringify({
           audio_base64: base64,
           file_extension: extension,
+          ...(opts.diarization ? { diarization: opts.diarization } : {}),
+          ...(spoken !== 'auto' ? { language: spoken } : {}),
         }),
       });
       
@@ -420,31 +426,45 @@ export type NoteType = 'recipe' | 'checklist' | 'meeting_notes' | 'general';
 
 export const textProcessApi = {
   /** 'smart_format' detects the note's type (recipe/checklist/meeting notes/general) and
-   * restructures it accordingly - the response's note_type says which one it picked. */
+   * restructures it accordingly - the response's note_type says which one it picked.
+   * Client-side timeout keeps structuring non-blocking-by-contract: a hung call aborts and
+   * the caller falls back to the already-saved raw text. */
   processText: async (
     text: string,
     action: 'organize' | 'summarize' | 'smart_format',
+    timeoutMs = 45000,
   ): Promise<{ text: string; note_type?: NoteType }> => {
     console.log(`Processing text with action: ${action}, length: ${text.length}`);
-    
+
     // Get auth headers for the request
     const authHeaders = await getAuthHeaders();
-    
-    const response = await fetch(`${BACKEND_API_BASE_URL}/process-text`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...authHeaders,
-      },
-      body: JSON.stringify({ text, action }),
-    });
-    
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let response: Response;
+    try {
+      response = await fetch(`${BACKEND_API_BASE_URL}/process-text`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeaders,
+        },
+        body: JSON.stringify({ text, action }),
+        signal: controller.signal,
+      });
+    } catch (e) {
+      if (controller.signal.aborted) throw new Error('Text processing timeout');
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
+
     if (!response.ok) {
       const errorText = await response.text();
       console.error('Text processing error:', errorText);
       throw new Error(`Text processing failed: ${response.status}`);
     }
-    
+
     const result = await response.json();
     console.log('Text processing result length:', result.text.length);
     return result;
@@ -473,6 +493,79 @@ export const voiceIntentApi = {
       const errorText = await response.text();
       console.error('Voice intent classification error:', errorText);
       throw new Error(`Voice intent classification failed: ${response.status}`);
+    }
+
+    return response.json();
+  },
+};
+
+// A4 artifact extraction (backend /api/extract-artifacts). The full transcript stays the note;
+// these are additive suggestions. Every item arrives with a server-verified source_span - any
+// item the model fabricated was already dropped server-side, so the client only renders.
+export type ExtractionConfidence = 'high' | 'low';
+
+export interface ExtractedItem {
+  text: string;
+  source_span: string;
+  confidence: ExtractionConfidence;
+}
+
+export interface ExtractedEventSuggestion {
+  title: string;
+  start_time: string;
+  end_time?: string | null;
+  location?: string;
+  confidence: ExtractionConfidence;
+  source_span: string;
+}
+
+export interface ExtractedTripSuggestion {
+  name: string;
+  source_span: string;
+  events: ExtractedEventSuggestion[];
+}
+
+export interface ExtractArtifactsResult {
+  note_content: string;
+  events: ExtractedEventSuggestion[];
+  shopping_items: ExtractedItem[];
+  checklist_items: ExtractedItem[];
+  trip: ExtractedTripSuggestion | null;
+}
+
+export const artifactExtractionApi = {
+  extract: async (
+    transcript: string,
+    referenceDate: string,
+    timezone: string,
+    timeoutMs = 20000,
+  ): Promise<ExtractArtifactsResult> => {
+    const authHeaders = await getAuthHeaders();
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let response: Response;
+    try {
+      response = await fetch(`${BACKEND_API_BASE_URL}/extract-artifacts`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...authHeaders,
+        },
+        body: JSON.stringify({ transcript, reference_date: referenceDate, timezone }),
+        signal: controller.signal,
+      });
+    } catch (e) {
+      if (controller.signal.aborted) throw new Error('Artifact extraction timeout');
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Artifact extraction error:', errorText);
+      throw new Error(`Artifact extraction failed: ${response.status}`);
     }
 
     return response.json();

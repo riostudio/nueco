@@ -120,6 +120,21 @@ export default function CalendarSyncSettingsScreen() {
           </View>
         </View>
 
+        <TouchableOpacity
+          testID="google-calendar-settings-btn"
+          style={[s.card, { marginTop: 20 }]}
+          onPress={() => router.push('/google-calendar-settings' as any)}
+        >
+          <View style={s.toggleRow}>
+            <MaterialIcons name="event" size={24} color={C.textSec} />
+            <View style={{ flex: 1, marginLeft: 16 }}>
+              <Text style={s.rowLabelPlain}>Google Calendar</Text>
+              <Text style={s.rowSub}>Sync two-way with a Google calendar of your choice</Text>
+            </View>
+            <MaterialIcons name="chevron-right" size={22} color={C.borderSub} />
+          </View>
+        </TouchableOpacity>
+
         {enabled && (
           <View style={[s.card, { marginTop: 20 }]}>
             <Text style={s.sectionLabel}>Calendars to sync</Text>

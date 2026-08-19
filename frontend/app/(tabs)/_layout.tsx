@@ -10,6 +10,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { hasAnalyticsDecision } from '../../src/analytics';
 import { registerForPushNotifications, unregisterPushNotifications, refreshRecurringReminders } from '../../src/notifications';
 import { runCalendarSync } from '../../src/calendarSync';
+import { isGoogleConnectAvailable, isGoogleConnected } from '../../src/google/auth';
 import { registerCalendarSyncTaskAsync } from '../../src/calendarSyncTask';
 import { refreshRecurringDeviceCalendarEntries } from '../../src/deviceCalendarSync';
 import { C } from '../../src/theme';
@@ -52,10 +53,10 @@ export default function TabLayout() {
   // Register this device for reminder push notifications once we're in the app (authenticated).
   useEffect(() => { registerForPushNotifications(); }, []);
 
-  // First-run GDPR opt-in: if the user hasn't answered the analytics prompt yet, show it as a
-  // full screen before they use the app. Once that's decided, a second first-run gate: if Daily
-  // Brew is flag-enabled and this account hasn't seen its intro yet, show that too. Runs after the
-  // analytics gate resolves, not instead of / racing it.
+  // First-run gates, in order: analytics consent (legal), Google Calendar connect (one-time
+  // permission ask), voice capture (the core "first note" moment). Anything that is a preference
+  // with a safe default (daily lift, reminder voice) is deliberately NOT here - those live in
+  // settings, where the user can find them once they've experienced the feature they configure.
   useEffect(() => {
     if (!user) return;
     hasAnalyticsDecision().then(async (decided) => {
@@ -63,67 +64,31 @@ export default function TabLayout() {
         router.replace('/analytics-consent' as Href);
         return;
       }
-      // Onboarding is for genuinely NEW accounts. The "seen" flags below live in AsyncStorage,
-      // which survives an app update and is wiped on uninstall - correct fresh-install semantics,
-      // except for one case they can't cover: someone who already had the app and updates INTO
-      // this build has never had the flag set either, so they'd be told to "capture your first
-      // note" while sitting on a library of them.
-      //
-      // The signal for that is the ACCOUNT'S AGE, not what's in local storage. An earlier version
-      // of this checked "does this device have any notes?", which was wrong: clearLocalData()
-      // only runs on account deletion, never on logout, so a user who logged out and registered
-      // a fresh account still had the previous account's notes on disk - and the whole flow was
-      // silently skipped for a brand-new signup. created_at belongs to the account itself, so
-      // switching accounts, logging out, or reinstalling can't confuse it.
-      const voiceKey = `voice_onboarding_seen:${user.id}`;
-      const liftKey = `daily_lift_onboarding_seen:${user.id}`;
-      const [voiceSeenRaw, liftSeenRaw, reminderSeenRaw] = await Promise.all([
-        AsyncStorage.getItem(voiceKey),
-        AsyncStorage.getItem(liftKey),
-        AsyncStorage.getItem(`reminder_voice_onboarding_seen:${user.id}`),
-      ]);
-      if (!voiceSeenRaw || !liftSeenRaw || !reminderSeenRaw) {
-        const createdAt = user.created_at ? new Date(user.created_at).getTime() : NaN;
-        const accountAgeMs = Number.isFinite(createdAt) ? Date.now() - createdAt : 0;
-        // A week is generous for someone who registers and doesn't open the app for a few days,
-        // while anyone whose account predates that is plainly not a first-time user. An
-        // unparseable created_at falls through to showing onboarding rather than hiding it.
-        if (accountAgeMs > 7 * 24 * 60 * 60 * 1000) {
-          await AsyncStorage.multiSet([
-            [voiceKey, '1'], [liftKey, '1'],
-            [`reminder_voice_onboarding_seen:${user.id}`, '1'],
-          ]).catch(() => {});
+      // Placed BEFORE the account-age skip on purpose - existing accounts updating into this
+      // build get asked once too.
+      if (isGoogleConnectAvailable()) {
+        const googleSeen = await AsyncStorage.getItem(`google_connect_onboarding_seen:${user.id}`);
+        if (!googleSeen && !(await isGoogleConnected().catch(() => false))) {
+          router.replace('/google-connect-intro' as Href);
           return;
         }
       }
-
-      // Voice onboarding comes first: its whole job is getting a first note captured by voice,
-      // which is worth strictly more than a feature intro and shouldn't queue behind one.
-      const voiceSeen = voiceSeenRaw;
-      if (!voiceSeen) {
+      // Voice onboarding is for genuinely NEW accounts, and the signal for that is the ACCOUNT'S
+      // AGE, not local storage: clearLocalData() only runs on account deletion, never on logout,
+      // so a device can hold a previous account's notes while the logged-in account is brand new.
+      // created_at belongs to the account itself, so switching accounts or reinstalling can't
+      // confuse it. A week is generous for someone who registers and doesn't open the app for a
+      // few days; an unparseable created_at falls through to showing onboarding.
+      const voiceKey = `voice_onboarding_seen:${user.id}`;
+      if (!(await AsyncStorage.getItem(voiceKey))) {
+        const createdAt = user.created_at ? new Date(user.created_at).getTime() : NaN;
+        const accountAgeMs = Number.isFinite(createdAt) ? Date.now() - createdAt : 0;
+        if (accountAgeMs > 7 * 24 * 60 * 60 * 1000) {
+          await AsyncStorage.setItem(voiceKey, '1').catch(() => {});
+          return;
+        }
         router.replace('/voice-onboarding' as Href);
-        return;
       }
-      // The daily-lift step follows the first note. Deliberately NOT gated on
-      // user.daily_brew_enabled: that flag is server-resolved and fails closed, so gating on it
-      // meant the step could silently never appear - the toggles here are all client-side content
-      // (verse/quote are bundled; news just stores a preference), so there's nothing to gate.
-      // The dedicated daily-lift screen was merged into news-source-settings (one screen, two
-      // modes) - `?onboarding=1` is what makes it the onboarding step, and it writes `liftKey`
-      // itself on either Skip or confirm.
-      if (!liftSeenRaw) {
-        router.replace('/news-source-settings?onboarding=1' as Href);
-        return;
-      }
-      // Reminder voice comes after the daily lift - both are "how do you want Nueco to reach you"
-      // questions, and they read better together than split across the flow.
-      const reminderVoiceSeen = await AsyncStorage.getItem(`reminder_voice_onboarding_seen:${user.id}`);
-      if (!reminderVoiceSeen) {
-        router.replace('/reminder-voice' as Href);
-        return;
-      }
-      const onboardingSeen = await AsyncStorage.getItem(`daily_brew_onboarding_seen:${user.id}`);
-      if (user.daily_brew_enabled && !onboardingSeen) router.replace('/daily-brew-intro' as Href);
     }).catch(() => {});
   }, [user]);
 

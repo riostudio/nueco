@@ -11,7 +11,8 @@ import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { useNavigation } from '@react-navigation/native';
-import { useAudioRecorder, AudioModule, RecordingPresets, setAudioModeAsync } from 'expo-audio';
+import { useAudioRecorder, AudioModule, RecordingPresets, setAudioModeAsync, createAudioPlayer } from 'expo-audio';
+import * as Speech from 'expo-speech';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 // Not react-native's own `Share` nor expo-sharing: neither can combine file attachments with a
@@ -22,22 +23,33 @@ import RNShare from 'react-native-share';
 import * as WebBrowser from 'expo-web-browser';
 import * as Print from 'expo-print';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { notesApi, eventsApi, transcribeApi, textProcessApi, voiceIntentApi, attachmentsApi, uploadAttachmentWithProgress, type UploadFile } from '../src/api';
+import { notesApi, eventsApi, textProcessApi, voiceIntentApi, artifactExtractionApi, attachmentsApi, uploadAttachmentWithProgress, type UploadFile } from '../src/api';
 import { PdfExtractorWebView, type PdfExtractorApi } from '../src/pdf/PdfExtractorWebView';
 import { RecordingWaveform } from '../src/components/RecordingWaveform';
+import { createSilencePauseVad, DEFAULT_SILENCE_PAUSE_CONFIG } from '../src/audio/vad';
+import { saveRecording, markTranscribed, sweepExpiredRecordings, saveTranscript, linkRecordingToNote, getRecordingsForNote, getAnnouncementPref } from '../src/audio/recordingStore';
+import type { AudioFileRecord } from '../src/audio/retention';
+import { CONVERSATION_MODE_ENABLED, isSessionOverCap } from '../src/audio/conversation';
+import { NoteAudioPlayer } from '../src/components/NoteAudioPlayer';
+import { ConversationConsentModal } from '../src/components/ConversationConsentModal';
 import { loadDek } from '../src/crypto/keystore';
 import { decryptFileToTemp } from '../src/crypto/attachmentCrypto';
 import { setPendingVoiceExtraction } from '../src/pendingVoiceEvents';
-import { parseChecklistFromSpeech, buildChecklistHtml } from '../src/checklistFromSpeech';
+import { parseChecklistFromSpeech, buildChecklistHtml, isShoppingListRequest } from '../src/checklistFromSpeech';
+import { formatTextLocally } from '../src/text/localSmartFormat';
 import { looksLikeScheduling } from '../src/voice/schedulingHints';
+import { classifyLocally } from '../src/voice/localIntentClassifier';
+import { transcribeAudio, ModelNotReadyError } from '../src/audio/transcriptionRouter';
 import { takePendingSketch } from '../src/pendingSketch';
 import { takePendingLinkedEventIds } from '../src/pendingLinkedEvents';
 import { decryptEventsFromServer } from '../src/crypto/eventCrypto';
 import { RadialProgress, SharedPostCard, Button } from '../src/components';
+import { StructuredReveal } from '../src/components/StructuredReveal';
+import { REVEAL_DURATION_MS } from '../src/revealSpec';
 import NoteImageCanvas from '../src/components/NoteImageCanvas';
 import { useNoteObjects } from '../src/useNoteObjects';
 import { decryptNoteFromServer } from '../src/crypto/noteCrypto';
-import { createNoteOffline, updateNoteOffline, deleteNoteOffline, getLocalNotes, processSyncQueue, isNewer } from '../src/offlineSync';
+import { createNoteOffline, updateNoteOffline, deleteNoteOffline, getLocalNotes, processSyncQueue, isNewer, resolveNoteId, isNetworkAvailable, enqueueOfflineClassify, createArtifactRecords, removeArtifactRecordByIds, getArtifactsForNote, removeArtifactRecordsByRef, enqueueOfflineStructure, applyStructuredContent, setStructureCompleteListener, isOnline, type OfflineStructureItem, type ArtifactType } from '../src/offlineSync';
 import { takePendingShareDraft, peekPendingShareDraft } from '../src/share/pendingShareDraft';
 import { parseSourcePost, serializeSourcePost, type SourcePost } from '../src/share/socialSource';
 import { unfurl, needsUnfurl } from '../src/share/unfurl';
@@ -70,7 +82,36 @@ import {
   trackVoiceRecordingCancelled,
   trackVoiceTranscriptionInserted,
   trackOnboardingStep,
+  newCaptureId,
+  trackRevealFired,
+  trackSaveOutcome,
+  trackExtractionResult,
+  trackArtifactDismissed,
+  markSegmentEnd,
+  trackSegmentLatency,
 } from '../src/analytics';
+
+// Audible start/stop cues for voice capture (plan.md M7 / Play compliance): a rising pair of
+// tones when the mic opens, a falling pair when it closes, so capture state is unmistakable even
+// before looking at the screen. These are cosmetic - the waveform, elapsed time and the Android
+// foreground notification below are the authoritative indicators - so playback failures are
+// swallowed rather than allowed to block recording itself.
+const RECORD_START_CHIME = require('../assets/sounds/record_start.wav');
+const RECORD_STOP_CHIME = require('../assets/sounds/record_stop.wav');
+function playRecordingChime(source: number) {
+  try {
+    const player = createAudioPlayer(source);
+    const sub = player.addListener('playbackStatusUpdate', (status) => {
+      if (status.didJustFinish) {
+        sub.remove();
+        player.remove();
+      }
+    });
+    player.play();
+  } catch {
+    // Chime is a nicety, not a dependency of capture.
+  }
+}
 
 // Extension → MIME, aligned with the backend's attachment allowlist. Used to recover a usable
 // content type when the picker reports none (Android cloud/content URIs often omit it, which
@@ -206,6 +247,22 @@ type EditorUiState = {
   isTaskListActive: boolean; isTableActive: boolean;
   isReady: boolean; canUndo: boolean; canRedo: boolean;
 };
+
+// A5: additive suggestions from A4 extraction (/api/extract-artifacts). High confidence =
+// auto-populated as an artifact and dismissible; low confidence = one-tap "add this?" question.
+// Never silent auto-add at low confidence.
+interface ArtifactSuggestion {
+  key: string;
+  type: ArtifactType;
+  label: string;
+  detail?: string;
+  confidence: 'high' | 'low';
+  source_span: string;
+  captureId: string;
+  /** Ids of the artifact records already persisted for this suggestion (high-confidence items
+   * immediately, low-confidence on confirm). Empty until then; dismissal deletes exactly these. */
+  recordIds: string[];
+}
 
 // The TenTap rich-text body, isolated so the bridge is created with the note's content as
 // `initialContent`. That's the reliable way to load existing content: `setContent` after mount
@@ -571,6 +628,9 @@ export default function EditorScreen() {
   const [isPinned, setIsPinned] = useState(false);
   const [linkedEventIds, setLinkedEventIds] = useState<string[]>([]);
   const [linkedEvents, setLinkedEvents] = useState<CalendarEvent[]>([]);
+  // A1: trips this note's voice capture produced, resolved from the artifact store for the
+  // in-note card render.
+  const [tripCards, setTripCards] = useState<{ id: string; label: string }[]>([]);
   const [showEventPicker, setShowEventPicker] = useState(false);
   const [pickerEvents, setPickerEvents] = useState<CalendarEvent[]>([]);
   const [loadingPickerEvents, setLoadingPickerEvents] = useState(false);
@@ -580,12 +640,22 @@ export default function EditorScreen() {
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isProcessingText, setIsProcessingText] = useState(false);
-  const [showAiSuggestion, setShowAiSuggestion] = useState(false);
   // The dictation just inserted, plus the note's content immediately before it. Together they let
   // "Tidy up" replace that dictation in place rather than appending a tidied duplicate.
   const [lastDictation, setLastDictation] = useState<string | null>(null);
   const [preTidyContent, setPreTidyContent] = useState<string | null>(null);
-  const [transcribedText, setTranscribedText] = useState('');
+  // A5: a capture's before->after transition plays through the shared StructuredReveal overlay
+  // instead of swapping the editor content instantly; the editor swap happens at animation
+  // COMPLETE, which is also when reveal_fired fires (A0 semantics).
+  const [editorReveal, setEditorReveal] = useState<{ item: OfflineStructureItem; html: string; viaQueue: boolean } | null>(null);
+  const editorRevealRef = useRef<{ item: OfflineStructureItem; html: string; viaQueue: boolean } | null>(null);
+  editorRevealRef.current = editorReveal;
+  // The structured block currently in the note for the last dictation - backs the one-tap
+  // "View original" and no-confirm "Revert" controls in the tidy bar.
+  const [lastStructured, setLastStructured] = useState<{ rawText: string; html: string } | null>(null);
+  const [showingOriginal, setShowingOriginal] = useState(false);
+  // A5: A4 extraction suggestions for the latest capture(s) in this note, newest batch appended.
+  const [artifactSuggestions, setArtifactSuggestions] = useState<ArtifactSuggestion[]>([]);
   const [images, setImages] = useState<string[]>([]);
   // A social post shared into the app (Instagram/Facebook/…) rendered as a card above the body.
   const [sourcePost, setSourcePost] = useState<SourcePost | null>(null);
@@ -611,14 +681,138 @@ export default function EditorScreen() {
   const [pdfImportProgress, setPdfImportProgress] = useState<{ done: number; total: number }>({ done: 0, total: 0 });
   // isMeteringEnabled is required for getStatus().metering to be populated - without it the
   // live waveform has nothing real to draw and would be decoration.
-  const audioRecorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true });
+  // Capture runs under expo-audio's microphone-type foreground service (a persistent
+  // "recording" notification with a Stop action) so an active mic is never invisible to the
+  // user - the Play-compliance requirement from plan.md M7. On Android that service needs
+  // POST_NOTIFICATIONS granted at runtime, and prepare() throws if it is not, so the service is
+  // only attached when the permission is actually available; without it we still record, just
+  // without the notification (the in-app waveform/clock remain the indicator).
+  const [notifReady, setNotifReady] = useState(Platform.OS !== 'android');
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const Notifications = require('expo-notifications');
+        const { granted } = await Notifications.getPermissionsAsync();
+        if (!cancelled) setNotifReady(granted);
+      } catch {
+        if (!cancelled) setNotifReady(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  const audioRecorder = useAudioRecorder({
+    ...RecordingPresets.HIGH_QUALITY,
+    isMeteringEnabled: true,
+  });
   const getMetering = useCallback(() => {
     try { return audioRecorder.getStatus?.()?.metering; } catch { return undefined; }
   }, [audioRecorder]);
+
+  // Silence segmentation while capturing (plan.md M4). The VAD tracks sustained silence vs
+  // speech; the recorder itself has no resume API so we don't pause it - the state drives a
+  // live "you've gone quiet" hint instead, so dead air is visible rather than silently
+  // recorded. Natural pauses under ~0.9s never trip it (segment, do not strip). Probe
+  // interval/window are zeroed so the indicator re-evaluates every tick instead of waiting
+  // out recorder-probe timing it doesn't use.
+  const vadRef = useRef(createSilencePauseVad({ ...DEFAULT_SILENCE_PAUSE_CONFIG, probeIntervalMs: 0, probeWindowMs: 120 }));
+  const [captureSilent, setCaptureSilent] = useState(false);
+  useEffect(() => {
+    if (!isRecording) {
+      vadRef.current.reset();
+      setCaptureSilent(false);
+      return;
+    }
+    const id = setInterval(() => {
+      const vad = vadRef.current;
+      const now = Date.now();
+      if (vad.state === 'paused') vad.shouldProbe(now);
+      vad.process(getMetering(), now);
+      const silent = vad.state !== 'listening';
+      setCaptureSilent(prev => (prev === silent ? prev : silent));
+    }, 120);
+    return () => clearInterval(id);
+  }, [isRecording, getMetering]);
   
   // Recording duration tracking for analytics
   const recordingStartTime = useRef<number | null>(null);
+  // A0 instrumentation: opaque per-capture correlation id (no content) joining
+  // save_outcome / reveal_fired / extraction_result for one voice capture.
+  const captureIdRef = useRef<string>(newCaptureId());
   const lastRecordingDuration = useRef<number>(0);
+
+  // Live clock shown next to the waveform while capturing - makes "recording right now"
+  // unambiguous in-app (plan.md M7), complementing the audible chime and, on Android, the
+  // persistent foreground notification.
+  const [recordingElapsed, setRecordingElapsed] = useState(0);
+  useEffect(() => {
+    if (!isRecording) {
+      setRecordingElapsed(0);
+      return;
+    }
+    const started = recordingStartTime.current ?? Date.now();
+    setRecordingElapsed(0);
+    const id = setInterval(() => {
+      setRecordingElapsed(Math.max(0, Math.floor((Date.now() - started) / 1000)));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [isRecording]);
+
+  // The note's linked source recordings for the M6 audio player - a list, because a note can
+  // collect several captures (record, transcribe, record again) and every one of them must
+  // survive reopening the note. Fresh captures append here; existing ones load from the
+  // on-device manifest. pendingRecordingIdsRef holds ids captured before the note has an id to
+  // link to (persistLocal does the linking for brand-new notes). Set at capture time - NOT after
+  // transcription - so leaving mid-transcription can't orphan the recording.
+  const [noteAudios, setNoteAudios] = useState<AudioFileRecord[]>([]);
+  const pendingRecordingIdsRef = useRef<string[]>([]);
+  useEffect(() => {
+    // Only meaningful for an existing note; a fresh capture populates noteAudios directly.
+    if (!noteId || noteId === 'new') return;
+    let cancelled = false;
+    getRecordingsForNote(noteId).then(recs => {
+      if (!cancelled && recs.length > 0) setNoteAudios(recs);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [noteId]);
+
+  // Conversation mode (plan.md M8, scaffolded behind CONVERSATION_MODE_ENABLED): whether the
+  // CURRENT recording session is a conversation capture, and the per-session consent prompt
+  // visibility. The 24h retention inversion and diarization ride on this flag at stop time.
+  const conversationModeRef = useRef(false);
+  const speakerUnavailableNotifiedRef = useRef(false);
+  const [consentVisible, setConsentVisible] = useState(false);
+  // Audible announcement pref (plan/11), re-read each time the consent prompt opens so a change
+  // in Settings takes effect without remounting the editor.
+  const [announcementOn, setAnnouncementOn] = useState(false);
+  useEffect(() => {
+    if (!consentVisible) return;
+    getAnnouncementPref().then(setAnnouncementOn).catch(() => setAnnouncementOn(false));
+  }, [consentVisible]);
+  // Re-entrancy guards: a second tap landing inside the prepare window used to issue a second
+  // native prepare against the still-held session ("already been prepared" rejection).
+  const recordingBusyRef = useRef(false);
+  const stoppingRecordingRef = useRef(false);
+  // Watchdog above is declared before stopRecording; the ref bridges the ordering.
+  const stopRecordingRef = useRef<(() => void) | null>(null);
+  // Session length cap (45 min): conversation sessions auto-stop rather than running on
+  // indefinitely with other people's voices on tape.
+  useEffect(() => {
+    if (!isRecording || !conversationModeRef.current) return;
+    const id = setInterval(() => {
+      const started = recordingStartTime.current;
+      if (started && isSessionOverCap(Date.now() - started)) {
+        clearInterval(id);
+        Alert.alert(
+          'Time limit reached',
+          'Conversation recordings stop at 45 minutes. Start a new one to keep going.',
+          [{ text: 'OK', onPress: () => { stopRecordingRef.current?.(); } }],
+        );
+      }
+    }, 5000);
+    return () => clearInterval(id);
+  }, [isRecording]);
 
   const [showTagPicker, setShowTagPicker] = useState(false);
   const [newTagName, setNewTagName] = useState('');
@@ -1020,6 +1214,26 @@ export default function EditorScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [linkedEventIds]);
 
+  // A1: refresh this note's trip artifact cards every focus. The store is file-backed, so the
+  // cards survive backgrounding and app kill without any extra bookkeeping here.
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      const id = noteIdRef.current;
+      if (id && id !== 'new') {
+        getArtifactsForNote(resolveNoteId(id))
+          .then(arts => {
+            if (!active) return;
+            setTripCards(
+              arts.filter(a => a.type === 'trip' && !!a.ref_id).map(a => ({ id: a.ref_id, label: a.label })),
+            );
+          })
+          .catch(() => {});
+      }
+      return () => { active = false; };
+    }, []),
+  );
+
   // Refresh note and linked event data when screen comes back into focus
   // This ensures event details are shown after creating/editing an event
   useFocusEffect(
@@ -1191,6 +1405,17 @@ export default function EditorScreen() {
       await updateNoteOffline(noteIdRef.current, draft, { push: opts.push });
       trackNoteEdited();
     }
+    // Link voice captures made before the note had an id, on EVERY persist path (create or
+    // update), so their players survive reopening the note. Resolve the id first: createNoteOffline
+    // with push:true swaps temp->server id inside the call, so noteIdRef can be stale by now.
+    if (noteIdRef.current && pendingRecordingIdsRef.current.length > 0) {
+      const ids = pendingRecordingIdsRef.current;
+      pendingRecordingIdsRef.current = [];
+      const linkedTo = resolveNoteId(noteIdRef.current);
+      for (const recId of ids) {
+        await linkRecordingToNote(recId, linkedTo).catch(() => {});
+      }
+    }
   }, []);
 
   // Queues a persistLocal() call after whatever's currently chained in savePromiseRef, so
@@ -1279,7 +1504,9 @@ export default function EditorScreen() {
             titleRef.current || contentRef.current || linkedEventIdsRef.current.length > 0 ||
             imagesRef.current.length > 0 || attachmentsRef.current.length > 0 || sourcePostRef.current
           );
-          if (isCreatedRef.current ? !!noteIdRef.current : hasContent) {
+          // Pending voice captures count as content: leaving mid-transcription must still create
+          // the note so persistLocal links them and they survive reopen.
+          if (isCreatedRef.current ? !!noteIdRef.current : (hasContent || pendingRecordingIdsRef.current.length > 0)) {
             await enqueuePersist({ push: true });
             processSyncQueue().catch(() => {});
           }
@@ -1298,8 +1525,9 @@ export default function EditorScreen() {
     await syncLatestContent(); // capture the very last keystrokes before persisting
     try {
       const hasContent = !!(titleRef.current || contentRef.current || linkedEventIdsRef.current.length > 0 || imagesRef.current.length > 0 || attachmentsRef.current.length > 0 || sourcePostRef.current);
-      // Persist locally; only create a brand-new note if it actually has content.
-      if (isCreatedRef.current ? !!noteIdRef.current : hasContent) {
+      // Persist locally; only create a brand-new note if it actually has content - where a
+      // pending voice capture also counts, so leaving mid-transcription doesn't orphan it.
+      if (isCreatedRef.current ? !!noteIdRef.current : (hasContent || pendingRecordingIdsRef.current.length > 0)) {
         // Local-only and awaited (fast, always succeeds offline) - `push: true` here used to
         // await a full network round-trip before back navigation could even start, making every
         // "edit a note, tap back" visibly hang on the network. The queue flush below already
@@ -1401,6 +1629,231 @@ export default function EditorScreen() {
     contentRef.current = nextContent;
     saveImmediately();
   };
+
+  // ---- Auto-structuring (A2) ------------------------------------------------
+  // Raw words settle into the note the instant capture ends; structuring (smart_format) then
+  // runs automatically in the background - no tap, no modal. The swap is guarded everywhere:
+  // it only fires while the raw block is still verbatim present, so anything the user has
+  // typed since is never lost. Offline, the job queues in offlineSync and applies itself on
+  // reconnect.
+
+  // Must produce exactly what appendToEditorStreamed inserts, byte for byte - it is the guard
+  // string the swap matches against.
+  const buildRawBlockHtml = (text: string) =>
+    (text || '').trim().split(/\n{2,}/).map(p => `<p>${escapeHtml(p).replace(/\n/g, '<br>')}</p>`).join('');
+
+  // A5: the before->after transition plays through the shared StructuredReveal overlay (same
+  // component and timing as onboarding - SHARED SPEC). The editor swap is deferred to the
+  // animation's COMPLETE callback, which is also when reveal_fired fires: the event measures the
+  // transition, not the API response (A0 semantics).
+  const beginEditorReveal = useCallback((item: OfflineStructureItem, html: string, viaQueue: boolean) => {
+    if (!contentRef.current.includes(item.rawBlockHtml)) {
+      trackSaveOutcome({ capture_id: item.id, raw_save: 'ok', structuring: 'skipped', offline_queued: viaQueue });
+      return;
+    }
+    setEditorReveal({ item, html, viaQueue });
+  }, []);
+
+  const onEditorRevealComplete = useCallback(() => {
+    const reveal = editorRevealRef.current;
+    if (!reveal) return;
+    setEditorReveal(null);
+    // A keystroke in the gap means the raw block is gone from the view - keep what the user
+    // typed instead of stomping it.
+    if (!contentRef.current.includes(reveal.item.rawBlockHtml)) {
+      trackSaveOutcome({ capture_id: reveal.item.id, raw_save: 'ok', structuring: 'skipped', offline_queued: reveal.viaQueue });
+      return;
+    }
+    const nextContent = contentRef.current.replace(reveal.item.rawBlockHtml, reveal.html);
+    contentRef.current = nextContent;
+    editorApiRef.current?.setContent(nextContent);
+    saveImmediately();
+    setLastStructured({ rawText: reveal.item.rawText, html: reveal.html });
+    trackRevealFired({
+      capture_id: reveal.item.id,
+      surface: 'editor',
+      reveal_duration_ms: REVEAL_DURATION_MS,
+      trigger: reveal.viaQueue ? 'offline_sync_complete' : 'structuring_complete',
+    });
+    trackSegmentLatency();
+    trackSaveOutcome({ capture_id: reveal.item.id, raw_save: 'ok', structuring: 'ok', offline_queued: reveal.viaQueue });
+  }, [saveImmediately]);
+
+  // One-tap revert-to-raw, no confirmation dialog (A5 fail condition: a confirmation step).
+  // The raw words are never deleted - they live in lastStructured for as long as the bar shows.
+  const revertToOriginal = () => {
+    if (!lastStructured) return;
+    if (contentRef.current.includes(lastStructured.html)) {
+      const nextContent = contentRef.current.replace(lastStructured.html, buildRawBlockHtml(lastStructured.rawText));
+      contentRef.current = nextContent;
+      editorApiRef.current?.setContent(nextContent);
+      saveImmediately();
+    }
+    setLastStructured(null);
+    setShowingOriginal(false);
+    setLastDictation(null);
+    setPreTidyContent(null);
+  };
+
+  // True when a process-text call failed because the backend's AI quota is exhausted (HTTP 429,
+  // e.g. OpenAI credits at zero) - the one failure the on-device formatter can stand in for.
+  const isQuotaError = (e: unknown) => e instanceof Error && /failed: 429/.test(e.message);
+
+  const structureCapture = async (rawText: string) => {
+    const captureId = captureIdRef.current;
+    const noteId = resolveNoteId(noteIdRef.current);
+    if (!noteId || noteId === 'new') return;
+    const item: OfflineStructureItem = {
+      id: captureId,
+      noteId,
+      rawText,
+      rawBlockHtml: buildRawBlockHtml(rawText),
+      timestamp: new Date().toISOString(),
+    };
+    if (!(await isNetworkAvailable())) {
+      await enqueueOfflineStructure(item);
+      return;
+    }
+    try {
+      const res = await textProcessApi.processText(rawText, 'smart_format');
+      const html = (res?.text || '').trim();
+      if (!html) {
+        trackSaveOutcome({ capture_id: captureId, raw_save: 'ok', structuring: 'skipped', offline_queued: false });
+        return;
+      }
+      // Flush anything typed since the insert so the store guard sees fresher content than the
+      // streamed save, then swap at the store level; the visible before->after transition plays
+      // next via the shared reveal overlay (A5).
+      await enqueuePersist({ push: false }).catch(() => {});
+      const applied = await applyStructuredContent(item, html);
+      if (applied) beginEditorReveal(item, html, false);
+      else trackSaveOutcome({ capture_id: captureId, raw_save: 'ok', structuring: 'skipped', offline_queued: false });
+    } catch (e) {
+      // Cloud structuring died while online - typically the shared OpenAI quota hitting zero
+      // (HTTP 429). A checklist-shaped capture can still be structured on-device; anything else
+      // keeps its raw words, same as a structuring skip.
+      if (isQuotaError(e) && (await isOnline())) {
+        const localHtml = formatTextLocally(rawText);
+        if (localHtml) {
+          await enqueuePersist({ push: false }).catch(() => {});
+          const applied = await applyStructuredContent(item, localHtml);
+          if (applied) beginEditorReveal(item, localHtml, false);
+          else trackSaveOutcome({ capture_id: captureId, raw_save: 'ok', structuring: 'skipped', offline_queued: false });
+          return;
+        }
+      }
+      console.error('Auto-structuring failed:', e);
+      trackSaveOutcome({
+        capture_id: captureId,
+        raw_save: 'ok',
+        // The 45s client timeout surfaces as an abort; distinguish where detectable, else fail.
+        structuring: e instanceof Error && /timeout|abort/i.test(e.message) ? 'timeout' : 'fail',
+        offline_queued: false,
+      });
+    }
+  };
+
+  // ---- A5: artifact suggestions (A4 extraction) -----------------------------
+  // Runs per capture, fully non-blocking: the note already holds the raw words and structuring
+  // has its own path. Extraction failure/timeout just means no suggestions. High-confidence
+  // items are auto-populated as artifact records (dismissible); low-confidence items ask a
+  // one-tap question and are NEVER persisted without that tap.
+
+  const confidenceNumber = (c: 'high' | 'low') => (c === 'high' ? 1 : 0.5);
+
+  const fetchArtifactSuggestions = async (rawText: string) => {
+    const captureId = captureIdRef.current;
+    const noteId = resolveNoteId(noteIdRef.current);
+    if (!noteId || noteId === 'new') return;
+    if (!(await isNetworkAvailable())) return; // server-side feature; offline captures keep the note only
+    try {
+      const referenceDate = new Date().toISOString().slice(0, 10);
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const res = await artifactExtractionApi.extract(rawText, referenceDate, timezone);
+
+      const batch: ArtifactSuggestion[] = [];
+      res.events.forEach((ev, i) => batch.push({
+        key: `${captureId}-ev-${i}`, type: 'event', label: ev.title,
+        detail: formatEventDateTime(ev.start_time),
+        confidence: ev.confidence, source_span: ev.source_span, captureId, recordIds: [],
+      }));
+      res.shopping_items.forEach((it, i) => batch.push({
+        key: `${captureId}-sh-${i}`, type: 'shopping_item', label: it.text,
+        confidence: it.confidence, source_span: it.source_span, captureId, recordIds: [],
+      }));
+      res.checklist_items.forEach((it, i) => batch.push({
+        key: `${captureId}-ck-${i}`, type: 'checklist_item', label: it.text,
+        confidence: it.confidence, source_span: it.source_span, captureId, recordIds: [],
+      }));
+      if (res.trip) batch.push({
+        key: `${captureId}-trip`, type: 'trip', label: res.trip.name,
+        detail: res.trip.events.length ? `${res.trip.events.length} events` : undefined,
+        confidence: 'high', source_span: res.trip.source_span, captureId, recordIds: [],
+      });
+
+      // A0 instrumentation: what extraction produced for this capture - metadata only.
+      trackExtractionResult({
+        capture_id: captureId,
+        artifact_types: batch.map(s => s.type),
+        item_count: batch.length,
+        confidences: batch.map(s => confidenceNumber(s.confidence)),
+        source_span_present_count: batch.filter(s => !!s.source_span).length,
+        source_span_missing_count: batch.filter(s => !s.source_span).length,
+      });
+
+      if (batch.length === 0) return;
+
+      // High confidence: auto-populate as artifact records now; the bar shows them dismissible.
+      const auto = batch.filter(s => s.confidence === 'high');
+      if (auto.length > 0) {
+        const created = await createArtifactRecords(auto.map(s => ({
+          note_id: noteId, type: s.type, ref_id: '', label: s.label, source_span: s.source_span,
+        })));
+        auto.forEach((s, i) => { s.recordIds = created[i] ? [created[i].id] : []; });
+      }
+      setArtifactSuggestions(prev => [...prev, ...batch]);
+    } catch (e) {
+      console.error('Artifact extraction failed:', e);
+    }
+  };
+
+  const acceptArtifactSuggestion = async (key: string) => {
+    const suggestion = artifactSuggestions.find(s => s.key === key);
+    if (!suggestion) return;
+    const noteId = resolveNoteId(noteIdRef.current);
+    if (!noteId || noteId === 'new') return;
+    await createArtifactRecords([{
+      note_id: noteId, type: suggestion.type, ref_id: '', label: suggestion.label,
+      source_span: suggestion.source_span,
+    }]).catch(() => {});
+    setArtifactSuggestions(prev => prev.filter(s => s.key !== key));
+  };
+
+  const dismissArtifactSuggestion = async (key: string) => {
+    const suggestion = artifactSuggestions.find(s => s.key === key);
+    if (!suggestion) return;
+    if (suggestion.recordIds.length > 0) {
+      await removeArtifactRecordByIds(suggestion.recordIds).catch(() => {});
+    }
+    trackArtifactDismissed({
+      capture_id: suggestion.captureId,
+      artifact_type: suggestion.type,
+      confidence: confidenceNumber(suggestion.confidence),
+    });
+    setArtifactSuggestions(prev => prev.filter(s => s.key !== key));
+  };
+
+  useEffect(() => {
+    // A queued (offline-captured) structuring job finishing while this editor is open: swap the
+    // raw block for the structured one on screen. Jobs for other notes are ignored here - the
+    // store already applied them.
+    setStructureCompleteListener(applied => {
+      const myId = resolveNoteId(noteIdRef.current);
+      if (!myId || resolveNoteId(applied.item.noteId) !== myId) return;
+      beginEditorReveal(applied.item, applied.structuredHtml, applied.viaQueue);
+    });
+    return () => setStructureCompleteListener(null);
+  }, [beginEditorReveal]);
 
   // Format date/time for display
   const formatEventDateTime = (dateStr: string): string => {
@@ -1656,37 +2109,106 @@ export default function EditorScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onboarding, editorUi.isReady]);
 
-  const startRecording = async () => {
+  const startRecording = async (conversation = false) => {
+    if (recordingBusyRef.current || isRecording) return;
+    recordingBusyRef.current = true;
     try {
+      conversationModeRef.current = conversation;
       const status = await AudioModule.requestRecordingPermissionsAsync();
       if (!status.granted) {
         Alert.alert('Permission Needed', 'Microphone access is required for voice input.');
         return;
       }
-      
-      // Configure audio mode for recording (required on iOS)
+
+      // The foreground service that carries the persistent "recording" notification needs
+      // POST_NOTIFICATIONS on Android 13+, and prepare() refuses to run without it. If we do not
+      // have it yet, ask now; either way recording proceeds - with it, this or the next session
+      // gets the notification, without it the in-app indicators carry the signal alone.
+      if (Platform.OS === 'android' && !notifReady) {
+        try {
+          const Notifications = require('expo-notifications');
+          const res = await Notifications.requestPermissionsAsync();
+          if (res.granted) setNotifReady(true);
+        } catch {
+          // Notifications module unavailable - record without the foreground notification.
+        }
+      }
+
+      playRecordingChime(RECORD_START_CHIME);
+
+      // Configure audio mode for recording (required on iOS). On Android,
+      // allowsBackgroundRecording is what flips the recorder onto the microphone-type foreground
+      // service with its persistent notification; it needs POST_NOTIFICATIONS (checked above) and
+      // is a no-op on iOS, so only set it there.
       await setAudioModeAsync({
         playsInSilentMode: true,
         allowsRecording: true,
+        ...(Platform.OS === 'android' && notifReady ? { allowsBackgroundRecording: true } : {}),
       });
-      
-      await audioRecorder.prepareToRecordAsync();
+
+      try {
+        await audioRecorder.prepareToRecordAsync();
+      } catch (prepareError) {
+        // Native rejects prepare while a previous session is still held ("Stop or release the
+        // current session before preparing again") - force-clear it and retry, dropping the
+        // background-recording mode as a second fallback.
+        console.warn('Prepare failed, resetting recorder and retrying:', prepareError);
+        await audioRecorder.stop().catch(() => {});
+        try {
+          await audioRecorder.prepareToRecordAsync();
+        } catch {
+          await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: false });
+          await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: true });
+          await audioRecorder.prepareToRecordAsync();
+        }
+      }
+      if (conversation) {
+        // Optional audible announcement (plan/11). Spoken BEFORE record() opens the mic, and we
+        // wait for it to finish, so the announcement itself is never captured by the recording
+        // it announces.
+        const announce = await getAnnouncementPref().catch(() => false);
+        if (announce) {
+          await new Promise<void>(resolve => {
+            let settled = false;
+            const finish = () => { if (!settled) { settled = true; resolve(); } };
+            try {
+              Speech.speak('Recording started for note-taking.', { onDone: finish, onStopped: finish, onError: finish });
+            } catch {
+              finish();
+            }
+            setTimeout(finish, 4000);
+          });
+        }
+      }
       audioRecorder.record();
       setIsRecording(true);
       // Track recording start time for duration calculation
       recordingStartTime.current = Date.now();
+      // Fresh correlation id per capture (A0 instrumentation).
+      captureIdRef.current = newCaptureId();
       // Track voice recording started event
       trackVoiceRecordingStarted();
     } catch (e) {
       console.error('Recording start failed:', e);
-      Alert.alert('Couldn’t start recording', 'Have another go whenever.');
+      const detail = e instanceof Error ? e.message : String(e);
+      Alert.alert('Couldn’t start recording', `Have another go whenever. (${detail})`);
+    } finally {
+      recordingBusyRef.current = false;
     }
   };
 
   const stopRecording = async () => {
+    if (stoppingRecordingRef.current) return;
+    stoppingRecordingRef.current = true;
     try {
+      const wasConversation = conversationModeRef.current;
+      conversationModeRef.current = false;
       setIsRecording(false);
       await audioRecorder.stop();
+      // Leave record mode before the chime - with allowsRecording still set, iOS routes playback
+      // through the receiver and the stop cue can come out muted or silent.
+      await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: false }).catch(() => {});
+      playRecordingChime(RECORD_STOP_CHIME);
       const uri = audioRecorder.uri;
       console.log('Recording stopped. URI:', uri);
       
@@ -1706,11 +2228,70 @@ export default function EditorScreen() {
         return;
       }
 
+      // Copy the capture into managed storage (plan.md M5/M6) so it survives cache eviction
+      // and can back the note's audio player. A save failure must never block dictation -
+      // the transcript still works without the recording.
+      const savedRecording = await saveRecording(uri, { conversation: wasConversation }).catch(e => {
+        console.warn('Could not keep a copy of the recording:', e);
+        Alert.alert(
+          'Heads up',
+          `The audio copy could not be kept - the words will still land in the note. (${e instanceof Error ? e.message : e})`,
+        );
+        return null;
+      });
+
+      // Register the capture with the note NOW, before the (slow, network-bound) transcription.
+      // Waiting until after transcribe meant a user who left mid-transcription orphaned the
+      // recording: no note id yet, no pending link, and it never surfaced on reopen.
+      // resolveNoteId: the note may already have swapped from its temp local id to the server
+      // id at sync time; linking to the stale id would orphan the player on reopen.
+      if (savedRecording) {
+        if (noteIdRef.current) {
+          await linkRecordingToNote(savedRecording.id, resolveNoteId(noteIdRef.current)).catch(() => {});
+        } else {
+          pendingRecordingIdsRef.current.push(savedRecording.id);
+        }
+      }
+
       setIsTranscribing(true);
-      console.log('Starting transcription for:', uri);
-      const result = await transcribeApi.transcribe(uri);
-      console.log('Transcription result:', result);
-      setTranscribedText(result.text);
+      // A0 instrumentation: the VAD segment boundary for a full capture is the moment the
+      // recording stops and the segment is handed to transcription. segment_latency measures
+      // from here to the reveal (trackSegmentLatency fires at reveal time).
+      markSegmentEnd();
+      const result = await transcribeAudio(uri, wasConversation ? { diarization: 'speaker' } : {});
+      if (wasConversation && !result.words?.some(w => w.speaker) && !speakerUnavailableNotifiedRef.current) {
+        speakerUnavailableNotifiedRef.current = true;
+        Alert.alert(
+          'Speaker labels unavailable',
+          result.engine === 'local'
+            ? 'You’re offline, so this conversation was transcribed as a single voice - speaker labels need a connection. The audio is kept on this device so you can still check who said what.'
+            : 'This server isn’t set up for speaker separation yet, so this capture was transcribed as a single voice. The audio is kept so you can still check who said what.',
+        );
+      }
+      if (savedRecording) {
+        // Marks the recording eligible for deletion under the "immediate" retention
+        // preference, then applies it if that preference is active.
+        await markTranscribed(savedRecording.id).catch(() => {});
+        sweepExpiredRecordings().catch(() => {});
+        // Persist word timings + duration + full text, then surface the player (plan.md M6).
+        // A persist failure must not block dictation - the transcript still works.
+        await saveTranscript(savedRecording.id, result.words, recordingDuration, result.text).catch(() => {});
+        const rec = {
+          ...savedRecording,
+          words: result.words,
+          durationSeconds: recordingDuration,
+          transcriptText: result.text,
+        };
+        // Append (replacing any same-id entry) so a second/third capture shows alongside the
+        // earlier ones instead of silently overwriting the previous player.
+        setNoteAudios(prev => [...prev.filter(r => r.id !== rec.id), rec]);
+        // The note may have been created while transcription was in flight (autosave ran in
+        // between); link now if the capture is still queued as pending.
+        if (noteIdRef.current && pendingRecordingIdsRef.current.includes(savedRecording.id)) {
+          pendingRecordingIdsRef.current = pendingRecordingIdsRef.current.filter(i => i !== savedRecording.id);
+          await linkRecordingToNote(savedRecording.id, resolveNoteId(noteIdRef.current)).catch(() => {});
+        }
+      }
 
       // "Create me a checklist: buy milk, walk the dog" - recognized locally (no AI call) and
       // inserted as Nueco's real interactive checklist, not run through the organize/summarize
@@ -1719,6 +2300,47 @@ export default function EditorScreen() {
       if (checklistMatch.isChecklist) {
         setIsTranscribing(false);
         appendHtmlToEditor(buildChecklistHtml(checklistMatch.items));
+        // A1: per-item artifact records, file-backed so they survive backgrounding/kill. The
+        // items themselves render as the taskList markup above; the records are the durable
+        // ledger of what this capture produced. Wait for the persist queue so a brand-new note
+        // has its real id before the records reference it.
+        await enqueuePersist({ push: false }).catch(() => {});
+        const artifactNoteId = resolveNoteId(noteIdRef.current);
+        const artifactType = isShoppingListRequest(result.text) ? 'shopping_item' : 'checklist_item';
+        if (artifactNoteId && artifactNoteId !== 'new') {
+          createArtifactRecords(
+            checklistMatch.items.filter(Boolean).map(label => ({
+              note_id: artifactNoteId,
+              type: artifactType,
+              ref_id: '',
+              label,
+            })),
+          ).catch(() => {});
+        }
+        // A0 instrumentation: local checklist parse is an extraction result in its own right.
+        // source_span doesn't exist pre-A4, so every item counts as missing.
+        trackExtractionResult({
+          capture_id: captureIdRef.current,
+          artifact_types: checklistMatch.items.map(() => artifactType),
+          item_count: checklistMatch.items.length,
+          confidences: [],
+          source_span_present_count: 0,
+          source_span_missing_count: checklistMatch.items.length,
+        });
+        trackRevealFired({
+          capture_id: captureIdRef.current,
+          surface: 'editor',
+          reveal_duration_ms: 0, // instant insert today; A5's transition will report the real duration
+          trigger: 'structuring_complete',
+        });
+        trackSegmentLatency();
+        trackSaveOutcome({
+          capture_id: captureIdRef.current,
+          raw_save: 'ok',
+          structuring: 'skipped',
+          offline_queued: !(await isNetworkAvailable()),
+          engine: result.engine,
+        });
         const wordCount = result.text.split(/\s+/).filter(Boolean).length;
         trackVoiceTranscriptionInserted(lastRecordingDuration.current, wordCount);
         usedVoiceRef.current = true;
@@ -1744,10 +2366,52 @@ export default function EditorScreen() {
         try {
           const referenceDate = new Date().toISOString().slice(0, 10); // device's local "today"
           const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-          const classification = await voiceIntentApi.classify(result.text, referenceDate, timezone);
+          // Offline captures are classified by the on-device rule engine; online captures use
+          // the cloud classifier but fall back to the same rule engine if it fails, instead of
+          // silently losing the event. Local results queue a quiet cloud second pass for when
+          // connectivity returns (the transcript only - never the audio).
+          let classification;
+          let classifiedLocally = false;
+          if (result.engine === 'local') {
+            classification = classifyLocally(result.text, referenceDate, timezone);
+            classifiedLocally = true;
+          } else {
+            try {
+              classification = await voiceIntentApi.classify(result.text, referenceDate, timezone);
+            } catch (classifyErr) {
+              console.error('Cloud classification failed, using local rules:', classifyErr);
+              classification = classifyLocally(result.text, referenceDate, timezone);
+              classifiedLocally = true;
+            }
+          }
           if (classification.intent !== 'note' && classification.events.length > 0) {
             setIsTranscribing(false);
-            setPendingVoiceExtraction({ transcript: result.text, noteId: noteIdRef.current, ...classification });
+            if (classifiedLocally) {
+              await enqueueOfflineClassify({
+                id: captureIdRef.current,
+                transcript: result.text,
+                localResult: classification,
+                referenceDate,
+                timezone,
+                timestamp: new Date().toISOString(),
+              });
+            }
+            setPendingVoiceExtraction({
+              transcript: result.text,
+              noteId: noteIdRef.current,
+              ...classification,
+              ...(classifiedLocally ? { localClassifyQueueId: captureIdRef.current } : {}),
+            });
+            // A0 instrumentation: what classification extracted from this capture. The trip
+            // artifact arrives via classification.trip in voice-event's staging; events map 1:1.
+            trackExtractionResult({
+              capture_id: captureIdRef.current,
+              artifact_types: classification.events.map(() => 'event' as const),
+              item_count: classification.events.length,
+              confidences: [], // classifier exposes no confidence pre-A4
+              source_span_present_count: 0,
+              source_span_missing_count: classification.events.length,
+            });
             router.push('/voice-event');
             return;
           }
@@ -1764,7 +2428,6 @@ export default function EditorScreen() {
       // attempt is exactly when they're most likely to hesitate and say nothing.
       if (!result.text.trim()) {
         setIsTranscribing(false);
-        setTranscribedText('');
         Alert.alert('Nothing came through that time', 'Have another go whenever.');
         return;
       }
@@ -1774,20 +2437,57 @@ export default function EditorScreen() {
       // The old flow opened a "Transcription Complete! Want AI to improve this?" modal on EVERY
       // capture - a decision imposed on the common path, when the overwhelmingly common answer is
       // "just keep what I said". Now the words appear immediately (streamed, see
-      // appendToEditorStreamed) and tidying becomes an optional follow-up action instead of a
-      // gate. The content snapshot below is what makes that follow-up undo-able: tidying replaces
-      // exactly this dictation, leaving anything already in the note untouched.
+      // appendToEditorStreamed) and structuring happens automatically in the background (A2) -
+      // never as a gate, and never at the cost of the raw words, which are saved first.
       setIsTranscribing(false);
       setPreTidyContent(contentRef.current);
       setLastDictation(result.text);
+      setLastStructured(null);
+      setShowingOriginal(false);
       insertTranscription(result.text);
       await appendToEditorStreamed(result.text);
+      // A0 instrumentation: raw capture settled in the note. Structuring is automatic (A2) and
+      // reports its own save_outcome later under the same capture_id.
+      trackSaveOutcome({
+        capture_id: captureIdRef.current,
+        raw_save: 'ok',
+        structuring: 'skipped',
+        offline_queued: !(await isNetworkAvailable()),
+        engine: result.engine,
+      });
+      // Non-blocking: runs after the raw words are safe. Offline it queues; online it swaps the
+      // raw block in place when the structured version arrives.
+      structureCapture(result.text).catch(e => console.error('structureCapture failed:', e));
+      // Also non-blocking: additive artifact suggestions from A4 extraction. Failures are silent -
+      // the note already has the words.
+      fetchArtifactSuggestions(result.text).catch(e => console.error('Artifact suggestions failed:', e));
     } catch (e) {
       console.error('Transcription failed:', e);
-      Alert.alert('Couldn’t turn that into words', 'Have another go whenever.');
+      if (e instanceof ModelNotReadyError) {
+        // Offline with no on-device model: point at the Settings toggle instead of a dead end.
+        Alert.alert(
+          'You’re offline',
+          'Offline transcription isn’t set up on this device yet. Download the on-device model in Settings, or reconnect to transcribe in the cloud.',
+          [
+            { text: 'Later', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => router.push('/settings') },
+          ],
+        );
+      } else {
+        Alert.alert('Couldn’t turn that into words', 'Have another go whenever.');
+      }
       setIsTranscribing(false);
+      trackSaveOutcome({
+        capture_id: captureIdRef.current,
+        raw_save: 'fail',
+        structuring: 'skipped',
+        offline_queued: false,
+      });
+    } finally {
+      stoppingRecordingRef.current = false;
     }
   };
+  stopRecordingRef.current = stopRecording;
 
   // Handle AI text processing
   // Records that voice content landed in this note. Hoisted to component scope because dictation
@@ -1804,58 +2504,66 @@ export default function EditorScreen() {
   };
 
   /**
-   * Replaces the dictation that was just inserted with an AI-tidied version.
-   *
-   * Rebuilds from the snapshot taken before insertion rather than appending, so tidying swaps the
-   * dictation in place instead of adding a second copy - and anything already in the note is
-   * untouched.
+   * Manual fallback for the dictation just inserted: replaces the raw block with a smart_format
+   * version, but only while the raw words are still verbatim on screen. With A2 auto-structuring
+   * this normally no-ops (the swap already happened); it matters when that pass skipped or failed.
    */
   const tidyLastDictation = async () => {
     if (!lastDictation || preTidyContent === null) return;
     setIsProcessingText(true);
     try {
-      const result = await textProcessApi.processText(lastDictation, 'organize');
+      const result = await textProcessApi.processText(lastDictation, 'smart_format');
       const tidied = (result?.text || '').trim();
       if (!tidied) return;
-      contentRef.current = preTidyContent;
-      await appendToEditorStreamed(tidied);
-      // One tidy per dictation: the snapshot is spent, and a second pass would re-tidy
-      // already-tidied text against a snapshot that no longer matches what's on screen.
-      setLastDictation(null);
-      setPreTidyContent(null);
+      const rawBlock = buildRawBlockHtml(lastDictation);
+      if (!contentRef.current.includes(rawBlock)) return; // auto-structuring (or the user) got here first
+      // The before->after transition plays through the shared reveal overlay (A5); the editor
+      // swap and reveal_fired/segment_latency/save_outcome all fire at animation COMPLETE.
+      beginEditorReveal(
+        {
+          id: captureIdRef.current,
+          noteId: resolveNoteId(noteIdRef.current) || 'new',
+          rawText: lastDictation,
+          rawBlockHtml: rawBlock,
+          timestamp: new Date().toISOString(),
+        },
+        tidied,
+        false,
+      );
     } catch (e) {
+      // Quota-exhausted cloud (HTTP 429) while online: a checklist-shaped dictation can still be
+      // tidied on-device. lastDictation stays set so a retry works once credits return.
+      if (isQuotaError(e) && (await isOnline())) {
+        const localHtml = formatTextLocally(lastDictation);
+        if (localHtml) {
+          const rawBlock = buildRawBlockHtml(lastDictation);
+          if (contentRef.current.includes(rawBlock)) {
+            beginEditorReveal(
+              {
+                id: captureIdRef.current,
+                noteId: resolveNoteId(noteIdRef.current) || 'new',
+                rawText: lastDictation,
+                rawBlockHtml: rawBlock,
+                timestamp: new Date().toISOString(),
+              },
+              localHtml,
+              false,
+            );
+            return;
+          }
+        }
+      }
       console.error('Tidy failed:', e);
       Alert.alert('Couldn’t tidy that one', 'Your note is exactly as you left it.');
+      trackSaveOutcome({
+        capture_id: captureIdRef.current,
+        raw_save: 'ok',
+        // Timeout surfaces as a fetch/abort error; distinguish where detectable, else fail.
+        structuring: e instanceof Error && /timeout|abort/i.test(e.message) ? 'timeout' : 'fail',
+        offline_queued: !(await isNetworkAvailable()),
+      });
     } finally {
       setIsProcessingText(false);
-    }
-  };
-
-  const handleAiProcess = async (action: 'organize' | 'summarize' | 'keep') => {
-    setShowAiSuggestion(false);
-    
-    if (action === 'keep') {
-      // Streamed rather than pasted - see appendToEditorStreamed's comment on why dictation
-      // specifically benefits from the text arriving word by word.
-      insertTranscription(transcribedText);
-      await appendToEditorStreamed(transcribedText);
-      return;
-    }
-
-    try {
-      setIsProcessingText(true);
-      const result = await textProcessApi.processText(transcribedText, action);
-      insertTranscription(result.text);
-      await appendToEditorStreamed(result.text);
-    } catch (e) {
-      console.error('Text processing failed:', e);
-      Alert.alert('Couldn’t tidy that one', 'Your words went in as you said them.');
-      // Fallback to original text
-      insertTranscription(transcribedText);
-      await appendToEditorStreamed(transcribedText);
-    } finally {
-      setIsProcessingText(false);
-      setTranscribedText('');
     }
   };
 
@@ -2247,6 +2955,8 @@ export default function EditorScreen() {
             }
             setLinkedEventIds(remainingIds);
             setLinkedEvents(prev => prev.filter(ev => ev.id !== eventId));
+            // A1: the event's artifact record dies with the event (unlinking keeps it).
+            removeArtifactRecordsByRef(eventId).catch(() => {});
           },
         },
       ],
@@ -2479,6 +3189,43 @@ export default function EditorScreen() {
             multiline
           />
 
+          {/* Source recording players (plan.md M6): first-class audio at the top of the note,
+              each with the transcript it produced grouped beneath it. One player per capture -
+              a note can hold several - shown right after recording or on reopening the note.
+              Keyed by id so each player owns its own audio source. */}
+          {noteAudios.map(rec => (
+            <NoteAudioPlayer
+              key={rec.id}
+              recording={rec}
+              noteTitle={title}
+              transcriptText={rec.transcriptText ?? ''}
+              onRemove={() => setNoteAudios(prev => prev.filter(r => r.id !== rec.id))}
+            />
+          ))}
+
+          {/* Live capture shows in the same card slot as the finished players: the waveform card
+              while recording, a loading card while transcribing, then it becomes the player. */}
+          {isRecording && (
+            <View style={s.voiceCard}>
+              <View style={s.recordingClockRow}>
+                <View style={s.recordingDot} />
+                <Text style={s.recordingClock}>
+                  Recording {Math.floor(recordingElapsed / 60)}:{String(recordingElapsed % 60).padStart(2, '0')}
+                </Text>
+              </View>
+              <RecordingWaveform getMetering={getMetering} />
+              {captureSilent && (
+                <Text style={s.silenceHint}>Quiet so far - keep talking when you are ready</Text>
+              )}
+            </View>
+          )}
+          {isTranscribing && (
+            <View style={[s.voiceCard, s.voiceCardLoading]}>
+              <ActivityIndicator size="small" color={C.primary} />
+              <Text style={s.transcribingText}>Turning that into words</Text>
+            </View>
+          )}
+
           {/* Tag chips + picker */}
           {(tags.length > 0 || showTagPicker) && (
             <View style={s.tagsSection}>
@@ -2643,6 +3390,26 @@ export default function EditorScreen() {
                   </ScrollView>
                 </View>
               )}
+
+              {/* A1: trips this capture produced, from the file-backed artifact store - survives
+                  backgrounding/kill like the linked-event cards below. */}
+              {tripCards.map((trip) => (
+                <TouchableOpacity
+                  key={`trip-${trip.id || trip.label}`}
+                  testID={`trip-card-${trip.id}`}
+                  style={s.eventCardInBox}
+                  onPress={() => router.push('/trips')}
+                >
+                  <View style={s.eventHeader}>
+                    <MaterialIcons name="flight" size={24} color={C.secondary} />
+                    <Text style={s.eventHeaderText}>Trip</Text>
+                    <MaterialIcons name="chevron-right" size={24} color={C.borderSub} />
+                  </View>
+                  <View style={s.eventDetails}>
+                    <Text style={s.eventTitle}>{trip.label}</Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
 
               {/* Calendar Links / Event Details - a note can carry any number of linked events
                   now, each rendered as its own card (was capped at one). Rendered inside the
@@ -2986,53 +3753,140 @@ export default function EditorScreen() {
               lifts this whole bottomBar above the keyboard, so this stays pinned right on top of
               it instead of disappearing while composing. */}
           <View style={s.voiceBar}>
-            {isTranscribing ? (
-              <View style={s.transcribing}>
-                <ActivityIndicator size="small" color={C.primary} />
-                <Text style={s.transcribingText}>Turning that into words</Text>
-              </View>
-            ) : isRecording ? (
-              // While recording, the live waveform replaces the static button label: it responds
-              // to the actual mic input, so it doubles as proof the app is hearing you.
-              <View style={s.recordingBar}>
-                <RecordingWaveform getMetering={getMetering} />
-                <Button
-                  testID="voice-input-btn"
-                  variant="cta"
-                  tone="danger"
-                  icon="stop"
-                  label="Stop"
-                  onPress={stopRecording}
-                />
-              </View>
-            ) : (
+            {isRecording ? (
+              // Live waveform + clock now render up in the note's card slot; the bar just
+              // carries the stop action.
               <Button
                 testID="voice-input-btn"
                 variant="cta"
-                tone={isRecording ? 'danger' : 'default'}
-                icon={isRecording ? 'stop' : 'mic'}
-                label={isRecording ? 'Stop' : 'Press to talk'}
-                onPress={isRecording ? stopRecording : startRecording}
+                tone="danger"
+                icon="stop"
+                label="Stop"
+                onPress={stopRecording}
               />
+            ) : (
+              <View style={{ alignSelf: 'stretch', gap: 8 }}>
+                <Button
+                  testID="voice-input-btn"
+                  variant="cta"
+                  tone="default"
+                  icon="mic"
+                  label="Press to talk"
+                  // Blocked while the previous capture is still transcribing - the loading
+                  // state is visible in the card slot above.
+                  disabled={isTranscribing}
+                  onPress={() => startRecording()}
+                />
+                {/* Conversation mode (plan.md M8): enabled for testing - the consent prompt
+                    blocks before the mic opens, every session (plan/11). */}
+                {CONVERSATION_MODE_ENABLED && (
+                  <TouchableOpacity testID="conversation-mode-btn" style={s.conversationLink} onPress={() => setConsentVisible(true)}>
+                    <MaterialIcons name="groups" size={16} color={C.textSec} />
+                    <Text style={s.conversationLinkText}>Record a conversation</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
             )}
           </View>
         </View>
       </KeyboardAvoidingView>
       
-      {/* AI Processing Indicator */}
-      {/* Offered AFTER the words are already in the note, not as a gate before them. Dismissable,
-          and it disappears once used or once the user moves on - a suggestion, not a decision the
-          user has to make on every single capture. */}
-      {lastDictation && !isProcessingText && (
-        <View style={s.tidyBar}>
-          <Text style={s.tidyBarText} numberOfLines={1}>Added from your voice</Text>
-          <TouchableOpacity onPress={tidyLastDictation} style={s.tidyBarAction} testID="tidy-dictation">
-            <MaterialIcons name="auto-fix-high" size={16} color={C.primary} />
-            <Text style={s.tidyBarActionText}>Tidy up</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => { setLastDictation(null); setPreTidyContent(null); }} hitSlop={10}>
-            <MaterialIcons name="close" size={18} color={C.borderSub} />
-          </TouchableOpacity>
+      {/* A5 reveal: the capture's before->after transition, same shared component and timing as
+          onboarding. The editor content swaps at animation COMPLETE - never an instant swap. */}
+      {editorReveal && (
+        <View style={s.revealOverlay}>
+          <StructuredReveal
+            before={
+              <View style={s.revealCard}>
+                <Text style={s.revealCardText}>{editorReveal.item.rawText}</Text>
+              </View>
+            }
+            structuredHtml={editorReveal.html}
+            revealing
+            onComplete={onEditorRevealComplete}
+          />
+        </View>
+      )}
+
+      {/* Confirm+revert control (A5): structuring already happened automatically, so this is not
+          an offer to tidy - it is the user's hold over what just changed. View original expands
+          the raw dictation (always available, never deleted); Revert restores it in one tap with
+          no confirmation step. The legacy "Tidy up" button only shows when auto-structuring
+          failed or was skipped, as a retry on the still-raw words. */}
+      {lastDictation && !isProcessingText && !editorReveal && (
+        lastStructured ? (
+          showingOriginal ? (
+            <View style={s.originalCard}>
+              <Text style={s.originalLabel}>What you said</Text>
+              <Text style={s.originalText} numberOfLines={5}>{lastStructured.rawText}</Text>
+              <TouchableOpacity onPress={() => setShowingOriginal(false)} style={s.tidyBarAction} hitSlop={10} testID="back-from-original">
+                <MaterialIcons name="arrow-back" size={16} color={C.primary} />
+                <Text style={s.tidyBarActionText}>Back to the note</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={s.tidyBar}>
+              <Text style={s.tidyBarText} numberOfLines={1}>Added from your voice</Text>
+              <TouchableOpacity onPress={() => setShowingOriginal(true)} style={s.tidyBarAction} hitSlop={10} testID="view-original">
+                <MaterialIcons name="history" size={16} color={C.primary} />
+                <Text style={s.tidyBarActionText}>View original</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={revertToOriginal} style={s.tidyBarAction} hitSlop={10} testID="revert-to-original">
+                <MaterialIcons name="undo" size={16} color={C.primary} />
+                <Text style={s.tidyBarActionText}>Revert</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => { setLastDictation(null); setPreTidyContent(null); setLastStructured(null); }} hitSlop={10}>
+                <MaterialIcons name="close" size={18} color={C.borderSub} />
+              </TouchableOpacity>
+            </View>
+          )
+        ) : (
+          <View style={s.tidyBar}>
+            <Text style={s.tidyBarText} numberOfLines={1}>Added from your voice</Text>
+            <TouchableOpacity onPress={tidyLastDictation} style={s.tidyBarAction} testID="tidy-dictation">
+              <MaterialIcons name="auto-fix-high" size={16} color={C.primary} />
+              <Text style={s.tidyBarActionText}>Tidy up</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => { setLastDictation(null); setPreTidyContent(null); }} hitSlop={10}>
+              <MaterialIcons name="close" size={18} color={C.borderSub} />
+            </TouchableOpacity>
+          </View>
+        )
+      )}
+
+      {/* A5: A4 extraction suggestions. High confidence = already added, dismissible. Low
+          confidence = one-tap question - never persisted without that tap. */}
+      {artifactSuggestions.length > 0 && !editorReveal && (
+        <View style={s.artifactBar}>
+          <View style={{ flex: 1, gap: 8 }}>
+            {artifactSuggestions.map(suggestion => {
+              const icon = suggestion.type === 'event' ? 'event'
+                : suggestion.type === 'shopping_item' ? 'shopping-cart'
+                : suggestion.type === 'checklist_item' ? 'check-box'
+                : 'flight';
+              return (
+                <View key={suggestion.key} style={s.artifactRow}>
+                  <MaterialIcons name={icon as any} size={16} color={C.textSec} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.tidyBarText} numberOfLines={1}>
+                      {suggestion.confidence === 'high' ? `Added: ${suggestion.label}` : `Add "${suggestion.label}"?`}
+                    </Text>
+                    {suggestion.detail ? (
+                      <Text style={s.artifactDetail} numberOfLines={1}>{suggestion.detail}</Text>
+                    ) : null}
+                  </View>
+                  {suggestion.confidence === 'low' && (
+                    <TouchableOpacity onPress={() => acceptArtifactSuggestion(suggestion.key)} style={s.tidyBarAction} hitSlop={10} testID={`artifact-accept-${suggestion.key}`}>
+                      <MaterialIcons name="add" size={18} color={C.primary} />
+                    </TouchableOpacity>
+                  )}
+                  <TouchableOpacity onPress={() => dismissArtifactSuggestion(suggestion.key)} hitSlop={10} testID={`artifact-dismiss-${suggestion.key}`}>
+                    <MaterialIcons name="close" size={18} color={C.borderSub} />
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
+          </View>
         </View>
       )}
 
@@ -3060,60 +3914,6 @@ export default function EditorScreen() {
         </View>
       )}
 
-      {/* AI Suggestion Modal */}
-      <Modal
-        visible={showAiSuggestion}
-        transparent
-        animationType="fade"
-        onRequestClose={() => handleAiProcess('keep')}
-      >
-        <View style={s.modalOverlay}>
-          <View style={s.aiSuggestionCard}>
-            <Text style={s.aiTitle}>Transcription Complete!</Text>
-            <Text style={s.aiSubtitle}>Would you like AI to improve your text?</Text>
-            
-            <View style={s.aiPreview}>
-              <Text style={s.aiPreviewText} numberOfLines={3}>
-                "{transcribedText.substring(0, 150)}{transcribedText.length > 150 ? '...' : ''}"
-              </Text>
-            </View>
-            
-            <TouchableOpacity
-              style={s.aiOption}
-              onPress={() => handleAiProcess('organize')}
-            >
-              <MaterialIcons name="format-list-bulleted" size={24} color={C.secondary} />
-              <View style={s.aiOptionText}>
-                <Text style={s.aiOptionTitle}>Organize</Text>
-                <Text style={s.aiOptionDesc}>Structure with paragraphs, bullets & headings</Text>
-              </View>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              style={s.aiOption}
-              onPress={() => handleAiProcess('summarize')}
-            >
-              <MaterialIcons name="compress" size={24} color={C.secondary} />
-              <View style={s.aiOptionText}>
-                <Text style={s.aiOptionTitle}>Summarize</Text>
-                <Text style={s.aiOptionDesc}>Condense into key points</Text>
-              </View>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              style={[s.aiOption, s.aiOptionKeep]}
-              onPress={() => handleAiProcess('keep')}
-            >
-              <MaterialIcons name="check" size={24} color={C.textSec} />
-              <View style={s.aiOptionText}>
-                <Text style={[s.aiOptionTitle, { color: C.textSec }]}>Keep as is</Text>
-                <Text style={s.aiOptionDesc}>Use the original transcription</Text>
-              </View>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-      
       {/* Image Picker Bottom Sheet */}
       <Modal
         visible={showImagePicker}
@@ -3229,7 +4029,7 @@ export default function EditorScreen() {
             <MaterialIcons name="delete" size={48} color={C.error} style={{ marginBottom: 16 }} />
             <Text style={s.deleteModalTitle}>Delete this note?</Text>
             <Text style={s.deleteModalMessage}>
-              Are you sure you want to delete "{title || 'this note'}"? This action cannot be undone.
+              Are you sure you want to delete &quot;{title || 'this note'}&quot;? This action cannot be undone.
             </Text>
             <View style={s.deleteModalButtons}>
               <TouchableOpacity
@@ -3294,6 +4094,17 @@ export default function EditorScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Conversation-mode attestation (plan/11): blocks before the mic opens, every session.
+          Only reachable while CONVERSATION_MODE_ENABLED; rendered regardless so the state stays
+          inert rather than conditionally mounted mid-flow. */}
+      <ConversationConsentModal
+        visible={consentVisible}
+        announcementEnabled={announcementOn}
+        onStartConversation={() => { setConsentVisible(false); startRecording(true); }}
+        onStartSingleVoice={() => { setConsentVisible(false); startRecording(false); }}
+        onCancel={() => setConsentVisible(false)}
+      />
 
       {/* Headless, zero-sized: parses imported PDFs on-device (see its own file for why a WebView).
           Mounted unconditionally so PDF.js is already parsed and ready by the time the user taps
@@ -3546,7 +4357,58 @@ const s = StyleSheet.create({
     backgroundColor: C.bg, borderWidth: 1, borderColor: C.borderSub + '30',
   },
   tableCtrlLabel: { fontSize: 12, color: C.text },
-  recordingBar: { gap: 10, alignSelf: 'stretch' },
+  recordingClockRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginBottom: 2,
+  },
+  recordingDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: C.danger,
+  },
+  recordingClock: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: C.danger,
+  },
+  conversationLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 4,
+  },
+  conversationLinkText: {
+    fontSize: 13,
+    color: C.textSec,
+    textDecorationLine: 'underline',
+  },
+  silenceHint: {
+    textAlign: 'center',
+    fontSize: 11,
+    color: C.textSec,
+    marginTop: 2,
+  },
+  // Card slot shared by the live waveform, the transcribing loader and (afterwards) the finished
+  // player - styled to match NoteAudioPlayer's card so the handoff reads as one element.
+  voiceCard: {
+    backgroundColor: C.surface,
+    borderWidth: 1,
+    borderColor: C.border,
+    borderRadius: radius.lg,
+    padding: 14,
+    marginBottom: 12,
+    gap: 8,
+  },
+  voiceCardLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   voiceBar: {
     paddingHorizontal: 24, paddingVertical: 12,
     backgroundColor: C.bg,
@@ -3573,10 +4435,6 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  transcribing: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    height: 56,
-  },
   transcribingText: { fontSize: 18, color: C.textSec, marginLeft: 12 },
   // AI Suggestion Modal Styles
   tidyBar: {
@@ -3589,6 +4447,28 @@ const s = StyleSheet.create({
   tidyBarText: { flex: 1, fontSize: 13, color: C.textSec },
   tidyBarAction: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   tidyBarActionText: { fontSize: 14, fontWeight: '600', color: C.primary },
+  // A5 reveal overlay: hosts the shared StructuredReveal transition above the bottom bars.
+  revealOverlay: { position: 'absolute', left: 16, right: 16, bottom: 150 },
+  revealCard: { backgroundColor: C.surfaceHi, borderRadius: 12, padding: 16 },
+  revealCardText: { fontSize: 15, color: C.textSec, lineHeight: 23 },
+  // Expanded "View original" state of the confirm+revert bar.
+  originalCard: {
+    position: 'absolute', left: 16, right: 16, bottom: 96,
+    backgroundColor: C.surfaceHi, borderRadius: 12, padding: 14, gap: 8,
+    shadowColor: '#0A5443', shadowOpacity: 0.12, shadowRadius: 10, shadowOffset: { width: 0, height: 3 },
+    elevation: 3,
+  },
+  originalLabel: { fontSize: 13, fontWeight: '600', color: C.textSec },
+  originalText: { fontSize: 14, color: C.text, lineHeight: 21 },
+  // A5 artifact-suggestion bar: same card look as tidyBar, stacked above it so both can show.
+  artifactBar: {
+    position: 'absolute', left: 16, right: 16, bottom: 150,
+    backgroundColor: C.surfaceHi, borderRadius: 12, paddingVertical: 10, paddingHorizontal: 14,
+    shadowColor: '#0A5443', shadowOpacity: 0.12, shadowRadius: 10, shadowOffset: { width: 0, height: 3 },
+    elevation: 3,
+  },
+  artifactRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  artifactDetail: { fontSize: 11, color: C.textSec, opacity: 0.8 },
   processingOverlay: {
     position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
     backgroundColor: 'rgba(0,0,0,0.5)',
@@ -3659,53 +4539,6 @@ const s = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#FFFFFF',
-  },
-  aiSuggestionCard: {
-    backgroundColor: C.surface,
-    borderRadius: 20,
-    padding: 24,
-    width: '100%',
-    maxWidth: 400,
-  },
-  aiTitle: {
-    fontSize: 24, fontWeight: '700', color: C.text, textAlign: 'center',
-    marginBottom: 8,
-  },
-  aiSubtitle: {
-    fontSize: 16, color: C.textSec, textAlign: 'center',
-    marginBottom: 16,
-  },
-  aiPreview: {
-    backgroundColor: C.bg,
-    padding: 12,
-    borderRadius: 12,
-    marginBottom: 20,
-  },
-  aiPreviewText: {
-    fontSize: 14, color: C.textSec, fontStyle: 'italic',
-  },
-  aiOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-    borderRadius: 12,
-    backgroundColor: C.bg,
-    marginBottom: 12,
-    borderWidth: 2,
-    borderColor: C.borderSub + '40',
-  },
-  aiOptionKeep: {
-    backgroundColor: 'transparent',
-    borderStyle: 'dashed',
-  },
-  aiOptionText: {
-    marginLeft: 16, flex: 1,
-  },
-  aiOptionTitle: {
-    fontSize: 18, fontWeight: '600', color: C.text,
-  },
-  aiOptionDesc: {
-    fontSize: 14, color: C.textSec, marginTop: 2,
   },
   // Image Styles
   imagesContainer: {

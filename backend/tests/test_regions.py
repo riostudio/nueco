@@ -198,3 +198,22 @@ def test_no_forbidden_endpoint_literals_in_backend_source():
         "hardcoded external-service endpoint(s) found outside core/regions.py - "
         "declare them via env instead:\n  - " + "\n  - ".join(offenders)
     )
+
+
+def test_server_boot_gate_runs_before_index_creation():
+    """The residency gate must be the FIRST startup handler. If it registered after
+    index creation (or any handler that touches an external service), a misconfigured
+    deployment would do work before refusing to boot - the whole point of failing
+    closed is that nothing happens first."""
+    server_py = (BACKEND_DIR / "server.py").read_text(encoding="utf-8")
+    gate = server_py.find("def enforce_data_residency")
+    assert gate != -1, "server.py no longer defines the enforce_data_residency startup handler"
+    assert "regions.validate_all()" in server_py[gate:], (
+        "enforce_data_residency no longer calls regions.validate_all()"
+    )
+    indexes = server_py.find("def create_indexes")
+    assert indexes != -1, "server.py no longer defines create_indexes"
+    assert gate < indexes, (
+        "the data-residency startup handler must be registered before create_indexes "
+        "so invalid region configuration aborts the boot before any other work"
+    )

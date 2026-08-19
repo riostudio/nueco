@@ -41,7 +41,7 @@ One-way dependency arrow: infrastructure depends on business logic, never the re
 - **Backend `service.py`** must not import `fastapi`, `starlette`, `UploadFile`, or any `router.py` from another module. Raise plain Python exceptions, never `HTTPException`. Accept bytes/streams, not framework types.
 - **Frontend pure-logic files** (`crypto/*Core.ts`, `recurrence.ts`, `textContent.ts`, sync logic) must not import `react`, `react-native`, `expo-*`, or `@react-native-*`.
 - **Routers only**: parse request, call service, shape response. No business logic in `router.py`.
-- **Cross-boundary data**: Pydantic models (`schemas.py`) or plain dicts/primitives. Never pass raw Motor cursors or framework request/response objects.
+- **Cross-boundary data**: Pydantic models (`schemas.py`) or plain dicts/primitives. Never pass raw Motor cursors or framework request/response objects. Frontend UI ↔ logic boundaries pass plain types from `types.ts` — never component instances, refs, `JSX.Element`, or React event objects.
 - `backend/core/deps.py` holds shared FastAPI dependencies (`get_current_user`, `get_db`) — import from there.
 
 ## Backend module structure

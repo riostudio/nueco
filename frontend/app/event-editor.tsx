@@ -10,6 +10,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { eventsApi, notesApi } from '../src/api';
 import { decryptEventFromServer } from '../src/crypto/eventCrypto';
 import { createEventOffline, updateEventOffline, deleteEventOffline, getLocalEvents, setLocalEventNotificationId, processSyncQueue } from '../src/offlineSync';
+import { saveEventToGoogle, deleteEventFromGoogle, isGoogleSyncActive } from '../src/google/googleSync';
 import { bumpDeviceCalendarSync } from '../src/deviceCalendarSync';
 import { nextOccurrenceOnOrAfter, parseDateOnlyLocal } from '../src/recurrence';
 import { reminderSoundConfig } from '../src/reminderVoice';
@@ -805,6 +806,22 @@ export default function EventEditorScreen() {
     };
   };
 
+  // Fire-and-forget outbound mirror to Google Calendar after a local save. No-op unless the user
+  // has connected a Google account and picked a calendar (see googleSync.isGoogleSyncActive).
+  // We pass the fresh partial data plus the stored copy so saveEventToGoogle can resolve the
+  // google_event_id bridge field written back after the first successful push.
+  const mirrorEventToGoogle = (eventId: string, eventData: Record<string, unknown>): void => {
+    (async () => {
+      try {
+        const stored = (await getLocalEvents()).find((e) => e.id === eventId);
+        const merged = { ...(stored || {}), ...eventData, id: eventId };
+        await saveEventToGoogle(merged as CalendarEvent);
+      } catch (e) {
+        console.warn('Google mirror failed:', e);
+      }
+    })();
+  };
+
   const triggerAutoSave = useCallback(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     setSaveStatus('Unsaved changes');
@@ -828,8 +845,10 @@ export default function EventEditorScreen() {
         await withSaveLock(async () => {
           // Write straight into the device calendar (iOS = Apple Calendar, Android = the Google-synced
           // calendar) natively - no browser redirect. The OS handles syncing to Google/iCloud.
+          // Skipped when Google Calendar sync is connected - that path talks to Google directly
+          // (saveEventToGoogle below), and double-writing would create duplicate entries.
           let newDeviceCalEventId = deviceCalendarEventIdRef.current;
-          if (addToDeviceCal && !isWeb) {
+          if (addToDeviceCal && !isWeb && !(await isGoogleSyncActive())) {
             const recurrence = getRecurrenceValue();
             newDeviceCalEventId = await writeToDeviceCalendar(
               titleRef.current.trim(),
@@ -885,6 +904,9 @@ export default function EventEditorScreen() {
             await updateEventOffline(eventIdRef.current, eventData, { push: true });
           }
 
+          // Outbound Google Calendar mirror (no-op unless Google sync is connected).
+          mirrorEventToGoogle(eventIdRef.current, eventData);
+
           // The reminder scheduled above was built before this event had an id, so its payload
           // carries no eventId and tapping it could not open anything. Now that the id exists,
           // reschedule once so the notification is tappable (speech already worked either way).
@@ -932,7 +954,7 @@ export default function EventEditorScreen() {
             // Write to the device calendar natively (both platforms) before persisting, so a quick
             // back-out still lands the event on the calendar. Idempotent via the stored event id.
             let devId = deviceCalendarEventIdRef.current;
-            if (addToDeviceCal && !isWeb) {
+            if (addToDeviceCal && !isWeb && !(await isGoogleSyncActive())) {
               const recurrence = getRecurrenceValue();
               const written = await writeToDeviceCalendar(
                 titleRef.current.trim(), descriptionRef.current.trim(), locationRef.current.trim(), st, et, devId,
@@ -956,12 +978,16 @@ export default function EventEditorScreen() {
                 const AsyncStorage = require('@react-native-async-storage/async-storage').default;
                 await AsyncStorage.setItem('pendingLinkedEventId', created.id);
               }
+              // Outbound Google Calendar mirror (no-op unless Google sync is connected).
+              mirrorEventToGoogle(created.id, eventData);
             } else {
               // Local-only and awaited, network push fire-and-forget after: unlike the create path
               // above, an update doesn't need the server round-trip's result for anything here, so
               // there's no reason for it to block the tap that triggered this back navigation.
               await updateEventOffline(eventIdRef.current, eventData, { push: false });
               processSyncQueue().catch(() => {});
+              // Outbound Google Calendar mirror (no-op unless Google sync is connected).
+              mirrorEventToGoogle(eventIdRef.current, eventData);
             }
           });
         } catch (e) {
@@ -970,16 +996,14 @@ export default function EventEditorScreen() {
       }
     }
 
-    // `replace` is right when this screen was pushed from the Events tab FAB - it stops Back
-    // returning to a half-built new event. It is wrong when the detail view pushed us here to
-    // edit one field: replacing pops the detail screen off the stack and strands the user on the
-    // Events tab, having lost the event they were reading.
-    if (params.noteId || params.from === 'detail') {
-      router.back();
-    } else {
-      router.replace('/(tabs)/events');
-    }
-  }, [params.noteId, params.from, router, addToDeviceCal, withSaveLock]);
+    // Pop the modal and return to whichever screen pushed us (Events tab, Calendar tab, note
+    // editor, voice capture, or event detail). The old behavior replaced the stack with the
+    // Events tab for FAB-launched edits, but with the modal presentation that rewrite was both
+    // unnecessary (back already lands on the originating tab) and harmful: it reset tab
+    // navigation state mid-dismissal, stranding Calendar-launched users on the Events tab and
+    // flickering frozen tabs' headers on the next tab switch.
+    router.back();
+  }, [router, addToDeviceCal, withSaveLock]);
 
   // ---- Delete ----
 
@@ -990,8 +1014,15 @@ export default function EventEditorScreen() {
     if (!idToDelete) return;
     setDeleting(true);
     try {
-      if (ExpoCalendar && deviceCalendarEventIdRef.current && !isWeb) {
+      // Capture the stored event (with its google_event_id bridge field) BEFORE deleting, so the
+      // Google-side deletion knows what to remove. No-op when the event was never synced there.
+      const stored = (await getLocalEvents()).find((e) => e.id === idToDelete);
+      const googleActive = await isGoogleSyncActive();
+      if (ExpoCalendar && deviceCalendarEventIdRef.current && !isWeb && !googleActive) {
         try { await ExpoCalendar.deleteEventAsync(deviceCalendarEventIdRef.current); bumpDeviceCalendarSync(); } catch {}
+      }
+      if (stored && googleActive) {
+        await deleteEventFromGoogle(stored as CalendarEvent);
       }
       // Deleting the event should also cancel its own scheduled local notification - otherwise
       // it fires later pointing at an event that no longer exists.

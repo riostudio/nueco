@@ -81,6 +81,13 @@ agenthub/agents/youtube/db
 
 # Mobile development
 android-sdk/ -e 
+frontend/android/
+frontend/ios/
+frontend/.build-logs/
+backend/.railway-config-pull-*/
+img9128.jpg
+screenshot-gcp.png
+whatsapp-shot.jpeg
 # Environment files
 *.env
 *.env.*
@@ -311,6 +318,7 @@ frontend/build-*.aab
 frontend/build_archives/
 apk-serve/
 apk-check/
+releases/
 frontend/build-1786612866295.aab
 frontend/build-1786539980852.aab
 frontend/build-1786602540313.apk
@@ -340,3 +348,12 @@ frontend/build-1786749028195.aab
 frontend/build-1786747485339.apk
 frontend/build-1786759598204.aab
 apk-serve/nueco-production.aab
+releases/nueco-production.aab
+releases/nueco-production.apk
+releases/nueco-preview.apk
+releases/nueco-preview.aab
+frontend/build-preview-new.aab
+frontend/build-preview-new.apk
+frontend/build-preview-offline.aab
+frontend/build-preview-offline.apk
+frontend/releases/nueco-preview.apk

@@ -244,6 +244,114 @@ export const trackVoiceTranscriptionInserted = (
 };
 
 // ============================================
+// PHASE 1 INSTRUMENTATION (A0)
+// Content-free by contract: these events carry ONLY booleans, timestamps,
+// counts, enum types, and model metadata (confidence). Never transcript,
+// note, or artifact text — plaintext or otherwise.
+// All per-capture events share `capture_id` (a random correlation id with
+// no content), and PostHog's anonymized distinct id joins them per user to
+// retention cohorts (D2/D7/D30).
+// ============================================
+
+export type ArtifactType = 'event' | 'shopping_item' | 'checklist_item' | 'trip';
+
+/** Opaque per-capture correlation id. No content — random at capture start. */
+export const newCaptureId = (): string =>
+  `cap_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+
+export interface RevealFiredProperties {
+  capture_id: string;
+  /** Where the reveal happened — A3 (onboarding) and A5 (editor) MUST stay comparable. */
+  surface: 'onboarding' | 'editor';
+  /** Wall-clock length of the reveal transition itself. */
+  reveal_duration_ms: number;
+  /** What produced the content being revealed. */
+  trigger: 'structuring_complete' | 'offline_sync_complete';
+}
+
+/** Fires when the reveal transition animation COMPLETES — not when the structuring API responds. */
+export const trackRevealFired = (properties: RevealFiredProperties) => {
+  if (!posthogInstance) return;
+  posthogInstance.capture('reveal_fired', {
+    ...properties,
+    timestamp: new Date().toISOString(),
+  });
+};
+
+export interface ExtractionResultProperties {
+  capture_id: string;
+  artifact_types: ArtifactType[];
+  item_count: number;
+  /** Model confidence per extracted item — metadata, not content. */
+  confidences: number[];
+  source_span_present_count: number;
+  source_span_missing_count: number;
+}
+
+/** Fires once per capture with what extraction produced. */
+export const trackExtractionResult = (properties: ExtractionResultProperties) => {
+  if (!posthogInstance) return;
+  posthogInstance.capture('extraction_result', {
+    ...properties,
+    timestamp: new Date().toISOString(),
+  });
+};
+
+export interface SaveOutcomeProperties {
+  capture_id: string;
+  raw_save: 'ok' | 'fail';
+  structuring: 'ok' | 'fail' | 'timeout' | 'skipped';
+  offline_queued: boolean;
+  /** Which transcription engine handled the capture - metadata, not content. */
+  engine?: 'cloud' | 'local';
+}
+
+/** Fires once per capture when the save path settles. */
+export const trackSaveOutcome = (properties: SaveOutcomeProperties) => {
+  if (!posthogInstance) return;
+  posthogInstance.capture('save_outcome', {
+    ...properties,
+    timestamp: new Date().toISOString(),
+  });
+};
+
+export interface ArtifactDismissedProperties {
+  capture_id: string;
+  artifact_type: ArtifactType;
+  /** Model confidence of the dismissed suggestion — metadata, not content. */
+  confidence: number;
+}
+
+export const trackArtifactDismissed = (properties: ArtifactDismissedProperties) => {
+  if (!posthogInstance) return;
+  posthogInstance.capture('artifact_dismissed', {
+    ...properties,
+    timestamp: new Date().toISOString(),
+  });
+};
+
+// Segment latency: VAD segment-end → artifact appearance. Two half-calls so the
+// start (segment boundary) and end (reveal complete) can live in different flows.
+let segmentEndAt: number | null = null;
+
+/** Call at the VAD segment boundary (pause detected / segment handed to transcription). */
+export const markSegmentEnd = () => {
+  segmentEndAt = Date.now();
+};
+
+/** Call when the segment's artifacts appear; fires segment_latency and clears the marker. */
+export const trackSegmentLatency = () => {
+  if (segmentEndAt === null) return;
+  const segment_latency_ms = Date.now() - segmentEndAt;
+  segmentEndAt = null;
+  if (!posthogInstance) return;
+  posthogInstance.capture('segment_latency', {
+    segment_latency_ms,
+    timestamp: new Date().toISOString(),
+  });
+};
+
+// ============================================
 // GENERIC EVENT TRACKING
 // ============================================
 
@@ -279,4 +387,11 @@ export default {
   trackVoiceTranscriptionInserted,
   trackEvent,
   flushEvents,
+  newCaptureId,
+  trackRevealFired,
+  trackExtractionResult,
+  trackSaveOutcome,
+  trackArtifactDismissed,
+  markSegmentEnd,
+  trackSegmentLatency,
 };
