@@ -19,6 +19,7 @@ import { PostHogProvider } from '../src/analytics';
 import { ErrorBoundary, ShareIntentHandler } from '../src/components';
 import { setupNotificationHandler, setupNotificationTapHandler } from '../src/notifications';
 import { sweepExpiredRecordings } from '../src/audio/recordingStore';
+import { refreshModelState } from '../src/audio/offlineTranscription';
 import {
   repairStaleRecordingLinks,
   setClassifyImprovementListener,
@@ -52,6 +53,9 @@ function AppWithAnalytics() {
     // Re-point recordings stranded on pre-sync temp note ids (aliased at sync time; the
     // persisted alias map makes this safe to replay on every start).
     repairStaleRecordingLinks().catch(() => {});
+    // Derive the offline-model state from disk: resumes an interrupted chunked download and
+    // kicks off the background quality upgrade for opted-in users.
+    refreshModelState().catch(() => {});
   }, []);
 
   // When reconnect lets the cloud classifier revisit an offline capture and it disagrees with

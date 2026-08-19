@@ -9,38 +9,84 @@
  * the queued cloud second pass (offlineSync's offlineClassifyQueue), same as the online
  * classifier already receives.
  *
- * Model: ggml-small-q5_1 (quantized multilingual "small" - ~181 MB, covers the app's
- * en + id spoken-language preference). Downloaded on demand from the Settings toggle;
- * state machine below drives that UI.
+ * Model ladder (all quantized multilingual ggml builds, covering the app's en + id
+ * spoken-language preference):
+ *  - tier 1: ggml-tiny-q5_1 (~31 MB) - downloaded first so offline capture works quickly;
+ *  - tier 2: ggml-base-q5_1 (~57 MB) - background upgrade once tiny is ready, hot-swapped
+ *    in when the current transcription context is released.
+ * Downloads run in 8 MB chunks via HTTP Range, each cached as its own part file, so a flaky
+ * connection (or the app being closed) never loses more than one chunk. Completed chunks
+ * are skipped on resume. A legacy ggml-small-q5_1 install is kept as the best model.
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
+import { File as ModelFile } from 'expo-file-system';
 import { FFmpegKit, ReturnCode } from 'ffmpeg-kit-react-native';
 import { initWhisper, type WhisperContext } from 'whisper.rn/index';
+import { isNetworkAvailable } from '../offlineSync';
 import { getSpokenLanguagePref } from './recordingStore';
 
 export const OFFLINE_TRANSCRIPTION_ENABLED_KEY = 'offline_transcription_enabled';
 
-// Verified against huggingface.co/ggerganov/whisper.cpp (tree API) 2026-08-16.
-const MODEL_FILENAME = 'ggml-small-q5_1.bin';
-const MODEL_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin';
-const MODEL_EXPECTED_BYTES = 190085487;
+export type ModelTier = 'tiny' | 'base' | 'small';
+
+interface TierSpec {
+  tier: ModelTier;
+  filename: string;
+  url: string;
+  bytes: number;
+}
+
+// Sizes verified against huggingface.co/ggerganov/whisper.cpp (tree API) 2026-08-19.
+const TIERS: Record<ModelTier, TierSpec> = {
+  small: {
+    tier: 'small',
+    filename: 'ggml-small-q5_1.bin',
+    url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin',
+    bytes: 190085487,
+  },
+  base: {
+    tier: 'base',
+    filename: 'ggml-base-q5_1.bin',
+    url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin',
+    bytes: 59707625,
+  },
+  tiny: {
+    tier: 'tiny',
+    filename: 'ggml-tiny-q5_1.bin',
+    url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny-q5_1.bin',
+    bytes: 32152673,
+  },
+};
+
+const MB = 1024 * 1024;
+export const TINY_MODEL_MB = Math.round(TIERS.tiny.bytes / MB);   // 31
+export const BASE_MODEL_MB = Math.round(TIERS.base.bytes / MB);   // 57
+export const SMALL_MODEL_MB = Math.round(TIERS.small.bytes / MB); // 181
+
+const CHUNK_BYTES = 8 * MB;
 
 const MODELS_DIR = `${FileSystem.documentDirectory}nueco/models/`;
-const MODEL_PATH = `${MODELS_DIR}${MODEL_FILENAME}`;
-const DOWNLOAD_STATE_KEY = 'offline_model_download_state';
+const PARTS_DIR = `${MODELS_DIR}parts/`;
+const CHUNK_STATE_KEY = 'offline_model_chunk_state_v2';
+// Legacy single-stream resumable state from the old one-file download; no longer readable
+// by the chunked downloader, cleaned up on first refresh.
+const LEGACY_DOWNLOAD_STATE_KEY = 'offline_model_download_state';
 
 export type ModelState =
   | 'not_downloaded'
   | 'downloading'
   | 'ready'
+  | 'upgrading'
   | 'error';
 
 export interface ModelStateInfo {
   state: ModelState;
-  /** 0..1 while downloading */
+  /** 0..1 progress of the active download/upgrade */
   progress: number;
   error: string | null;
+  /** Which model is usable right now (best on disk), if any. */
+  tier: ModelTier | null;
 }
 
 export class ModelNotReadyError extends Error {
@@ -52,15 +98,19 @@ export class ModelNotReadyError extends Error {
 
 // ---- state machine ---------------------------------------------------------------------------
 
-let current: ModelStateInfo = { state: 'not_downloaded', progress: 0, error: null };
+let current: ModelStateInfo = { state: 'not_downloaded', progress: 0, error: null, tier: null };
 let initialized = false;
-const listeners = new Set<(info: ModelStateInfo) => void>();
-let activeDownload: FileSystem.DownloadResumable | null = null;
+// True between chunk-loop iterations; pause/turn-off sets it so the job stops at the next
+// chunk boundary. The in-flight chunk (<= 8 MB) is allowed to finish, so pausing never
+// tears a part file.
+let cancelRequested = false;
 
 function setModelState(patch: Partial<ModelStateInfo>) {
   current = { ...current, ...patch };
   for (const cb of listeners) cb(current);
 }
+
+const listeners = new Set<(info: ModelStateInfo) => void>();
 
 export function getModelState(): ModelStateInfo {
   return current;
@@ -76,121 +126,258 @@ export async function isOfflineTranscriptionEnabled(): Promise<boolean> {
   return (await AsyncStorage.getItem(OFFLINE_TRANSCRIPTION_ENABLED_KEY)) === '1';
 }
 
-/** Derive initial state from disk. Called once from the Settings screen / app start. */
+function modelPath(spec: TierSpec): string {
+  return `${MODELS_DIR}${spec.filename}`;
+}
+
+async function fileBytes(path: string): Promise<number | null> {
+  try {
+    const info = await FileSystem.getInfoAsync(path);
+    return info.exists ? info.size : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Best verified model on disk, or null. */
+async function detectTier(): Promise<ModelTier | null> {
+  for (const tier of ['small', 'base', 'tiny'] as ModelTier[]) {
+    const spec = TIERS[tier];
+    if ((await fileBytes(modelPath(spec))) === spec.bytes) return tier;
+  }
+  return null;
+}
+
+/** Derive initial state from disk. Called from Settings, the router, and app start. */
 export async function refreshModelState(): Promise<void> {
   if (initialized) return;
   initialized = true;
+
+  // Torn final files are useless; drop them so the ladder starts clean.
+  for (const tier of ['small', 'base', 'tiny'] as ModelTier[]) {
+    const spec = TIERS[tier];
+    const size = await fileBytes(modelPath(spec));
+    if (size !== null && size !== spec.bytes) {
+      await FileSystem.deleteAsync(modelPath(spec), { idempotent: true }).catch(() => {});
+    }
+  }
+  await AsyncStorage.removeItem(LEGACY_DOWNLOAD_STATE_KEY).catch(() => {});
+
+  const tier = await detectTier();
+  if (tier === 'base' || tier === 'small') {
+    setModelState({ state: 'ready', progress: 1, error: null, tier });
+    return;
+  }
+  if (tier === 'tiny') {
+    setModelState({ state: 'ready', progress: 1, error: null, tier });
+    // Opted-in users get the quality upgrade trickling down in the background.
+    if ((await isOfflineTranscriptionEnabled()) && (await isNetworkAvailable())) {
+      void startModelDownload();
+    }
+    return;
+  }
+  setModelState({ state: 'not_downloaded', progress: 0, error: null, tier: null });
+  // Auto-resume an interrupted tiny download: the user opted in via the toggle, and
+  // completed chunks are already on disk.
+  if ((await isOfflineTranscriptionEnabled()) && (await isNetworkAvailable())) {
+    void startModelDownload();
+  }
+}
+
+// ---- chunked download ------------------------------------------------------------------------
+
+interface ChunkState {
+  filename: string;
+  totalBytes: number;
+  done: number[];
+}
+
+async function readChunkState(): Promise<ChunkState | null> {
   try {
-    const info = await FileSystem.getInfoAsync(MODEL_PATH);
-    if (info.exists && info.size === MODEL_EXPECTED_BYTES) {
-      setModelState({ state: 'ready', progress: 1, error: null });
-      return;
-    }
-    if (info.exists) {
-      // Wrong size = torn download; start over rather than loading a corrupt model.
-      await FileSystem.deleteAsync(MODEL_PATH, { idempotent: true });
-    }
+    const raw = await AsyncStorage.getItem(CHUNK_STATE_KEY);
+    return raw ? (JSON.parse(raw) as ChunkState) : null;
   } catch {
-    // fall through: treat as not downloaded
-  }
-  setModelState({ state: 'not_downloaded', progress: 0, error: null });
-}
-
-// ---- download --------------------------------------------------------------------------------
-
-async function runDownload(resumeFrom?: object) {
-  await FileSystem.makeDirectoryAsync(MODELS_DIR, { intermediates: true }).catch(() => {});
-  const download = FileSystem.createDownloadResumable(
-    MODEL_URL,
-    MODEL_PATH,
-    {},
-    p => {
-      if (p.totalBytesExpectedToWrite > 0) {
-        setModelState({ progress: p.totalBytesWritten / p.totalBytesExpectedToWrite });
-      }
-    },
-  );
-  activeDownload = download;
-  try {
-    let result;
-    if (resumeFrom) {
-      result = await download.resumeAsync();
-    } else {
-      result = await download.downloadAsync();
-    }
-    activeDownload = null;
-    if (!result || result.status !== 200) {
-      throw new Error(`Model download failed (HTTP ${result?.status ?? 'unknown'})`);
-    }
-    const info = await FileSystem.getInfoAsync(MODEL_PATH);
-    if (!info.exists || info.size !== MODEL_EXPECTED_BYTES) {
-      await FileSystem.deleteAsync(MODEL_PATH, { idempotent: true });
-      throw new Error('Model download was incomplete');
-    }
-    await AsyncStorage.removeItem(DOWNLOAD_STATE_KEY);
-    setModelState({ state: 'ready', progress: 1, error: null });
-  } catch (e) {
-    activeDownload = null;
-    if ((e as Error)?.message?.includes('paused')) {
-      // Paused by the user, not an error.
-      setModelState({ state: 'not_downloaded', error: null });
-      return;
-    }
-    // Persist resumable state so a later attempt continues instead of restarting 181 MB.
-    try {
-      const saved = download.pauseAsync ? await download.pauseAsync() : null;
-      if (saved) await AsyncStorage.setItem(DOWNLOAD_STATE_KEY, JSON.stringify(saved));
-    } catch {
-      // pause on a failed download is best-effort
-    }
-    setModelState({ state: 'error', error: (e as Error)?.message || 'Download failed' });
-    throw e;
+    return null;
   }
 }
 
-/** Start (or resume) the model download. Caller should have flipped the enabled toggle. */
+async function writeChunkState(state: ChunkState | null) {
+  if (state) await AsyncStorage.setItem(CHUNK_STATE_KEY, JSON.stringify(state));
+  else await AsyncStorage.removeItem(CHUNK_STATE_KEY);
+}
+
+function chunkSpec(spec: TierSpec, index: number): { start: number; end: number; size: number } {
+  const start = index * CHUNK_BYTES;
+  const end = Math.min(start + CHUNK_BYTES, spec.bytes) - 1;
+  return { start, end, size: end - start + 1 };
+}
+
+function chunkCount(spec: TierSpec): number {
+  return Math.ceil(spec.bytes / CHUNK_BYTES);
+}
+
+function partPath(spec: TierSpec, index: number): string {
+  return `${PARTS_DIR}${spec.filename}.part-${index}`;
+}
+
+/**
+ * Download one tier as 8 MB Range chunks into part files, then assemble the final model.
+ * Resolves true when the model is complete, false when cancelled between chunks. Throws if
+ * the server ignores Range requests or a chunk download fails.
+ */
+async function downloadChunked(
+  spec: TierSpec,
+  reportProgress: (fraction: number) => void,
+): Promise<boolean> {
+  await FileSystem.makeDirectoryAsync(PARTS_DIR, { intermediates: true }).catch(() => {});
+
+  let chunkState = await readChunkState();
+  if (!chunkState || chunkState.filename !== spec.filename || chunkState.totalBytes !== spec.bytes) {
+    chunkState = { filename: spec.filename, totalBytes: spec.bytes, done: [] };
+  }
+  const done = new Set(chunkState.done);
+  let doneBytes = [...done].reduce((sum, i) => sum + chunkSpec(spec, i).size, 0);
+  reportProgress(doneBytes / spec.bytes);
+
+  const total = chunkCount(spec);
+  for (let i = 0; i < total; i++) {
+    if (cancelRequested) return false;
+
+    const { start, end, size } = chunkSpec(spec, i);
+    const part = partPath(spec, i);
+
+    // Already cached from an earlier attempt - verify, then skip.
+    if (done.has(i) && (await fileBytes(part)) === size) {
+      continue;
+    }
+
+    await FileSystem.downloadAsync(spec.url, part, {
+      headers: { Range: `bytes=${start}-${end}` },
+    });
+    if ((await fileBytes(part)) !== size) {
+      // Range was not honoured (or the transfer tore) - refuse to assemble garbage.
+      await FileSystem.deleteAsync(part, { idempotent: true }).catch(() => {});
+      throw new Error('Model server did not serve the requested chunk');
+    }
+
+    done.add(i);
+    doneBytes += size;
+    await writeChunkState({ ...chunkState, done: [...done] });
+    reportProgress(doneBytes / spec.bytes);
+  }
+
+  // Assemble: append each part in order. The legacy API has no positional write, so this
+  // uses the new expo-file-system File API's append mode.
+  const finalFile = new ModelFile(modelPath(spec));
+  for (let i = 0; i < total; i++) {
+    const b64 = await FileSystem.readAsStringAsync(partPath(spec, i), { encoding: 'base64' });
+    finalFile.write(b64, { encoding: 'base64', append: i > 0 });
+  }
+
+  const finalPath = modelPath(spec);
+  if ((await fileBytes(finalPath)) !== spec.bytes) {
+    await FileSystem.deleteAsync(finalPath, { idempotent: true }).catch(() => {});
+    throw new Error('Model assembly produced the wrong size');
+  }
+
+  // Success - clear the cache.
+  for (let i = 0; i < total; i++) {
+    await FileSystem.deleteAsync(partPath(spec, i), { idempotent: true }).catch(() => {});
+  }
+  await writeChunkState(null);
+  return true;
+}
+
+let downloadRunning = false;
+
+/**
+ * Drive the ladder: fetch whatever is missing. Nothing on disk -> tiny (the fast one);
+ * tiny on disk -> the base upgrade in the background. Idempotent; safe to call repeatedly.
+ */
 export async function startModelDownload(): Promise<void> {
-  if (current.state === 'downloading') return;
-  setModelState({ state: 'downloading', error: null });
-  let saved: object | undefined;
+  if (downloadRunning) return;
+  cancelRequested = false;
+
+  const tier = await detectTier();
+  const target = tier === 'tiny' ? TIERS.base : tier === null ? TIERS.tiny : null;
+  if (!target) return; // base or small already present: nothing to fetch
+
+  downloadRunning = true;
+  const isUpgrade = tier === 'tiny';
+  setModelState(
+    isUpgrade
+      ? { state: 'upgrading', progress: 0, error: null }
+      : { state: 'downloading', progress: 0, error: null },
+  );
+
   try {
-    const raw = await AsyncStorage.getItem(DOWNLOAD_STATE_KEY);
-    if (raw) saved = JSON.parse(raw);
-  } catch {
-    saved = undefined;
+    const finished = await downloadChunked(target, fraction => setModelState({ progress: fraction }));
+    if (!finished) {
+      // Cancelled between chunks - cached chunks stay on disk for the next attempt.
+      setModelState(isUpgrade ? { state: 'ready', progress: 1 } : { state: 'not_downloaded', progress: 0 });
+      return;
+    }
+    if (isUpgrade) {
+      setModelState({ state: 'ready', progress: 1, error: null, tier: 'base' });
+      // Drop the tiny context so the next transcription loads base.
+      if (loadedModelPath && loadedModelPath !== modelPath(TIERS.base)) {
+        await releaseWhisperContext();
+      }
+    } else {
+      setModelState({ state: 'ready', progress: 1, error: null, tier: 'tiny' });
+      // Straight into the quality upgrade while the user is opted in.
+      if ((await isOfflineTranscriptionEnabled()) && (await isNetworkAvailable())) {
+        downloadRunning = false;
+        void startModelDownload();
+        return;
+      }
+    }
+  } catch (e) {
+    if (isUpgrade) {
+      // The upgrade is a bonus - tiny still works, so don't surface an error state.
+      setModelState({ state: 'ready', progress: 1, error: null, tier: 'tiny' });
+    } else {
+      setModelState({ state: 'error', error: (e as Error)?.message || 'Download failed' });
+    }
+  } finally {
+    downloadRunning = false;
   }
-  await runDownload(saved);
 }
 
+/** Stop the active download/upgrade at the next chunk boundary. Cached chunks are kept. */
 export async function pauseModelDownload(): Promise<void> {
-  if (activeDownload) {
-    try {
-      const saved = await activeDownload.pauseAsync();
-      if (saved) await AsyncStorage.setItem(DOWNLOAD_STATE_KEY, JSON.stringify(saved));
-    } catch {
-      // pause is best-effort
-    }
-    activeDownload = null;
+  cancelRequested = true;
+  if (!downloadRunning) {
+    setModelState(current.tier ? { state: 'ready', progress: 1 } : { state: 'not_downloaded', progress: 0 });
   }
-  setModelState({ state: 'not_downloaded' });
 }
 
 export async function deleteModel(): Promise<void> {
-  if (activeDownload) await pauseModelDownload();
+  cancelRequested = true;
   await releaseWhisperContext();
-  await FileSystem.deleteAsync(MODEL_PATH, { idempotent: true });
-  await AsyncStorage.removeItem(DOWNLOAD_STATE_KEY);
-  setModelState({ state: 'not_downloaded', progress: 0, error: null });
+  for (const tier of ['small', 'base', 'tiny'] as ModelTier[]) {
+    await FileSystem.deleteAsync(modelPath(TIERS[tier]), { idempotent: true }).catch(() => {});
+  }
+  await FileSystem.deleteAsync(PARTS_DIR, { idempotent: true }).catch(() => {});
+  await writeChunkState(null);
+  await AsyncStorage.removeItem(LEGACY_DOWNLOAD_STATE_KEY).catch(() => {});
+  // Wait a beat for an in-flight chunk loop to notice the cancel before flipping state.
+  setModelState({ state: 'not_downloaded', progress: 0, error: null, tier: null });
 }
 
 // ---- transcription -----------------------------------------------------------------------------
 
 let whisperContext: WhisperContext | null = null;
+let loadedModelPath: string | null = null;
 
 async function getContext(): Promise<WhisperContext> {
   if (whisperContext) return whisperContext;
+  const tier = await detectTier();
+  if (!tier) throw new ModelNotReadyError();
+  const path = modelPath(TIERS[tier]);
   // whisper.rn wants a plain filesystem path, not a file:// URI.
-  whisperContext = await initWhisper({ filePath: MODEL_PATH.replace(/^file:\/\//, '') });
+  whisperContext = await initWhisper({ filePath: path.replace(/^file:\/\//, '') });
+  loadedModelPath = path;
   return whisperContext;
 }
 
@@ -198,6 +385,7 @@ export async function releaseWhisperContext(): Promise<void> {
   if (whisperContext) {
     await whisperContext.release().catch(() => {});
     whisperContext = null;
+    loadedModelPath = null;
   }
 }
 
@@ -209,9 +397,11 @@ export async function releaseWhisperContext(): Promise<void> {
  * decode needs only FFmpeg core). The temp WAV is deleted on every path.
  */
 export async function transcribeOffline(fileUri: string): Promise<{ text: string }> {
-  if (getModelState().state !== 'ready') {
+  const s = getModelState().state;
+  if (s !== 'ready' && s !== 'upgrading') {
     await refreshModelState();
-    if (getModelState().state !== 'ready') throw new ModelNotReadyError();
+    const after = getModelState().state;
+    if (after !== 'ready' && after !== 'upgrading') throw new ModelNotReadyError();
   }
 
   const wavPath = `${FileSystem.cacheDirectory}offline-${Date.now()}.wav`;

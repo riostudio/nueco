@@ -45,6 +45,9 @@ import {
   pauseModelDownload,
   deleteModel,
   refreshModelState,
+  TINY_MODEL_MB,
+  BASE_MODEL_MB,
+  SMALL_MODEL_MB,
 } from '../src/audio/offlineTranscription';
 import { C, radius, borderWidth } from '../src/theme';
 
@@ -169,10 +172,10 @@ export default function PrivacyDataScreen() {
     setOfflineOn(value);
     await AsyncStorage.setItem(OFFLINE_TRANSCRIPTION_ENABLED_KEY, value ? '1' : '0');
     if (value) {
-      if (modelState.state !== 'ready') {
+      if (modelState.state !== 'ready' && modelState.state !== 'upgrading') {
         startModelDownload().catch(() => {}); // state machine surfaces the error row
       }
-    } else if (modelState.state === 'downloading') {
+    } else if (modelState.state === 'downloading' || modelState.state === 'upgrading') {
       await pauseModelDownload();
     }
   }, [modelState.state]);
@@ -180,9 +183,10 @@ export default function PrivacyDataScreen() {
     startModelDownload().catch(() => {});
   }, []);
   const confirmDeleteModel = useCallback(() => {
+    const onDiskMb = modelState.tier === 'small' ? SMALL_MODEL_MB : modelState.tier === 'base' ? BASE_MODEL_MB : TINY_MODEL_MB;
     Alert.alert(
       'Delete the offline model?',
-      'Voice capture will need a connection again until you re-download it (~181 MB).',
+      `Voice capture will need a connection again until you re-download it (~${onDiskMb} MB).`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -195,7 +199,7 @@ export default function PrivacyDataScreen() {
         },
       ],
     );
-  }, []);
+  }, [modelState.tier]);
 
   // Conversation-mode audible announcement (plan/11). Default off; only surfaced once the
   // feature gate flips so Settings never advertises a mode users can't reach.
@@ -405,7 +409,8 @@ export default function PrivacyDataScreen() {
               <Text style={s.rowLabelPlain}>Offline transcription</Text>
               <Text style={s.rowSub}>
                 Transcribe voice notes on this device when there&rsquo;s no connection. Downloads a
-                one-time model (~181 MB). Audio never leaves your phone.
+                small model first (~{TINY_MODEL_MB} MB), then quietly upgrades it (~{BASE_MODEL_MB} MB).
+                Audio never leaves your phone.
               </Text>
             </View>
             <Switch
@@ -421,7 +426,19 @@ export default function PrivacyDataScreen() {
               <ActivityIndicator size="small" color={C.primary} />
               <View style={{ flex: 1, marginLeft: 16 }}>
                 <Text style={s.rowLabelPlain}>Downloading model&hellip;</Text>
-                <Text style={s.rowSub}>{Math.round(modelState.progress * 100)}% of 181 MB</Text>
+                <Text style={s.rowSub}>{Math.round(modelState.progress * 100)}% of {TINY_MODEL_MB} MB</Text>
+              </View>
+            </View>
+          )}
+
+          {offlineOn && modelState.state === 'upgrading' && (
+            <View style={s.row}>
+              <ActivityIndicator size="small" color={C.primary} />
+              <View style={{ flex: 1, marginLeft: 16 }}>
+                <Text style={s.rowLabelPlain}>Improving transcription quality&hellip;</Text>
+                <Text style={s.rowSub}>
+                  Offline capture already works. {Math.round(modelState.progress * 100)}% of {BASE_MODEL_MB} MB
+                </Text>
               </View>
             </View>
           )}
@@ -441,7 +458,10 @@ export default function PrivacyDataScreen() {
               <MaterialIcons name="delete-outline" size={24} color={C.textSec} />
               <View style={{ flex: 1, marginLeft: 16 }}>
                 <Text style={s.rowLabelPlain}>Delete offline model</Text>
-                <Text style={s.rowSub}>Free up ~181 MB. You can re-download it any time.</Text>
+                <Text style={s.rowSub}>
+                  Free up ~{modelState.tier === 'small' ? SMALL_MODEL_MB : modelState.tier === 'base' ? BASE_MODEL_MB : TINY_MODEL_MB} MB.
+                  You can re-download it any time.
+                </Text>
               </View>
             </TouchableOpacity>
           )}
@@ -475,7 +495,7 @@ export default function PrivacyDataScreen() {
                   <Text style={s.rowLabelPlain}>Keep Daily Brew pinned</Text>
                   <Text style={s.rowSub}>
                     Always show the card at the top of My Notes, instead of hiding it for the day
-                    when you tap "Done for today".
+                    when you tap &quot;Done for today&quot;.
                   </Text>
                 </View>
                 <Switch

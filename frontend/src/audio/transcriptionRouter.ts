@@ -35,9 +35,11 @@ export async function transcribeAudio(
     return { ...result, engine: 'cloud' };
   }
   // Derive state from disk first: on a cold start the in-memory state is not_downloaded even
-  // when the model file is present.
+  // when the model file is present. 'upgrading' counts too: tiny is already usable while the
+  // base model trickles down.
   await refreshModelState();
-  if (getModelState().state !== 'ready') {
+  const s = getModelState().state;
+  if (s !== 'ready' && s !== 'upgrading') {
     // Offline and no model: there is nothing to fall back to.
     throw new ModelNotReadyError();
   }
